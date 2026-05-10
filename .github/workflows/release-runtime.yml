@@ -3,7 +3,7 @@ name: Release — Runtime
 on:
   push:
     tags:
-      - 'runtime/v*'
+      - 'v*'
 
 jobs:
   release:
@@ -16,34 +16,28 @@ jobs:
 
       - name: Extract version
         id: version
-        run: echo "version=${GITHUB_REF_NAME#runtime/}" >> $GITHUB_OUTPUT
+        run: echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
       - name: Install dependencies
-        working-directory: runtime
         run: bun install --frozen-lockfile
 
       - name: Build binary (linux-x64)
-        working-directory: runtime
         run: bun build --compile --minify src/index.ts --outfile crosstalk-linux-x64 --target bun-linux-x64
 
       - name: Build binary (linux-arm64)
-        working-directory: runtime
         run: bun build --compile --minify src/index.ts --outfile crosstalk-linux-arm64 --target bun-linux-arm64
 
       - name: Build binary (darwin-x64)
-        working-directory: runtime
         run: bun build --compile --minify src/index.ts --outfile crosstalk-darwin-x64 --target bun-darwin-x64
 
       - name: Build binary (darwin-arm64)
-        working-directory: runtime
         run: bun build --compile --minify src/index.ts --outfile crosstalk-darwin-arm64 --target bun-darwin-arm64
 
       - name: Checksums
-        working-directory: runtime
         run: sha256sum crosstalk-* > SHA256SUMS
 
       - name: Create GitHub Release
@@ -56,8 +50,8 @@ jobs:
 
             See [WHATSNEW.md](https://github.com/${{ github.repository }}/blob/main/WHATSNEW.md) for changes.
           files: |
-            runtime/crosstalk-linux-x64
-            runtime/crosstalk-linux-arm64
-            runtime/crosstalk-darwin-x64
-            runtime/crosstalk-darwin-arm64
-            runtime/SHA256SUMS
+            crosstalk-linux-x64
+            crosstalk-linux-arm64
+            crosstalk-darwin-x64
+            crosstalk-darwin-arm64
+            SHA256SUMS

@@ -1,6 +1,6 @@
 {
   "name": "@crosstalk/runtime",
-  "version": "0.1.3",
+  "version": "0.3.0",
   "description": "Crosstalk runtime — watches a transport for new messages and dispatches to registered actor processes",
   "module": "src/index.ts",
   "type": "module",
