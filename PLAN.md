@@ -47,7 +47,7 @@ Protocol spec and framework actors are in [cordfuse/crosstalk](https://github.co
 - `agent: opencode` — OpenCode CLI, `--format json` JSONL output parsed
 - Custom — `command`/`args` with `{variable}` substitution
 
-**Webhook server (v0.1.3, current)**
+**Webhook server (v0.1.3, deprecated in v0.4)**
 - Bun HTTP server on configurable port
 - HMAC-SHA256 verification of GitHub push events (`x-hub-signature-256`)
 - On verified push: calls `pullTransport` → `fs.watch` picks up new files naturally
