@@ -82,20 +82,24 @@ Git host → webhook → relay → WebSocket → all connected runtimes
 2. **Remove: direct webhook server** — `src/webhook.ts` deleted (or kept behind deprecated config flag for one release)
 3. **Config additions:**
    ```yaml
-   relay-url: wss://relay.crosstalk.dev
+   relay-url: wss://relay.crosstalk.sh
    relay-secret: <secret>
    ```
 4. **Auth:** relay sends HMAC of `{ repo, sha }` signed with `relay-secret` — runtime verifies before pulling
 
-### Relay server (separate repo: `cordfuse/crosstalk-relay`)
+### Relay server (in-repo: `src/relay-server.ts`)
+
+The relay server is **not** a separate repo — it ships inside `crosstalk-runtime` alongside the runtime daemon and the file-handling code. One codebase, two run modes (runtime daemon vs. relay server), selected at startup.
 
 Lightweight stateless service:
 - Accepts webhook POST from Git hosts (verified via HMAC)
 - Maintains WebSocket connections from runtimes
 - On webhook: broadcasts `{ repo, event, sha }` to all connected runtimes
 - No storage, no message routing, no state beyond open connections
-- Cordfuse operates `relay.crosstalk.dev` as a free public instance
+- Cordfuse operates `relay.crosstalk.sh` as a free public instance (domain registered 2026-05-11)
 - Self-hostable for private deployments
+
+**Local dev on steve-cachyos:** relay listens on **port 3003**, exposed via Caddy at `https://crosstalk-relay.linux.internal`. Runtime can point at `wss://crosstalk-relay.linux.internal` (Caddy, TLS internal) or `ws://localhost:3003` (direct).
 
 ---
 
