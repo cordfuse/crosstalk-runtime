@@ -1,5 +1,6 @@
 import type { RelayConfig } from './config.js';
 import { pullTransport } from './git.js';
+import pkg from '../package.json';
 
 // ─── shared types ────────────────────────────────────────────────────────────
 
@@ -83,6 +84,15 @@ export function startRelayServer(config: RelayConfig): void {
         return new Response(JSON.stringify({ status: 'ok', clients: clients.size }), {
           headers: { 'content-type': 'application/json' },
         });
+      }
+
+      // service identity at root — distinguishes "alive but wrong path" from "down"
+      if (url.pathname === '/') {
+        return new Response(JSON.stringify({
+          service: 'crosstalk-relay',
+          version: pkg.version,
+          endpoints: ['/health', '/webhook', '/ws'],
+        }), { headers: { 'content-type': 'application/json' } });
       }
 
       return new Response('Not found', { status: 404 });
