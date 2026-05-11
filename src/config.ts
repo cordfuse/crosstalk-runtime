@@ -1,51 +1,79 @@
 import { join } from 'path';
 import { homedir } from 'os';
-import { parseFrontmatter } from './frontmatter.js';
+import { parse } from 'smol-toml';
 
-const LOCAL_CONFIG_PATH = join(homedir(), '.crosstalk', 'config.md');
+const CONFIG_PATH = join(homedir(), '.crosstalk', 'config.toml');
+
+export interface RelayConfig {
+  mode: 'client' | 'server';
+  url: string;
+  secret: string;
+  webhookSecret?: string;  // server mode only — GitHub → relay HMAC
+  port: number;            // server mode only
+}
 
 export interface Config {
   transport: string;
   actorEmailSuffix: string;
-  webhookPort?: number;
-  webhookSecret?: string;
-  defaultHeartbeatInterval?: number;
+  defaultHeartbeatInterval: number;
+  relay: RelayConfig;
 }
 
+const DEFAULTS = {
+  actorEmailSuffix: 'crosstalk.noreply',
+  defaultHeartbeatInterval: 30,
+  relay: {
+    mode: 'client' as const,
+    url: 'wss://relay.crosstalk.dev',
+    secret: '',
+    port: 8080,
+  },
+};
+
 export async function loadConfig(): Promise<Config> {
-  let localContent: string;
+  let raw: string;
   try {
-    localContent = await Bun.file(LOCAL_CONFIG_PATH).text();
+    raw = await Bun.file(CONFIG_PATH).text();
   } catch {
-    throw new Error(`~/.crosstalk/config.md not found. Create it with:\n\n---\ntransport: /path/to/transport\n---`);
+    throw new Error(
+      `~/.crosstalk/config.toml not found. Create it with:\n\n` +
+      `transport = "/path/to/transport"\n\n` +
+      `[relay]\nmode = "client"\nurl = "wss://relay.crosstalk.dev"\nsecret = "your-relay-secret"`
+    );
   }
 
-  const { data: localData } = parseFrontmatter(localContent);
-  if (!localData.transport || typeof localData.transport !== 'string') {
-    throw new Error(`~/.crosstalk/config.md is missing the 'transport' field`);
-  }
-
-  const transport = localData.transport.replace(/^~/, homedir());
-
-  // read transport-level config for shared settings
-  let actorEmailSuffix = 'crosstalk.noreply';
+  let data: Record<string, unknown>;
   try {
-    const transportConfigPath = join(transport, 'config.md');
-    const transportContent = await Bun.file(transportConfigPath).text();
-    const { data: transportData } = parseFrontmatter(transportContent);
-    if (typeof transportData['actor-email-suffix'] === 'string') {
-      actorEmailSuffix = transportData['actor-email-suffix'];
-    }
-  } catch {
-    // transport config.md is optional — use default suffix
+    data = parse(raw) as Record<string, unknown>;
+  } catch (err) {
+    throw new Error(`~/.crosstalk/config.toml parse error: ${err}`);
   }
 
-  let webhookPort: number | undefined;
-  let webhookSecret: string | undefined;
-  let defaultHeartbeatInterval: number | undefined;
-  if (typeof localData['webhook-port'] === 'number') webhookPort = localData['webhook-port'] as number;
-  if (typeof localData['webhook-secret'] === 'string') webhookSecret = localData['webhook-secret'] as string;
-  if (typeof localData['default-heartbeat-interval'] === 'number') defaultHeartbeatInterval = localData['default-heartbeat-interval'] as number;
+  if (!data.transport || typeof data.transport !== 'string') {
+    throw new Error(`~/.crosstalk/config.toml is missing the 'transport' field`);
+  }
 
-  return { transport, actorEmailSuffix, webhookPort, webhookSecret, defaultHeartbeatInterval };
+  const transport = (data.transport as string).replace(/^~/, homedir());
+
+  const actorEmailSuffix = typeof data['actor-email-suffix'] === 'string'
+    ? data['actor-email-suffix'] as string
+    : DEFAULTS.actorEmailSuffix;
+
+  const defaultHeartbeatInterval = typeof data['default-heartbeat-interval'] === 'number'
+    ? data['default-heartbeat-interval'] as number
+    : DEFAULTS.defaultHeartbeatInterval;
+
+  const relayData = (data.relay ?? {}) as Record<string, unknown>;
+
+  const relay: RelayConfig = {
+    mode: relayData.mode === 'server' ? 'server' : 'client',
+    url: typeof relayData.url === 'string' ? relayData.url : DEFAULTS.relay.url,
+    secret: typeof relayData.secret === 'string' ? relayData.secret : DEFAULTS.relay.secret,
+    port: typeof relayData.port === 'number' ? relayData.port as number : DEFAULTS.relay.port,
+    ...(typeof relayData['webhook-secret'] === 'string'
+      ? { webhookSecret: relayData['webhook-secret'] as string }
+      : {}),
+  };
+
+  return { transport, actorEmailSuffix, defaultHeartbeatInterval, relay };
 }

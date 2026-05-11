@@ -10,6 +10,7 @@
     "build": "bun build --compile --minify src/index.ts --outfile crosstalk"
   },
   "dependencies": {
+    "smol-toml": "^1.6.1",
     "yaml": "^2.7.0"
   },
   "devDependencies": {
