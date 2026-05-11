@@ -24,13 +24,36 @@ const DEFAULTS = {
   defaultHeartbeatInterval: 30,
   relay: {
     mode: 'client' as const,
-    url: 'wss://relay.crosstalk.dev',
+    url: 'wss://relay.crosstalk.sh',
     secret: '',
     port: 8080,
   },
 };
 
+function envInt(key: string): number | undefined {
+  const v = process.env[key];
+  if (!v) return undefined;
+  const n = parseInt(v, 10);
+  return isNaN(n) ? undefined : n;
+}
+
 export async function loadConfig(): Promise<Config> {
+  // Server mode via env vars — no config.toml required (Docker / Render)
+  if (process.env.RELAY_MODE === 'server') {
+    return {
+      transport: '',
+      actorEmailSuffix: DEFAULTS.actorEmailSuffix,
+      defaultHeartbeatInterval: DEFAULTS.defaultHeartbeatInterval,
+      relay: {
+        mode: 'server',
+        url: '',
+        secret: process.env.RELAY_SECRET ?? '',
+        port: envInt('PORT') ?? DEFAULTS.relay.port,
+        ...(process.env.WEBHOOK_SECRET ? { webhookSecret: process.env.WEBHOOK_SECRET } : {}),
+      },
+    };
+  }
+
   let raw: string;
   try {
     raw = await Bun.file(CONFIG_PATH).text();
@@ -38,7 +61,7 @@ export async function loadConfig(): Promise<Config> {
     throw new Error(
       `~/.crosstalk/config.toml not found. Create it with:\n\n` +
       `transport = "/path/to/transport"\n\n` +
-      `[relay]\nmode = "client"\nurl = "wss://relay.crosstalk.dev"\nsecret = "your-relay-secret"`
+      `[relay]\nmode = "client"\nurl = "wss://relay.crosstalk.sh"\nsecret = "your-relay-secret"`
     );
   }
 
@@ -69,7 +92,7 @@ export async function loadConfig(): Promise<Config> {
     mode: relayData.mode === 'server' ? 'server' : 'client',
     url: typeof relayData.url === 'string' ? relayData.url : DEFAULTS.relay.url,
     secret: typeof relayData.secret === 'string' ? relayData.secret : DEFAULTS.relay.secret,
-    port: typeof relayData.port === 'number' ? relayData.port as number : DEFAULTS.relay.port,
+    port: envInt('PORT') ?? (typeof relayData.port === 'number' ? relayData.port as number : DEFAULTS.relay.port),
     ...(typeof relayData['webhook-secret'] === 'string'
       ? { webhookSecret: relayData['webhook-secret'] as string }
       : {}),
