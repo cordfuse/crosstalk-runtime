@@ -55,10 +55,10 @@ function broadcast(msg: NotifyMessage): void {
 
 export function startRelayServer(config: RelayConfig): void {
   const { port, secret, webhookSecret } = config;
+  const requireAuth = !!secret;
 
-  if (!secret) {
-    console.error('[relay] server mode requires relay.secret in config');
-    process.exit(1);
+  if (!requireAuth) {
+    console.log('[relay] server running in open mode (no secret set)');
   }
 
   Bun.serve<{ authenticated: boolean }>({
@@ -68,7 +68,7 @@ export function startRelayServer(config: RelayConfig): void {
 
       // WebSocket upgrade
       if (url.pathname === '/ws') {
-        const upgraded = server.upgrade(req, { data: { authenticated: false } });
+        const upgraded = server.upgrade(req, { data: { authenticated: !requireAuth } });
         if (upgraded) return undefined;
         return new Response('WebSocket upgrade failed', { status: 400 });
       }
@@ -89,14 +89,19 @@ export function startRelayServer(config: RelayConfig): void {
     },
     websocket: {
       open(ws) {
-        console.log(`[relay] client connected (${clients.size + 1} total)`);
-        // require auth within 10s
-        setTimeout(() => {
-          if (!ws.data.authenticated) {
-            ws.send(JSON.stringify({ type: 'error', message: 'auth timeout' }));
-            ws.close();
-          }
-        }, 10_000);
+        if (!requireAuth) {
+          clients.add(ws);
+          ws.send(JSON.stringify({ type: 'ready' } satisfies ReadyMessage));
+        }
+        console.log(`[relay] client connected (${clients.size} total)`);
+        if (requireAuth) {
+          setTimeout(() => {
+            if (!ws.data.authenticated) {
+              ws.send(JSON.stringify({ type: 'error', message: 'auth timeout' } satisfies ErrorMessage));
+              ws.close();
+            }
+          }, 10_000);
+        }
       },
       message(ws, raw) {
         let msg: RelayMessage;
@@ -106,17 +111,15 @@ export function startRelayServer(config: RelayConfig): void {
           return;
         }
 
-        if (!ws.data.authenticated) {
-          if (msg.type === 'auth') {
-            if (msg.secret === secret) {
-              ws.data.authenticated = true;
-              clients.add(ws);
-              ws.send(JSON.stringify({ type: 'ready' } satisfies ReadyMessage));
-              console.log(`[relay] client authenticated (${clients.size} connected)`);
-            } else {
-              ws.send(JSON.stringify({ type: 'error', message: 'invalid secret' } satisfies ErrorMessage));
-              ws.close();
-            }
+        if (!ws.data.authenticated && msg.type === 'auth') {
+          if (msg.secret === secret) {
+            ws.data.authenticated = true;
+            clients.add(ws);
+            ws.send(JSON.stringify({ type: 'ready' } satisfies ReadyMessage));
+            console.log(`[relay] client authenticated (${clients.size} connected)`);
+          } else {
+            ws.send(JSON.stringify({ type: 'error', message: 'invalid secret' } satisfies ErrorMessage));
+            ws.close();
           }
         }
       },
@@ -166,10 +169,6 @@ const RECONNECT_MAX_MS = 60_000;
 export function startRelayClient(config: RelayConfig, transportRoot: string): void {
   const { url, secret } = config;
 
-  if (!secret) {
-    console.warn('[relay] no relay.secret configured — connecting unauthenticated');
-  }
-
   let attempt = 0;
 
   function connect(): void {
@@ -178,8 +177,12 @@ export function startRelayClient(config: RelayConfig, transportRoot: string): vo
 
     ws.onopen = () => {
       attempt = 0;
-      console.log('[relay] connected — authenticating');
-      ws.send(JSON.stringify({ type: 'auth', secret } satisfies AuthMessage));
+      if (secret) {
+        console.log('[relay] connected — authenticating');
+        ws.send(JSON.stringify({ type: 'auth', secret } satisfies AuthMessage));
+      } else {
+        console.log('[relay] connected — no secret, skipping auth');
+      }
     };
 
     ws.onmessage = async (event) => {
