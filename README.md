@@ -1,5 +1,7 @@
 # crosstalk-runtime
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 The Crosstalk runtime daemon — Bun/TypeScript source, CI, and binary builds.
 
 **This is the contributor repo.** If you want to run Crosstalk, you want [cordfuse/crosstalk](https://github.com/cordfuse/crosstalk) — the operator-facing repo with framework actors, protocol spec, and setup instructions.
