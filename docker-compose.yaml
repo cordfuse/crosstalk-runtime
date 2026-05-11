@@ -5,9 +5,10 @@ services:
     restart: unless-stopped
     environment:
       PORT: 3003
-      # First-run smoke test uses "open mode" (no secrets). Fill these in once auth is wired:
-      RELAY_SECRET: ""
-      WEBHOOK_SECRET: ""
+      # Empty defaults = open mode. Override at runtime to enable auth:
+      #   RELAY_SECRET=... WEBHOOK_SECRET=... docker compose up -d --force-recreate
+      RELAY_SECRET: ${RELAY_SECRET:-}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
     ports:
       # Host-published for direct ws://localhost:3003 access during development.
       # Caddy reaches the container over proxy_net regardless of this mapping.
