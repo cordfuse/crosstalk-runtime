@@ -80,8 +80,18 @@ default-heartbeat-interval: 120   # fallback timeout if actor omits heartbeat-in
 
 v0.4 will add:
 ```yaml
-relay-url: wss://relay.crosstalk.dev   # relay WebSocket endpoint
+relay-url: wss://relay.crosstalk.sh    # relay WebSocket endpoint (public, Cordfuse-operated)
 relay-secret: <secret>                 # HMAC auth between relay and runtime
+```
+
+**Local development on steve-cachyos.** The relay server runs as a container on `proxy_net`, listening on **port 3003**, reverse-proxied by Caddy at `https://crosstalk-relay.linux.internal`. Two equivalent ways to point a local runtime at it:
+
+```yaml
+# Through Caddy (TLS internal — requires trusted local CA, AdGuard DNS resolves the hostname):
+relay-url: wss://crosstalk-relay.linux.internal
+
+# Direct to container host port (plain ws, no CA setup — fastest for iteration):
+relay-url: ws://localhost:3003
 ```
 
 ---
