@@ -1,4 +1,4 @@
-import { watch } from 'fs';
+import { watch, mkdirSync } from 'fs';
 import { join } from 'path';
 import { parseFrontmatter } from './frontmatter.js';
 import { dispatch, isDuplicate } from './dispatch.js';
@@ -16,6 +16,10 @@ export function startWatcher(
   defaultHeartbeatInterval?: number,
 ): void {
   const channelsDir = join(transportRoot, 'channels');
+
+  // First-time setup: transport may exist with no channels/ yet. Without this,
+  // watch() throws ENOENT and crashes the daemon before the first message lands.
+  mkdirSync(channelsDir, { recursive: true });
 
   console.log(`[watcher] watching ${channelsDir}`);
 
