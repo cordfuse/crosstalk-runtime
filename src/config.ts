@@ -26,7 +26,7 @@ const DEFAULTS = {
     mode: 'client' as const,
     url: 'wss://relay.crosstalk.sh',
     secret: '',
-    port: 8080,
+    port: 3003,
   },
 };
 
