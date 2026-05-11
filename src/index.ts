@@ -1,8 +1,7 @@
 import { loadConfig } from './config.js';
 import { loadRegistry, watchRegistry } from './registry.js';
 import { startWatcher } from './watcher.js';
-import { startWebhookServer } from './webhook.js';
-import { pullTransport } from './git.js';
+import { startRelayServer, startRelayClient } from './relay.js';
 import { announceOnline, announceOffline, SESSION_ID, MACHINE_ID } from './system.js';
 import { readCursor, listMessages, messagesAfterCursor } from './cursor.js';
 import { dispatch } from './dispatch.js';
@@ -23,12 +22,10 @@ watchRegistry(config.transport, async () => {
   console.log(`[crosstalk] registry reloaded: ${[...registry.keys()].join(', ') || 'none'}`);
 });
 
-if (config.webhookPort && config.webhookSecret) {
-  startWebhookServer(config.webhookPort, config.webhookSecret, () => {
-    pullTransport(config.transport);
-  });
+if (config.relay.mode === 'server') {
+  startRelayServer(config.relay);
 } else {
-  console.log('[crosstalk] webhook disabled (no webhook-port/webhook-secret in config)');
+  startRelayClient(config.relay, config.transport);
 }
 
 // MACHINE_ID is stable across restarts — cursors persist so messages are not re-dispatched
