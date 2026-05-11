@@ -48,7 +48,7 @@ jobs:
           body: |
             Crosstalk runtime ${{ steps.version.outputs.version }}.
 
-            See [WHATSNEW.md](https://github.com/${{ github.repository }}/blob/main/WHATSNEW.md) for changes.
+            See [WHATSNEW.md](https://github.com/cordfuse/crosstalk/blob/main/WHATSNEW.md) for changes — runtime changelog lives in the operator-facing repo.
           files: |
             crosstalk-linux-x64
             crosstalk-linux-arm64
