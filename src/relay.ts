@@ -91,8 +91,15 @@ export function startRelayServer(config: RelayConfig): void {
         return new Response(JSON.stringify({
           service: 'crosstalk-relay',
           version: pkg.version,
-          endpoints: ['/health', '/webhook', '/ws'],
+          endpoints: ['/health', '/version', '/webhook', '/ws'],
         }), { headers: { 'content-type': 'application/json' } });
+      }
+
+      // version-only endpoint — useful for polling deploy completion
+      if (url.pathname === '/version') {
+        return new Response(JSON.stringify({ version: pkg.version }), {
+          headers: { 'content-type': 'application/json' },
+        });
       }
 
       return new Response('Not found', { status: 404 });
