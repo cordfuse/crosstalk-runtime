@@ -1,2 +1,4 @@
 node_modules/
 crosstalk-watch
+.env
+.env.local
