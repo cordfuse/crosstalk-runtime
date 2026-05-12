@@ -1,11 +1,11 @@
 <!-- parent: librarian -->
-# crosstalk-runtime — Claude Instructions
+# Contributing to crosstalk-runtime
 
-## What is this repo?
+This file is for contributors working on the Crosstalk runtime — humans and AI clients alike. The runtime is the Bun/TypeScript daemon that watches a transport for new channel messages and dispatches them to actor processes. The protocol spec, framework actors, and operator-facing docs live in [cordfuse/crosstalk](https://github.com/cordfuse/crosstalk).
 
-This is the Crosstalk runtime daemon — the Bun/TypeScript process that watches a transport for new channel messages and dispatches them to actor processes.
+**Contributor repo only.** Users who want to run Crosstalk do not clone this repo — they install the released binary or `bunx @crosstalk/runtime`.
 
-**Contributor repo only.** The protocol spec, framework actors, and operator-facing docs live in [cordfuse/crosstalk](https://github.com/cordfuse/crosstalk). Users who want to run Crosstalk do not clone this repo.
+This file is intentionally agent-neutral: it does not auto-load into any specific AI client. The framework and runtime are agent-agnostic, and so is this contributor doc.
 
 ---
 
