@@ -39,6 +39,7 @@ import which from 'which'
 import type { Command } from 'commander'
 
 import { loadConfig } from '../../config.js'
+import { pushWithRetry } from '../../git.js'
 import { scanAllLayers } from '../lib/actors.js'
 import { resolveChannel, readChannelMessages, printMessage } from '../lib/channel.js'
 
@@ -164,8 +165,8 @@ async function runJoin(channelArg: string, opts: JoinOptions): Promise<void> {
   }
 
   // 5. Post join system message
-  const joinBody = `Joined as ${fromActor} via ${agentName} (v0.6.0-alpha.5 — PTY-wrapped + backfill, no injection yet).`
-  if (!postSystemMessage({
+  const joinBody = `Joined as ${fromActor} via ${agentName} (v0.6.0-alpha.6 — PTY-wrapped + backfill + operator agent registry, no injection yet).`
+  if (!await postSystemMessage({
     transport:    config.transport,
     channelGuid,
     fromActor,
@@ -209,7 +210,7 @@ async function runJoin(channelArg: string, opts: JoinOptions): Promise<void> {
   // 6. Post leave message — always, even on agent error/crash
   console.log(`  ──────────────────────────────────────────────────────`)
   const leaveBody = `Left channel (agent exit ${agentStatus}).`
-  postSystemMessage({
+  await postSystemMessage({
     transport:    config.transport,
     channelGuid,
     fromActor,
@@ -317,7 +318,7 @@ interface PostSystemArgs {
  * write / gitCmd) — copy-pasted here to keep alpha.1 narrow. The
  * shared helpers belong in a lib module; that refactor lands later
  * (probably alpha.5 when watcher integration shares the same path). */
-function postSystemMessage(args: PostSystemArgs): boolean {
+async function postSystemMessage(args: PostSystemArgs): Promise<boolean> {
   const now       = new Date()
   const filename  = formatTimestampFilename(now)
   const datePath  = formatDatePath(now)
@@ -348,9 +349,16 @@ function postSystemMessage(args: PostSystemArgs): boolean {
   const commitMsg = `system: ${args.fromActor} ${args.reason}`
   if (!gitCmd(args.transport, ['commit', '-m', commitMsg]))              return false
 
+  // Use the canonical pushWithRetry (rebase-and-retry on rejection).
+  // Bug surfaced in alpha.6 Mac UAT: one-shot `git push` reliably bricks
+  // when crosstalk-demo has commits on remote that local doesn't, and the
+  // runtime hard-bails mid-lifecycle leaving an orphan join commit.
+  // pushWithRetry is the same battle-tested pattern dispatch.ts uses for
+  // actor-response commits.
   if (args.push) {
-    if (!gitCmd(args.transport, ['push'])) {
-      console.error(`✗ Push failed for ${args.reason} message — commit is local. Run \`git -C ${args.transport} push\` to retry.`)
+    const ok = await pushWithRetry(args.transport)
+    if (!ok) {
+      console.error(`✗ Push failed for ${args.reason} message after retries — commit is local. Run \`git -C ${args.transport} pull --rebase && git push\` to recover.`)
       return false
     }
   }

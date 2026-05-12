@@ -46,16 +46,30 @@ async function hasRemote(repoPath: string): Promise<boolean> {
   return (await getRemoteUrl(repoPath)) !== null;
 }
 
-async function pushWithRetry(repoPath: string, maxAttempts = 5): Promise<void> {
-  if (!await hasRemote(repoPath)) return;
+/** Push with rebase-and-retry on rejection.
+ *
+ * Standard pattern for any commit landing in a transport that may have
+ * concurrent activity. One-shot push reliably bricks under contention;
+ * this retries up to maxAttempts, rebasing locally on each rejection
+ * before retrying. Exported so non-dispatch code paths (channel-join's
+ * join/leave system messages, future operator-side commits) can use the
+ * same retry logic instead of one-shot push + bail.
+ *
+ * Returns true on successful push (or no-remote no-op), false if all
+ * retries exhausted. Caller branches on the result for whatever recovery
+ * semantics make sense. Existing await-and-ignore callers stay correct
+ * (the boolean just becomes discarded). */
+export async function pushWithRetry(repoPath: string, maxAttempts = 5): Promise<boolean> {
+  if (!await hasRemote(repoPath)) return true;
   for (let i = 0; i < maxAttempts; i++) {
     const code = await runGit(repoPath, ['push']);
-    if (code === 0) return;
+    if (code === 0) return true;
     console.log(`[git] push rejected, rebasing (attempt ${i + 1}/${maxAttempts})`);
     await runGit(repoPath, ['pull', '--rebase']);
     await new Promise(r => setTimeout(r, 1000 + Math.random() * 4000));
   }
   console.error('[git] push failed after max retries');
+  return false;
 }
 
 // Returns the path to an actor's own clone of the transport.
