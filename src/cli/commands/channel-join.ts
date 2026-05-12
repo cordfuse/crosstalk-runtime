@@ -1,45 +1,40 @@
 /**
- * `crosstalk channel join <name-or-guid> --agent <name>` — interactive join
- * (skeleton — v0.6.0-alpha.1).
+ * `crosstalk channel join <name-or-guid> --agent <name>` — interactive join.
  *
  * The killer human-experience layer of v0.6: the human's preferred AI agent
- * CLI runs as a child process, and (in later alphas) the runtime injects new
- * channel messages into the agent's context in real time. To the human it
- * looks like they're chatting natively with their agent; in reality the
- * runtime owns stdio.
+ * CLI runs as a PTY-wrapped child process, and (in later alphas) the runtime
+ * injects new channel messages into the agent's context in real time. To the
+ * human it looks like they're chatting natively with their agent; in reality
+ * the runtime owns stdio.
  *
- * **alpha.1 scope:** lifecycle only.
- *   - Resolve channel + agent + identity
- *   - Post `type: system, reason: join, from: <actor>` to the channel
- *   - Spawn the agent CLI with stdio: 'inherit' (NO PTY yet — that's alpha.2)
- *   - Wait for the agent to exit (Ctrl-C from the user reaches the agent
- *     directly via terminal foreground process group, agent exits, control
- *     returns)
- *   - Post `type: system, reason: leave, from: <actor>`
- *   - Exit with the agent's status code
+ * **alpha.3 (this file) scope:** PTY plumbing on top of alpha.1's lifecycle.
+ *   - Same lifecycle: resolve channel + agent + identity, post join, spawn
+ *     agent, wait for exit, post leave, exit with agent's status
+ *   - The runtime now owns stdio via @homebridge/node-pty-prebuilt-multiarch:
+ *     - User keystrokes → forwarded to agent's PTY input (raw mode capture)
+ *     - Agent's PTY output → forwarded to terminal display
+ *     - SIGWINCH → propagated to PTY (resize cols/rows)
+ *     - Terminal restored on agent exit (raw mode off, stdin paused)
  *
- * What this proves:
- *   - The third runtime mode CLI surface (interactive client, distinct from
- *     daemon and server)
- *   - Channel resolution + identity flow + system message types (join/leave)
- *   - Agent spawn + clean exit semantics
+ * What this proves on top of alpha.1:
+ *   - The runtime can wrap an arbitrary AI CLI as a PTY child without losing
+ *     terminal fidelity (colors, cursor control, line editing all work)
+ *   - The architecture supports the alpha.5+ injection multiplexer — once
+ *     the runtime owns stdio, mid-session injects become a write to the PTY
  *
- * What this does NOT do (deferred to later alphas):
- *   - PTY plumbing (alpha.2) — runtime doesn't own stdio yet, so the agent
- *     just runs natively in the parent terminal
- *   - Backfill (alpha.3) — no `--backfill N` flag yet
- *   - Config-driven agent invocation registry (alpha.4) — agent spawn cmds
- *     are hardcoded below; operator overrides via `[agents.X]` in
- *     ~/.crosstalk/config.toml come later
- *   - Live message injection (alpha.5+) — no watcher, no inject-on-prompt-
- *     ready logic
- *   - `to:` filter rules (alpha.6) — n/a yet
+ * What this still does NOT do (deferred to later alphas):
+ *   - alpha.4: backfill (--backfill N flag)
+ *   - alpha.5: config-driven agent invocation registry ([agents.X] config
+ *     entries override the hardcoded SPAWN_MAP below)
+ *   - alpha.6+: live message injection (watcher hook + inject-on-prompt-ready)
+ *   - alpha.7: `to:` filter rules
  *
  * See cordfuse/crosstalk TODO #21 for the full v0.6 design.
  */
 import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import * as pty from '@homebridge/node-pty-prebuilt-multiarch'
 import type { Command } from 'commander'
 
 import { loadConfig } from '../../config.js'
@@ -133,8 +128,17 @@ async function runJoin(channelArg: string, opts: JoinOptions): Promise<void> {
     process.exit(1)
   }
 
-  // 4. Post join system message
-  const joinBody = `Joined as ${fromActor} via ${agentName} (v0.6.0-alpha.1 skeleton — no PTY, no injection yet).`
+  // 4. Refuse early if stdin/stdout aren't a TTY — interactive PTY session
+  // needs a real terminal. Better to refuse before posting join than to
+  // post + immediately fail.
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    console.error(`✗ stdin and stdout must both be TTYs — interactive join requires a real terminal.`)
+    console.error(`  (Detected: stdin.isTTY=${process.stdin.isTTY}, stdout.isTTY=${process.stdout.isTTY})`)
+    process.exit(1)
+  }
+
+  // 5. Post join system message
+  const joinBody = `Joined as ${fromActor} via ${agentName} (v0.6.0-alpha.3 — PTY-wrapped, no injection yet).`
   if (!postSystemMessage({
     transport:    config.transport,
     channelGuid,
@@ -147,20 +151,12 @@ async function runJoin(channelArg: string, opts: JoinOptions): Promise<void> {
   }
 
   console.log(`✓ Joined channel ${channelGuid} as ${fromActor}`)
-  console.log(`  Spawning ${agentBin} (${spawnCmd.join(' ')}) — Ctrl-D or quit the agent to leave.`)
+  console.log(`  Spawning ${agentBin} (${spawnCmd.join(' ')}) under PTY — Ctrl-D or quit the agent to leave.`)
   console.log(`  ──────────────────────────────────────────────────────`)
 
-  // 5. Spawn agent. stdio: 'inherit' so the agent owns the terminal directly.
-  // SIGINT from the user reaches the agent via the terminal's foreground
-  // process group; we wait for the agent to exit on any cause.
-  let agentStatus = 0
-  try {
-    const result = spawnSync(spawnCmd[0]!, spawnCmd.slice(1), { stdio: 'inherit' })
-    agentStatus = result.status ?? 0
-  } catch (err) {
-    console.error(`✗ Agent spawn failed: ${err instanceof Error ? err.message : err}`)
-    agentStatus = 1
-  }
+  // 6. Spawn agent under PTY. The runtime now owns stdio: forwards user
+  // keystrokes to agent input, agent output to terminal, propagates resize.
+  const agentStatus = await runAgentInPty(spawnCmd)
 
   // 6. Post leave message — always, even on agent error/crash
   console.log(`  ──────────────────────────────────────────────────────`)
@@ -176,6 +172,84 @@ async function runJoin(channelArg: string, opts: JoinOptions): Promise<void> {
   console.log(`✓ Left channel ${channelGuid}`)
 
   process.exit(agentStatus)
+}
+
+// ── PTY-wrapped agent runner ─────────────────────────────────────────────
+
+/** Spawn the agent CLI under a PTY; multiplex parent stdio against it.
+ *
+ *   parent stdin (raw)  → PTY input
+ *   PTY output          → parent stdout
+ *   SIGWINCH on parent  → PTY resize
+ *
+ * Returns a Promise resolving to the agent's exit code. Callers must have
+ * already verified isTTY on stdin/stdout — this function assumes a real
+ * terminal and will be wrong-looking output otherwise.
+ *
+ * Cleanup invariant: regardless of how the agent exits (clean / crash /
+ * external signal), parent stdin's raw mode is restored and stdin is paused
+ * before resolving. Listeners on parent stdin and SIGWINCH are removed so
+ * the surrounding lifecycle (post leave + exit) operates against a normal
+ * terminal.
+ */
+async function runAgentInPty(spawnCmd: string[]): Promise<number> {
+  const cols = process.stdout.columns ?? 80
+  const rows = process.stdout.rows   ?? 24
+
+  return new Promise<number>((resolve) => {
+    let term: pty.IPty
+    try {
+      term = pty.spawn(spawnCmd[0]!, spawnCmd.slice(1), {
+        name: 'xterm-256color',
+        cols,
+        rows,
+        cwd:  process.cwd(),
+        env:  process.env as Record<string, string>,
+      })
+    } catch (err) {
+      console.error(`✗ PTY spawn failed: ${err instanceof Error ? err.message : err}`)
+      resolve(1)
+      return
+    }
+
+    // PTY → terminal display (transparent passthrough)
+    const onPtyData = (data: string) => process.stdout.write(data)
+    term.onData(onPtyData)
+
+    // Terminal stdin → PTY input (raw mode captures every byte including
+    // Ctrl-C, arrow keys, function keys — agent receives them as it would
+    // in a normal terminal session)
+    process.stdin.setRawMode(true)
+    process.stdin.resume()
+    const onStdinData = (data: Buffer) => term.write(data.toString('utf-8'))
+    process.stdin.on('data', onStdinData)
+
+    // Terminal resize → PTY resize. Without this, the agent's view of the
+    // terminal stays at initial cols/rows even when the user resizes the
+    // window — line-wrapping breaks, fullscreen UIs (vim, less) get confused.
+    const onResize = () => {
+      try {
+        term.resize(process.stdout.columns ?? cols, process.stdout.rows ?? rows)
+      } catch {
+        // Resize after PTY exit is harmless to ignore.
+      }
+    }
+    process.on('SIGWINCH', onResize)
+
+    // Cleanup invariant: restore terminal state before resolving so the
+    // surrounding lifecycle (post leave + exit) sees a normal terminal.
+    const cleanup = () => {
+      try { process.stdin.setRawMode(false) } catch { /* not a TTY anymore */ }
+      process.stdin.pause()
+      process.stdin.removeListener('data', onStdinData)
+      process.removeListener('SIGWINCH', onResize)
+    }
+
+    term.onExit(({ exitCode }) => {
+      cleanup()
+      resolve(exitCode ?? 0)
+    })
+  })
 }
 
 // ── system message writer ────────────────────────────────────────────────
