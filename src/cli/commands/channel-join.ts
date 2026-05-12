@@ -2,32 +2,41 @@
  * `crosstalk channel join <name-or-guid> --agent <name>` — interactive join.
  *
  * The killer human-experience layer of v0.6: the human's preferred AI agent
- * CLI runs as a PTY-wrapped child process, and (in later alphas) the runtime
- * injects new channel messages into the agent's context in real time. To the
- * human it looks like they're chatting natively with their agent; in reality
- * the runtime owns stdio.
+ * CLI runs as a PTY-wrapped child process, and the runtime injects new
+ * channel messages into the agent's context in real time. To the human it
+ * looks like they're chatting natively with their agent; in reality the
+ * runtime owns stdio and watches the channel for inbound traffic.
  *
- * **alpha.3 (this file) scope:** PTY plumbing on top of alpha.1's lifecycle.
- *   - Same lifecycle: resolve channel + agent + identity, post join, spawn
- *     agent, wait for exit, post leave, exit with agent's status
- *   - The runtime now owns stdio via @homebridge/node-pty-prebuilt-multiarch:
- *     - User keystrokes → forwarded to agent's PTY input (raw mode capture)
- *     - Agent's PTY output → forwarded to terminal display
- *     - SIGWINCH → propagated to PTY (resize cols/rows)
- *     - Terminal restored on agent exit (raw mode off, stdin paused)
+ * **Capabilities accumulated through the v0.6 alpha series:**
+ *   - alpha.1: lifecycle skeleton (post join → spawn agent → wait for exit
+ *     → post leave). No PTY (stdio: 'inherit'), no injection.
+ *   - alpha.2: validator type:system spec fix (framework-side; not in this
+ *     file).
+ *   - alpha.3: PTY plumbing via @homebridge/node-pty-prebuilt-multiarch.
+ *     User keystrokes → agent PTY input; agent PTY output → terminal
+ *     display; SIGWINCH propagation; raw-mode setup + cleanup invariant.
+ *   - alpha.4: distribution pivot to node npm package (not in this file).
+ *   - alpha.5: --backfill N flag — print last N channel messages before
+ *     spawning the agent so operator + agent see recent context via
+ *     terminal scrollback.
+ *   - alpha.6: config-driven agent invocation registry. [agents.X] tables
+ *     in ~/.crosstalk/config.toml extend or override DEFAULT_AGENTS. Plus
+ *     pushWithRetry for join/leave system messages (rebase-and-retry on
+ *     push rejection — fixes the alpha.6-era one-shot push fragility).
+ *   - alpha.7 (THIS): live message injection. Watcher polls the channel
+ *     dir every 500ms; new messages from other actors get formatted as
+ *     [crosstalk inbound] blocks and written to the agent's PTY stdin so
+ *     the agent processes them as inline conversational input.
  *
- * What this proves on top of alpha.1:
- *   - The runtime can wrap an arbitrary AI CLI as a PTY child without losing
- *     terminal fidelity (colors, cursor control, line editing all work)
- *   - The architecture supports the alpha.5+ injection multiplexer — once
- *     the runtime owns stdio, mid-session injects become a write to the PTY
- *
- * What this still does NOT do (deferred to later alphas):
- *   - alpha.4: backfill (--backfill N flag)
- *   - alpha.5: config-driven agent invocation registry ([agents.X] config
- *     entries override the hardcoded SPAWN_MAP below)
- *   - alpha.6+: live message injection (watcher hook + inject-on-prompt-ready)
- *   - alpha.7: `to:` filter rules
+ * What this still does NOT do (deferred to alpha.8 + final):
+ *   - alpha.8: `to:` filter rules — currently every new channel message
+ *     gets injected; alpha.8 adds "only inject when to: includes <self>"
+ *     filter + flag override
+ *   - alpha.8 (or later): prompt-ready detection — currently injects fire
+ *     immediately regardless of agent state (OS PTY buffer queues bytes;
+ *     agent reads on next stdin iteration). Mid-response visual mixing is
+ *     acceptable as the alpha trade-off; prompt-ready detection clusters
+ *     injects between turns
  *
  * See cordfuse/crosstalk TODO #21 for the full v0.6 design.
  */
@@ -165,7 +174,7 @@ async function runJoin(channelArg: string, opts: JoinOptions): Promise<void> {
   }
 
   // 5. Post join system message
-  const joinBody = `Joined as ${fromActor} via ${agentName} (v0.6.0-alpha.6 — PTY-wrapped + backfill + operator agent registry, no injection yet).`
+  const joinBody = `Joined as ${fromActor} via ${agentName} (v0.6.0-alpha.7 — PTY-wrapped + backfill + operator agent registry + LIVE INJECTION).`
   if (!await postSystemMessage({
     transport:    config.transport,
     channelGuid,
@@ -179,19 +188,20 @@ async function runJoin(channelArg: string, opts: JoinOptions): Promise<void> {
 
   console.log(`✓ Joined channel ${channelGuid} as ${fromActor}`)
 
-  // 6. Backfill: print last N channel messages so the operator (and the
-  // agent, via terminal scrollback) sees recent context before going live.
-  // Default 10. --backfill 0 skips. Same display format as `crosstalk
-  // channel show / tail` so the operator gets a consistent view.
+  // 6. Backfill display + seen-set initialisation. Read channel messages
+  // ONCE here (used both for backfill display and as the seen-set baseline
+  // for live injection — anything already in the channel before the
+  // session started doesn't get re-injected, even if --backfill 0 hides
+  // it from display).
   const backfillN = opts.backfill !== undefined ? parseInt(opts.backfill, 10) : 10
   if (Number.isNaN(backfillN) || backfillN < 0) {
     console.error(`✗ --backfill must be a non-negative integer (got '${opts.backfill}')`)
     process.exit(1)
   }
+  const channelDir = join(config.transport, 'channels', channelGuid)
+  const allExisting = readChannelMessages(channelDir)
   if (backfillN > 0) {
-    const channelDir = join(config.transport, 'channels', channelGuid)
-    const all = readChannelMessages(channelDir)
-    const tail = all.slice(-backfillN)
+    const tail = allExisting.slice(-backfillN)
     if (tail.length > 0) {
       console.log(`  ── last ${tail.length} message${tail.length === 1 ? '' : 's'} (backfill) ──\n`)
       for (const m of tail) printMessage(m)
@@ -201,11 +211,18 @@ async function runJoin(channelArg: string, opts: JoinOptions): Promise<void> {
   }
 
   console.log(`  Spawning ${agentBin} (${spawnCmd.join(' ')}) under PTY — Ctrl-D or quit the agent to leave.`)
+  console.log(`  Live injection ON: new channel messages (excluding your own) will be injected as [crosstalk inbound] blocks into the agent's input.`)
   console.log(`  ──────────────────────────────────────────────────────`)
 
-  // 7. Spawn agent under PTY. The runtime now owns stdio: forwards user
-  // keystrokes to agent input, agent output to terminal, propagates resize.
-  const agentStatus = await runAgentInPty(spawnCmd)
+  // 7. Spawn agent under PTY + live-inject watcher. The runtime owns stdio
+  // and polls the channel dir every 500ms; new messages from other actors
+  // get formatted as [crosstalk inbound] blocks and written to the agent's
+  // PTY stdin so the agent processes them as inline input.
+  const agentStatus = await runAgentInPty(spawnCmd, {
+    channelDir,
+    fromActor,
+    seen: new Set(allExisting.map(m => m.path)),
+  })
 
   // 6. Post leave message — always, even on agent error/crash
   console.log(`  ──────────────────────────────────────────────────────`)
@@ -241,7 +258,16 @@ async function runJoin(channelArg: string, opts: JoinOptions): Promise<void> {
  * the surrounding lifecycle (post leave + exit) operates against a normal
  * terminal.
  */
-async function runAgentInPty(spawnCmd: string[]): Promise<number> {
+/** Context for the live-injection watcher (alpha.7). The PTY session polls
+ * the channel directory for new messages and writes them to the agent's
+ * stdin so the agent processes them as inline conversational input. */
+interface InjectCtx {
+  channelDir: string
+  fromActor:  string  // skip messages from this identity (no echo of self)
+  seen:       Set<string>  // message paths already injected/backfilled
+}
+
+async function runAgentInPty(spawnCmd: string[], inject: InjectCtx): Promise<number> {
   const cols = process.stdout.columns ?? 80
   const rows = process.stdout.rows   ?? 24
 
@@ -285,9 +311,32 @@ async function runAgentInPty(spawnCmd: string[]): Promise<number> {
     }
     process.on('SIGWINCH', onResize)
 
-    // Cleanup invariant: restore terminal state before resolving so the
-    // surrounding lifecycle (post leave + exit) sees a normal terminal.
+    // Live-injection watcher (alpha.7). Polls the channel dir every 500ms.
+    // For each new message NOT from <self>: format as a [crosstalk inbound]
+    // block and write to the agent's PTY stdin. Bytes go to OS PTY buffer
+    // so the agent reads them on its next stdin iteration — handles
+    // mid-response inject gracefully via OS-level queueing. Visual mid-
+    // response mixing is acceptable as alpha trade-off; alpha.8 will add
+    // prompt-ready detection so injects cluster between turns.
+    //
+    // No `to:` filter rule yet — every new message gets injected. alpha.8
+    // adds the "only inject when to: includes <self>" filter + flag override.
+    const pollInterval = setInterval(() => {
+      const current = readChannelMessages(inject.channelDir)
+      for (const m of current) {
+        if (inject.seen.has(m.path)) continue
+        inject.seen.add(m.path)
+        if (m.from === inject.fromActor) continue   // skip own messages — no echo
+        const block = formatInbound(m)
+        try { term.write(block) } catch { /* term exited mid-poll, harmless */ }
+      }
+    }, 500)
+
+    // Cleanup invariant: restore terminal state + stop watcher before
+    // resolving so the surrounding lifecycle (post leave + exit) sees a
+    // normal terminal and no orphan timers.
     const cleanup = () => {
+      clearInterval(pollInterval)
       try { process.stdin.setRawMode(false) } catch { /* not a TTY anymore */ }
       process.stdin.pause()
       process.stdin.removeListener('data', onStdinData)
@@ -299,6 +348,16 @@ async function runAgentInPty(spawnCmd: string[]): Promise<number> {
       resolve(exitCode ?? 0)
     })
   })
+}
+
+/** Format a channel message as a [crosstalk inbound] block to write into
+ * the agent's PTY stdin. Distinguishable from real user input via the
+ * sentinel — agents like Claude Code can recognise the convention and
+ * respond appropriately. Newline at start to push past whatever cursor
+ * position the agent's prompt may be at. */
+function formatInbound(m: { from: string; timestamp: string; body: string }): string {
+  const t = m.timestamp.slice(11, 19) // hh:mm:ss
+  return `\n[crosstalk inbound from ${m.from} at ${t}]\n${m.body}\n[end inbound]\n`
 }
 
 // ── system message writer ────────────────────────────────────────────────
