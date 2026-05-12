@@ -292,16 +292,12 @@ function formatUptime(ms: number): string {
 }
 
 /** Determine the command to spawn the daemon path of this same code.
- * In compiled binary mode (process.execPath = the binary), spawn it with
- * no args. In dev (bun run src/index.ts), spawn `bun run <index.ts>`. */
+ * After the v0.6.0-alpha.4 pivot, this always re-execs the current node +
+ * script entry pair with no args, which lands the new process in daemon
+ * mode per `src/index.ts`'s `process.argv.length > 2` gate. */
 function getDaemonSpawnCmd(): string[] {
-  const execPath = process.execPath
-  // Bun's execPath ends in 'bun' on Linux/macOS, 'bun.exe' on Windows.
-  if (execPath.endsWith('/bun') || execPath.endsWith('\\bun.exe')) {
-    // Walk back from this file (src/cli/commands/watch.ts) to src/index.ts
-    const indexTs = resolve(import.meta.dir, '..', '..', 'index.ts')
-    return [execPath, 'run', indexTs]
-  }
-  // Compiled binary — just exec path with no args
-  return [execPath]
+  // process.argv[0] = node binary; process.argv[1] = the script (dist/index.js
+  // when installed, src/index.ts when running under bun/tsx dev).
+  // Pair them and the daemon path of index.ts runs identically.
+  return [process.argv[0]!, process.argv[1]!]
 }

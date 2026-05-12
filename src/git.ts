@@ -1,6 +1,7 @@
 import { join } from 'path';
 import { homedir } from 'os';
-import { mkdir, writeFile } from 'fs/promises';
+import { mkdir, readFile, writeFile } from 'fs/promises';
+import { spawn } from 'child_process';
 
 const ACTOR_CLONES_DIR = join(homedir(), '.crosstalk', 'actor-clones');
 
@@ -12,29 +13,33 @@ function deriveNamespace(transportRoot: string, remoteUrl: string | null): strin
   return transportRoot.split('/').at(-1) ?? 'default';
 }
 
-async function runGit(cwd: string, args: string[], env?: Record<string, string>): Promise<number> {
-  const proc = Bun.spawn({
-    cmd: ['git', ...args],
-    cwd,
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: { ...process.env, ...env },
+function runGit(cwd: string, args: string[], env?: Record<string, string>): Promise<number> {
+  return new Promise<number>((resolve) => {
+    const proc = spawn('git', args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, ...env },
+    });
+    proc.on('exit', code => resolve(code ?? 0));
+    proc.on('error', () => resolve(127));
   });
-  return proc.exited;
 }
 
-async function getRemoteUrl(repoPath: string): Promise<string | null> {
-  const proc = Bun.spawn({
-    cmd: ['git', 'remote', 'get-url', 'origin'],
-    cwd: repoPath,
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: process.env,
+function getRemoteUrl(repoPath: string): Promise<string | null> {
+  return new Promise<string | null>((resolve) => {
+    const proc = spawn('git', ['remote', 'get-url', 'origin'], {
+      cwd: repoPath,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: process.env,
+    });
+    let stdout = '';
+    proc.stdout?.on('data', chunk => { stdout += chunk.toString('utf-8'); });
+    proc.on('exit', code => {
+      if (code !== 0) return resolve(null);
+      resolve(stdout.trim() || null);
+    });
+    proc.on('error', () => resolve(null));
   });
-  const code = await proc.exited;
-  if (code !== 0) return null;
-  const url = await new Response(proc.stdout).text();
-  return url.trim() || null;
 }
 
 async function hasRemote(repoPath: string): Promise<boolean> {
@@ -48,7 +53,7 @@ async function pushWithRetry(repoPath: string, maxAttempts = 5): Promise<void> {
     if (code === 0) return;
     console.log(`[git] push rejected, rebasing (attempt ${i + 1}/${maxAttempts})`);
     await runGit(repoPath, ['pull', '--rebase']);
-    await Bun.sleep(1000 + Math.random() * 4000);
+    await new Promise(r => setTimeout(r, 1000 + Math.random() * 4000));
   }
   console.error('[git] push failed after max retries');
 }
@@ -67,7 +72,7 @@ export async function ensureActorClone(
   const clonePath = join(ACTOR_CLONES_DIR, namespace, actorName);
 
   try {
-    await Bun.file(join(clonePath, '.git', 'HEAD')).text();
+    await readFile(join(clonePath, '.git', 'HEAD'), 'utf-8');
     // Clone exists — sync before dispatch so actor sees the triggering message
     const code = await runGit(clonePath, ['pull', '--rebase', '--autostash']);
     if (code !== 0) console.warn(`[git] pull failed for ${actorName} — proceeding with stale clone`);

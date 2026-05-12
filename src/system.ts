@@ -1,7 +1,7 @@
 import { join } from 'path';
 import { createHash } from 'crypto';
 import { hostname } from 'os';
-import { mkdir } from 'fs/promises';
+import { mkdir, readFile, writeFile } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { commitWatcherMessage } from './git.js';
 
@@ -26,7 +26,7 @@ function nowParts() {
 
 async function readProtocolVersion(transportRoot: string): Promise<string> {
   try {
-    return (await Bun.file(join(transportRoot, 'CROSSTALK-VERSION')).text()).trim();
+    return (await readFile(join(transportRoot, 'CROSSTALK-VERSION'), 'utf-8')).trim();
   } catch {
     return 'unknown';
   }
@@ -47,7 +47,7 @@ async function writeSystemMessage(
     `---\nfrom: watcher\nto: all\ntimestamp: ${iso}\ntype: system\nreason: ${reason}\nsession-id: ${SESSION_ID}\nmachine: ${MACHINE_HASH}\n${extraLines}\n---\n\n${body}\n`;
 
   const relPath = `${date}/${file}`;
-  await Bun.write(join(transportRoot, '_system', relPath), content);
+  await writeFile(join(transportRoot, '_system', relPath), content);
   return relPath;
 }
 

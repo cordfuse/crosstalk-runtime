@@ -35,6 +35,7 @@ import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch'
+import which from 'which'
 import type { Command } from 'commander'
 
 import { loadConfig } from '../../config.js'
@@ -121,7 +122,7 @@ async function runJoin(channelArg: string, opts: JoinOptions): Promise<void> {
 
   // Verify the agent's CLI is on PATH before posting join (no orphaned
   // join message if the binary is missing)
-  const agentBin = Bun.which(spawnCmd[0]!)
+  const agentBin = which.sync(spawnCmd[0]!, { nothrow: true })
   if (!agentBin) {
     console.error(`✗ Agent CLI '${spawnCmd[0]}' not found on PATH.`)
     console.error(`  Install ${spawnCmd[0]} and retry.`)

@@ -1,4 +1,5 @@
 import { watch, mkdirSync } from 'fs';
+import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { parseFrontmatter } from './frontmatter.js';
 import { dispatch, isDuplicate } from './dispatch.js';
@@ -47,7 +48,7 @@ export function startWatcher(
 
     let content: string;
     try {
-      content = await Bun.file(fullPath).text();
+      content = await readFile(fullPath, 'utf-8');
     } catch {
       return;
     }
