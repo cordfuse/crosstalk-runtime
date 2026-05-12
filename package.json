@@ -22,5 +22,8 @@
   },
   "devDependencies": {
     "@types/bun": "latest"
-  }
+  },
+  "trustedDependencies": [
+    "@homebridge/node-pty-prebuilt-multiarch"
+  ]
 }

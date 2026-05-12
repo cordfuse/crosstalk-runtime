@@ -5,39 +5,111 @@ on:
     tags:
       - 'v*'
 
+# Per-platform CI runners. node-pty's native binary needs to be the right one
+# for each target architecture. Cross-compile from a Linux runner to
+# bun-darwin-arm64 has been tried and fails: bun's --compile bundles whatever
+# .node files exist in node_modules, which on a Linux host means only the
+# linux prebuilds. The result is a Mach-O binary missing pty.node, which
+# crashes on launch with "Cannot require module ../build/Release/pty.node".
+#
+# Solution: each binary builds on its own native runner, so the prebuild
+# fetched by trustedDependencies' install script (postinstall via
+# prebuild-install) is the right one for the target.
+
 jobs:
+  build-linux-x64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Build linux-x64 binary
+        run: bun build --compile --minify src/index.ts --outfile crosstalk-linux-x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crosstalk-linux-x64
+          path: crosstalk-linux-x64
+
+  build-linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Build linux-arm64 binary
+        run: bun build --compile --minify src/index.ts --outfile crosstalk-linux-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crosstalk-linux-arm64
+          path: crosstalk-linux-arm64
+
+  build-macos-arm64:
+    runs-on: macos-latest    # macos-latest is arm64 (M-series) since 2024-10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Build macos-arm64 binary
+        run: bun build --compile --minify src/index.ts --outfile crosstalk-macos-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crosstalk-macos-arm64
+          path: crosstalk-macos-arm64
+
+  build-macos-x64:
+    runs-on: macos-13        # last x64 macos GH-hosted runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Build macos-x64 binary
+        run: bun build --compile --minify src/index.ts --outfile crosstalk-macos-x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crosstalk-macos-x64
+          path: crosstalk-macos-x64
+
   release:
+    needs:
+      - build-linux-x64
+      - build-linux-arm64
+      - build-macos-arm64
+      - build-macos-x64
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
-      - uses: actions/checkout@v4
-
       - name: Extract version
         id: version
         run: echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
 
-      - uses: oven-sh/setup-bun@v2
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
         with:
-          bun-version: latest
+          path: artifacts
+          merge-multiple: true
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Build binary (linux-x64)
-        run: bun build --compile --minify src/index.ts --outfile crosstalk-linux-x64 --target bun-linux-x64
-
-      - name: Build binary (linux-arm64)
-        run: bun build --compile --minify src/index.ts --outfile crosstalk-linux-arm64 --target bun-linux-arm64
-
-      - name: Build binary (darwin-x64)
-        run: bun build --compile --minify src/index.ts --outfile crosstalk-macos-x64 --target bun-darwin-x64
-
-      - name: Build binary (darwin-arm64)
-        run: bun build --compile --minify src/index.ts --outfile crosstalk-macos-arm64 --target bun-darwin-arm64
+      - name: Verify all four binaries present
+        run: |
+          ls -la artifacts/
+          for f in crosstalk-linux-x64 crosstalk-linux-arm64 crosstalk-macos-x64 crosstalk-macos-arm64; do
+            test -f "artifacts/$f" || { echo "MISSING: $f"; exit 1; }
+          done
 
       - name: Checksums
+        working-directory: artifacts
         run: sha256sum crosstalk-* > SHA256SUMS
 
       - name: Create GitHub Release
@@ -50,8 +122,8 @@ jobs:
 
             See [WHATSNEW.md](https://github.com/cordfuse/crosstalk/blob/main/WHATSNEW.md) for changes — runtime changelog lives in the operator-facing repo.
           files: |
-            crosstalk-linux-x64
-            crosstalk-linux-arm64
-            crosstalk-macos-x64
-            crosstalk-macos-arm64
-            SHA256SUMS
+            artifacts/crosstalk-linux-x64
+            artifacts/crosstalk-linux-arm64
+            artifacts/crosstalk-macos-x64
+            artifacts/crosstalk-macos-arm64
+            artifacts/SHA256SUMS
