@@ -1,5 +1,6 @@
 import { join } from 'path';
 import { homedir } from 'os';
+import { readFile } from 'fs/promises';
 import { parse } from 'smol-toml';
 
 const CONFIG_PATH = join(homedir(), '.crosstalk', 'config.toml');
@@ -60,7 +61,7 @@ export async function loadConfig(): Promise<Config> {
 
   let raw: string;
   try {
-    raw = await Bun.file(CONFIG_PATH).text();
+    raw = await readFile(CONFIG_PATH, 'utf-8');
   } catch {
     throw new Error(
       `~/.crosstalk/config.toml not found. Create it with:\n\n` +

@@ -1,6 +1,17 @@
 import type { RelayConfig } from './config.js';
 import { pullTransport } from './git.js';
-import pkg from '../package.json';
+import { WebSocket, WebSocketServer } from 'ws';
+import { createServer, type IncomingMessage, type ServerResponse } from 'http';
+import { createHmac, timingSafeEqual } from 'crypto';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+// Resolve package.json at runtime — works both for dev (node --watch src/)
+// and for installed packages (dist/relay.js → ../package.json).
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = dirname(__filename);
+const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8')) as { version: string };
 
 // ─── shared types ────────────────────────────────────────────────────────────
 
@@ -27,31 +38,56 @@ interface ErrorMessage {
 
 type RelayMessage = NotifyMessage | AuthMessage | ReadyMessage | ErrorMessage;
 
+// Per-connection auth state stored on the WebSocket instance itself.
+type AuthedWebSocket = WebSocket & { authenticated?: boolean };
+
 // ─── server mode ─────────────────────────────────────────────────────────────
+//
+// Server mode runs in the Docker deployment of the relay. Built on node's
+// http.createServer + the ws npm package's WebSocketServer. Pure node — no
+// bun dependency. Same code paths work under node and under bun (since bun
+// is mostly node-compatible), but the canonical runtime is node.
 
 // authenticated WebSocket clients
-const clients = new Set<import('bun').ServerWebSocket<{ authenticated: boolean }>>();
+const clients = new Set<AuthedWebSocket>();
 
-async function verifyGitHubSignature(body: string, signature: string, secret: string): Promise<boolean> {
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    'raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
-  );
-  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(body));
-  const computed = 'sha256=' + Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
-  return computed === signature;
+function verifyGitHubSignature(body: string, signature: string, secret: string): boolean {
+  if (!signature.startsWith('sha256=')) return false;
+  const hmac = createHmac('sha256', secret);
+  hmac.update(body);
+  const computed = 'sha256=' + hmac.digest('hex');
+  if (computed.length !== signature.length) return false;
+  try {
+    return timingSafeEqual(Buffer.from(computed), Buffer.from(signature));
+  } catch {
+    return false;
+  }
 }
 
 function broadcast(msg: NotifyMessage): void {
   const payload = JSON.stringify(msg);
   let count = 0;
   for (const ws of clients) {
-    if (ws.data.authenticated) {
+    if (ws.authenticated) {
       ws.send(payload);
       count++;
     }
   }
   console.log(`[relay] broadcast repo=${msg.repo} sha=${msg.sha.slice(0, 7)} to ${count} client(s)`);
+}
+
+function readRequestBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', chunk => { body += chunk.toString('utf-8'); });
+    req.on('end', () => resolve(body));
+    req.on('error', reject);
+  });
+}
+
+function sendJson(res: ServerResponse, status: number, payload: unknown): void {
+  res.writeHead(status, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(payload));
 }
 
 export function startRelayServer(config: RelayConfig): void {
@@ -62,75 +98,103 @@ export function startRelayServer(config: RelayConfig): void {
     console.log('[relay] server running in open mode (no secret set)');
   }
 
-  Bun.serve<{ authenticated: boolean }>({
-    port,
-    fetch(req, server) {
-      const url = new URL(req.url);
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url ?? '/', 'http://localhost');
 
-      // WebSocket upgrade
-      if (url.pathname === '/ws') {
-        const upgraded = server.upgrade(req, { data: { authenticated: !requireAuth } });
-        if (upgraded) return undefined;
-        return new Response('WebSocket upgrade failed', { status: 400 });
-      }
+    // GitHub webhook
+    if (req.method === 'POST' && url.pathname === '/webhook') {
+      const body = await readRequestBody(req);
 
-      // GitHub webhook
-      if (req.method === 'POST' && url.pathname === '/webhook') {
-        return handleWebhook(req, webhookSecret);
-      }
-
-      // health check
-      if (url.pathname === '/health') {
-        return new Response(JSON.stringify({ status: 'ok', clients: clients.size }), {
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-
-      // service identity at root — distinguishes "alive but wrong path" from "down"
-      if (url.pathname === '/') {
-        return new Response(JSON.stringify({
-          service: 'crosstalk-relay',
-          version: pkg.version,
-          endpoints: ['/health', '/version', '/webhook', '/ws'],
-        }), { headers: { 'content-type': 'application/json' } });
-      }
-
-      // version-only endpoint — useful for polling deploy completion
-      if (url.pathname === '/version') {
-        return new Response(JSON.stringify({ version: pkg.version }), {
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-
-      return new Response('Not found', { status: 404 });
-    },
-    websocket: {
-      open(ws) {
-        if (!requireAuth) {
-          clients.add(ws);
-          ws.send(JSON.stringify({ type: 'ready' } satisfies ReadyMessage));
+      if (webhookSecret) {
+        const sig = (req.headers['x-hub-signature-256'] as string | undefined) ?? '';
+        if (!verifyGitHubSignature(body, sig, webhookSecret)) {
+          console.error('[relay] webhook signature invalid — rejected');
+          res.writeHead(403); res.end('Forbidden');
+          return;
         }
-        console.log(`[relay] client connected (${clients.size} total)`);
-        if (requireAuth) {
-          setTimeout(() => {
-            if (!ws.data.authenticated) {
-              ws.send(JSON.stringify({ type: 'error', message: 'auth timeout' } satisfies ErrorMessage));
-              ws.close();
-            }
-          }, 10_000);
-        }
-      },
-      message(ws, raw) {
+      }
+
+      let payload: Record<string, unknown>;
+      try {
+        payload = JSON.parse(body) as Record<string, unknown>;
+      } catch {
+        res.writeHead(400); res.end('Bad request');
+        return;
+      }
+
+      const repo = (payload.repository as Record<string, unknown>)?.full_name as string ?? 'unknown';
+      const sha = (payload.after as string) ?? (payload.head_commit as Record<string, unknown>)?.id as string ?? 'unknown';
+      const event = (req.headers['x-github-event'] as string | undefined) ?? 'push';
+
+      broadcast({ type: 'notify', repo, event, sha });
+      res.writeHead(200); res.end('OK');
+      return;
+    }
+
+    // health check
+    if (url.pathname === '/health') {
+      sendJson(res, 200, { status: 'ok', clients: clients.size });
+      return;
+    }
+
+    // service identity at root — distinguishes "alive but wrong path" from "down"
+    if (url.pathname === '/') {
+      sendJson(res, 200, {
+        service: 'crosstalk-relay',
+        version: pkg.version,
+        endpoints: ['/health', '/version', '/webhook', '/ws'],
+      });
+      return;
+    }
+
+    // version-only endpoint — useful for polling deploy completion
+    if (url.pathname === '/version') {
+      sendJson(res, 200, { version: pkg.version });
+      return;
+    }
+
+    res.writeHead(404); res.end('Not found');
+  });
+
+  const wss = new WebSocketServer({ noServer: true });
+
+  server.on('upgrade', (req, socket, head) => {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    if (url.pathname !== '/ws') {
+      socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (rawWs) => {
+      const ws = rawWs as AuthedWebSocket;
+      ws.authenticated = !requireAuth;
+
+      if (!requireAuth) {
+        clients.add(ws);
+        ws.send(JSON.stringify({ type: 'ready' } satisfies ReadyMessage));
+      }
+      console.log(`[relay] client connected (${clients.size} total)`);
+
+      if (requireAuth) {
+        setTimeout(() => {
+          if (!ws.authenticated) {
+            ws.send(JSON.stringify({ type: 'error', message: 'auth timeout' } satisfies ErrorMessage));
+            ws.close();
+          }
+        }, 10_000);
+      }
+
+      ws.on('message', (raw) => {
         let msg: RelayMessage;
         try {
-          msg = JSON.parse(String(raw)) as RelayMessage;
+          msg = JSON.parse(raw.toString()) as RelayMessage;
         } catch {
           return;
         }
 
-        if (!ws.data.authenticated && msg.type === 'auth') {
+        if (!ws.authenticated && msg.type === 'auth') {
           if (msg.secret === secret) {
-            ws.data.authenticated = true;
+            ws.authenticated = true;
             clients.add(ws);
             ws.send(JSON.stringify({ type: 'ready' } satisfies ReadyMessage));
             console.log(`[relay] client authenticated (${clients.size} connected)`);
@@ -139,43 +203,18 @@ export function startRelayServer(config: RelayConfig): void {
             ws.close();
           }
         }
-      },
-      close(ws) {
+      });
+
+      ws.on('close', () => {
         clients.delete(ws);
         console.log(`[relay] client disconnected (${clients.size} remaining)`);
-      },
-    },
+      });
+    });
   });
 
-  console.log(`[relay] server listening on port ${port}`);
-}
-
-async function handleWebhook(req: Request, webhookSecret?: string): Promise<Response> {
-  const body = await req.text();
-
-  if (webhookSecret) {
-    const sig = req.headers.get('x-hub-signature-256') ?? '';
-    const valid = await verifyGitHubSignature(body, sig, webhookSecret);
-    if (!valid) {
-      console.error('[relay] webhook signature invalid — rejected');
-      return new Response('Forbidden', { status: 403 });
-    }
-  }
-
-  let payload: Record<string, unknown>;
-  try {
-    payload = JSON.parse(body) as Record<string, unknown>;
-  } catch {
-    return new Response('Bad request', { status: 400 });
-  }
-
-  const repo = (payload.repository as Record<string, unknown>)?.full_name as string ?? 'unknown';
-  const sha = (payload.after as string) ?? (payload.head_commit as Record<string, unknown>)?.id as string ?? 'unknown';
-  const event = req.headers.get('x-github-event') ?? 'push';
-
-  broadcast({ type: 'notify', repo, event, sha });
-
-  return new Response('OK');
+  server.listen(port, () => {
+    console.log(`[relay] server listening on port ${port}`);
+  });
 }
 
 // ─── client mode ─────────────────────────────────────────────────────────────
@@ -192,7 +231,7 @@ export function startRelayClient(config: RelayConfig, transportRoot: string): vo
     console.log(`[relay] connecting to ${url}`);
     const ws = new WebSocket(url + '/ws');
 
-    ws.onopen = () => {
+    ws.on('open', () => {
       attempt = 0;
       if (secret) {
         console.log('[relay] connected — authenticating');
@@ -200,12 +239,12 @@ export function startRelayClient(config: RelayConfig, transportRoot: string): vo
       } else {
         console.log('[relay] connected — no secret, skipping auth');
       }
-    };
+    });
 
-    ws.onmessage = async (event) => {
+    ws.on('message', async (data) => {
       let msg: RelayMessage;
       try {
-        msg = JSON.parse(String(event.data)) as RelayMessage;
+        msg = JSON.parse(data.toString()) as RelayMessage;
       } catch {
         return;
       }
@@ -228,18 +267,18 @@ export function startRelayClient(config: RelayConfig, transportRoot: string): vo
           console.error(`[relay] pull failed: ${err}`);
         }
       }
-    };
+    });
 
-    ws.onerror = (err) => {
+    ws.on('error', (err) => {
       console.error(`[relay] WebSocket error: ${err}`);
-    };
+    });
 
-    ws.onclose = () => {
+    ws.on('close', () => {
       attempt++;
       const delay = Math.min(RECONNECT_BASE_MS * 2 ** attempt + Math.random() * 1000, RECONNECT_MAX_MS);
       console.log(`[relay] disconnected — reconnecting in ${Math.round(delay / 1000)}s (attempt ${attempt})`);
       setTimeout(connect, delay);
-    };
+    });
   }
 
   connect();

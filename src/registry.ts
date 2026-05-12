@@ -1,6 +1,6 @@
 import { join } from 'path';
 import { homedir } from 'os';
-import { readdir } from 'fs/promises';
+import { readdir, readFile } from 'fs/promises';
 import { watch } from 'fs';
 import { parseFrontmatter } from './frontmatter.js';
 
@@ -65,7 +65,7 @@ async function loadActorsFromDir(dir: string, registry: Registry): Promise<void>
       continue;
     }
 
-    const content = await Bun.file(join(dir, file)).text();
+    const content = await readFile(join(dir, file), 'utf-8');
     const { data } = parseFrontmatter(content);
 
     const agent = typeof data.agent === 'string' ? data.agent : undefined;

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { loadConfig } from './config.js';
 import { loadRegistry, watchRegistry } from './registry.js';
 import { startWatcher } from './watcher.js';
@@ -6,6 +7,7 @@ import { announceOnline, announceOffline, SESSION_ID, MACHINE_ID } from './syste
 import { readCursor, listMessages, messagesAfterCursor } from './cursor.js';
 import { dispatch } from './dispatch.js';
 import { join } from 'path';
+import { readFile } from 'fs/promises';
 import { parseFrontmatter } from './frontmatter.js';
 
 // CLI dispatch — if a subcommand is passed, route to the CLI module and exit.
@@ -67,7 +69,7 @@ if (config.relay.mode === 'server') {
       for (const relPath of missed) {
         const fullPath = join(channelsDir, guid, relPath);
         let content: string;
-        try { content = await Bun.file(fullPath).text(); } catch { continue; }
+        try { content = await readFile(fullPath, 'utf-8'); } catch { continue; }
         const { data } = parseFrontmatter(content);
         const from = String(data.from ?? '');
         const to = String(data.to ?? '');

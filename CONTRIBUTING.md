@@ -1,9 +1,9 @@
 <!-- parent: librarian -->
 # Contributing to crosstalk-runtime
 
-This file is for contributors working on the Crosstalk runtime — humans and AI clients alike. The runtime is the Bun/TypeScript daemon that watches a transport for new channel messages and dispatches them to actor processes. The protocol spec, framework actors, and operator-facing docs live in [cordfuse/crosstalk](https://github.com/cordfuse/crosstalk).
+This file is for contributors working on the Crosstalk runtime — humans and AI clients alike. The runtime is a Node/TypeScript daemon that watches a transport for new channel messages and dispatches them to actor processes. The protocol spec, framework actors, and operator-facing docs live in [cordfuse/crosstalk](https://github.com/cordfuse/crosstalk).
 
-**Contributor repo only.** Users who want to run Crosstalk do not clone this repo — they install the released binary or `bunx @crosstalk/runtime`.
+**Contributor repo only.** Users who want to run Crosstalk do not clone this repo — they install the published npm package (see "Installing for users" below).
 
 This file is intentionally agent-neutral: it does not auto-load into any specific AI client. The framework and runtime are agent-agnostic, and so is this contributor doc.
 
@@ -121,19 +121,54 @@ Fields prefixed `x-` are operator-owned and ignored by the runtime entirely.
 
 ---
 
-## Dev
+## Installing for users
+
+Crosstalk's runtime ships as a Node npm package starting with `v0.6.0-alpha.4`. There is no longer a `bun --compile` single-file binary — the embedding of native PTY modules into a bun-compiled binary was a fight not worth picking when every Crosstalk user already has Node installed (`claude`, `gemini`, `qwen`, `opencode` are all Node CLIs themselves).
+
+Install globally from a git tag while the npm scope `@cordfuse` is pending administrative correction:
 
 ```sh
-bun install
-bun run src/index.ts
+npm install -g cordfuse/crosstalk-runtime#v0.6.0-alpha.4
 ```
+
+This works for npm, pnpm, yarn, and `bunx`. No registry involved. The package's `prepare` script runs `tsc` to compile TypeScript → `dist/`, and `@homebridge/node-pty-prebuilt-multiarch`'s install script fetches/builds the native PTY module for the user's platform automatically.
+
+Once the npm `@cordfuse` scope is live, the install instruction flips to:
+
+```sh
+npm install -g @cordfuse/crosstalk-runtime
+```
+
+Either way, the user ends up with `crosstalk` and `ct` on PATH.
+
+**Requirements:**
+- Node `>=18` (LTS line). v18 covers fetch, AbortController, modern fs.promises.
+- For source-build fallback of node-pty on platforms without a prebuild (e.g. macOS): Xcode Command Line Tools (`xcode-select --install`) on Mac; build-essential + python on Linux. Most dev users have these.
+
+---
+
+## Dev
+
+For local development on the runtime source:
+
+```sh
+npm install                         # runs `prepare` → tsc → dist/, builds native PTY module
+node dist/index.js version          # smoke-test the binary
+
+# Or watch-mode for live source iteration (Node 22+, --watch + --experimental-strip-types):
+npm run dev
+```
+
+`npm install` runs the install scripts that compile `@homebridge/node-pty-prebuilt-multiarch`'s native module from source on macOS (and platforms without a prebuild). On Mac this needs Xcode CLI tools (`xcode-select --install`); on Alpine/Linux the Dockerfile installs `python3 make g++` for the build.
+
+Bun-flavored dev still works if a contributor prefers it (`bun --watch run src/index.ts`), but bun is not a project prerequisite — the source is pure node and the canonical runtime everywhere is node.
 
 ---
 
 ## Versioning
 
-- Version string in `VERSION` (semver, single line)
-- Tags: `vX.Y.Z` — triggers the GitHub Actions release workflow
+- Version in `package.json` (semver)
+- Tags: `vX.Y.Z` — triggers the GitHub Actions release workflow (publish/release entry)
 - No tag prefix in this repo (runtime was `runtime/vX.Y.Z` in the old monorepo; standalone repo uses plain tags)
 
 ---
@@ -144,4 +179,4 @@ bun run src/index.ts
 - **WHATSNEW.md lives in `cordfuse/crosstalk`** — runtime changes are documented there, not here
 - **No personal information** — no names, machine hostnames, emails, or account details in committed files
 - **One commit per fix or feature** — never batch unrelated changes
-- **No Python** — TypeScript/Bun only
+- **No Python** — TypeScript only. Source is pure node — no Bun-specific APIs anywhere, including the relay server (which uses `node:http` + `ws`, not `Bun.serve`).

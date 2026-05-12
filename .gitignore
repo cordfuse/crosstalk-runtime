@@ -1,6 +1,6 @@
 node_modules/
 dist/
 crosstalk-watch
-package-lock.json
+bun.lock
 .env
 .env.local
