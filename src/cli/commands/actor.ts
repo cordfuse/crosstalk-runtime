@@ -219,12 +219,12 @@ function validateActor(e: ActorEntry, registry: Map<string, ActorEntry>): Valida
     out.push(issue('error', `missing 'role' field — short label required by PROFILES.md (e.g. 'Code Reviewer')`))
   }
 
-  // type required + valid
+  // type required + valid (human | machine | system per PROFILES.md v0.5.1)
   const type = String(e.data.type ?? '')
   if (!type) {
-    out.push(issue('error', `missing 'type' field — must be 'machine' or 'human'`))
-  } else if (type !== 'machine' && type !== 'human') {
-    out.push(issue('error', `invalid type '${type}' — must be 'machine' or 'human'`))
+    out.push(issue('error', `missing 'type' field — must be 'human', 'machine', or 'system'`))
+  } else if (type !== 'machine' && type !== 'human' && type !== 'system') {
+    out.push(issue('error', `invalid type '${type}' — must be 'human', 'machine', or 'system'`))
   }
 
   const agent = String(e.data.agent ?? '')
@@ -242,6 +242,12 @@ function validateActor(e: ActorEntry, registry: Map<string, ActorEntry>): Valida
     if (agent || model) {
       out.push(issue('warn', `human actor has 'agent'/'model' set — these are ignored for humans (runtime never headlessly dispatches a human)`))
     }
+  } else if (type === 'system') {
+    // system actors (PROFILES.md v0.5.1) are framework-reserved labels — the
+    // runtime/watcher writes under them but never spawns a process. agent/
+    // model/command/args are not required and not warned about.
+    // No additional checks here; the universal name/role/parent checks above
+    // still apply.
   }
 
   // parent: required field per PROFILES.md.
