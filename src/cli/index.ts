@@ -12,6 +12,7 @@
 import { Command } from 'commander'
 import pkg from '../../package.json' with { type: 'json' }
 import { registerVersionCommand } from './commands/version.js'
+import { registerInitCommand } from './commands/init.js'
 
 export async function runCLI(argv: string[]): Promise<void> {
   const program = new Command()
@@ -27,6 +28,7 @@ export async function runCLI(argv: string[]): Promise<void> {
     .helpOption('-h, --help', 'show help')
 
   registerVersionCommand(program)
+  registerInitCommand(program)
 
   await program.parseAsync(argv)
 }
