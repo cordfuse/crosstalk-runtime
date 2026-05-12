@@ -6,17 +6,22 @@ WORKDIR /app
 # the one-image-two-modes design.
 #
 # python3 + make + g++ are required at install time to build @homebridge/node-pty
-# from source on Alpine (no darwin-style prebuild exists; node-gyp source-builds
-# the native PTY module). They could be moved into a multi-stage build later
-# to shrink the final image.
+# from source on Alpine (no Alpine prebuild ships in the npm tarball; node-gyp
+# source-builds the native PTY module). They could be moved into a multi-stage
+# build later to shrink the final image.
 RUN apk add --no-cache git python3 make g++
 
-COPY package.json package-lock.json* ./
-RUN npm install --omit=dev --no-audit --no-fund
-
-COPY tsconfig.json tsconfig.build.json ./
+# Copy ALL build inputs BEFORE npm install so the package's `prepare` script
+# (which runs `tsc -p tsconfig.build.json` → `dist/`) has everything it needs:
+# tsc itself comes from devDeps (so no --omit=dev), and the source/tsconfig
+# must already be in the image when prepare fires.
+COPY package.json package-lock.json* tsconfig.json tsconfig.build.json ./
 COPY src/ ./src/
-RUN npx tsc -p tsconfig.build.json
+RUN npm install --no-audit --no-fund
+
+# Now that dist/ is built and @homebridge's native PTY module is in place,
+# drop devDeps to slim the runtime image (typescript + @types/* go away).
+RUN npm prune --omit=dev
 
 ENV RELAY_MODE=server
 
