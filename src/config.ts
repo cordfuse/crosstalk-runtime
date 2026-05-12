@@ -13,6 +13,12 @@ export interface RelayConfig {
   port: number;            // server mode only
 }
 
+export interface AgentSpawn {
+  /** argv array — first element is the binary, rest are args.
+   * Example: `["claude"]`, `["gemini", "-i"]`, `["python3", "/path/to/bot.py"]`. */
+  spawn: string[];
+}
+
 export interface Config {
   transport: string;
   actorEmailSuffix: string;
@@ -22,6 +28,11 @@ export interface Config {
    * pass --from explicitly. Forward-compat with TODO #23 (human-actor spec). */
   defaultHumanActor?: string;
   relay: RelayConfig;
+  /** Operator-defined agent invocation map for `crosstalk channel join --agent <name>`.
+   * Loaded from `[agents.X]` tables in config.toml. Merged with the built-in
+   * defaults (claude/gemini/codex/qwen/opencode) at use site — operator
+   * entries win on name collision, and operator-only names extend the map. */
+  agents: Record<string, AgentSpawn>;
 }
 
 const DEFAULTS = {
@@ -56,6 +67,7 @@ export async function loadConfig(): Promise<Config> {
         port: envInt('PORT') ?? DEFAULTS.relay.port,
         ...(process.env.WEBHOOK_SECRET ? { webhookSecret: process.env.WEBHOOK_SECRET } : {}),
       },
+      agents: {},
     };
   }
 
@@ -107,5 +119,26 @@ export async function loadConfig(): Promise<Config> {
     ? data['default-human-actor'] as string
     : undefined;
 
-  return { transport, actorEmailSuffix, defaultHeartbeatInterval, defaultHumanActor, relay };
+  // [agents.X] tables — operator-defined invocation registry.
+  // Each table must have `spawn = ["binary", "arg", ...]` (string array, ≥1 elem).
+  // Skipped (with warning) if malformed; that lets the rest of the config
+  // load even if one agent entry is broken.
+  const agents: Record<string, AgentSpawn> = {};
+  const agentsTable = data.agents;
+  if (typeof agentsTable === 'object' && agentsTable !== null && !Array.isArray(agentsTable)) {
+    for (const [name, raw] of Object.entries(agentsTable)) {
+      if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+        console.warn(`[config] [agents.${name}] is not a table — skipping`);
+        continue;
+      }
+      const spawnRaw = (raw as Record<string, unknown>).spawn;
+      if (!Array.isArray(spawnRaw) || spawnRaw.length === 0 || !spawnRaw.every(s => typeof s === 'string')) {
+        console.warn(`[config] [agents.${name}].spawn must be a non-empty array of strings — skipping`);
+        continue;
+      }
+      agents[name] = { spawn: spawnRaw as string[] };
+    }
+  }
+
+  return { transport, actorEmailSuffix, defaultHeartbeatInterval, defaultHumanActor, relay, agents };
 }
