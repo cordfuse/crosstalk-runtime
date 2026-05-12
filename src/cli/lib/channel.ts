@@ -156,3 +156,73 @@ export function formatRelativeTime(iso: string | null): string {
   if (diffSec < 7 * 86_400) return `${Math.floor(diffSec / 86_400)}d ago`
   return iso.slice(0, 10) // YYYY-MM-DD
 }
+
+
+// ── message reading + display (used by channel show/tail/join) ───────────
+
+export interface RenderedMessage {
+  timestamp: string
+  from:      string
+  to:        string
+  type:      string
+  body:      string
+  path:      string  // relative to channel dir, e.g. "2026/05/12/210642000Z.md"
+}
+
+/** Walk a channel's YYYY/MM/DD/HHMMSSsssZ.md tree in chronological order
+ * (filename zero-padding makes lex sort = chrono sort). Returns parsed
+ * message objects ready for display. Skips unreadable/malformed files. */
+export function readChannelMessages(channelDir: string): RenderedMessage[] {
+  const out: RenderedMessage[] = []
+  const YEAR = /^\d{4}$/
+  const DD   = /^\d{2}$/
+  const MSG  = /^\d{9}Z\.md$/
+
+  let years: string[] = []
+  try { years = readdirSync(channelDir).filter(e => YEAR.test(e)).sort() } catch { return out }
+  for (const y of years) {
+    let months: string[] = []
+    try { months = readdirSync(join(channelDir, y)).filter(e => DD.test(e)).sort() } catch { continue }
+    for (const m of months) {
+      let days: string[] = []
+      try { days = readdirSync(join(channelDir, y, m)).filter(e => DD.test(e)).sort() } catch { continue }
+      for (const d of days) {
+        let files: string[] = []
+        try { files = readdirSync(join(channelDir, y, m, d)).filter(e => MSG.test(e)).sort() } catch { continue }
+        for (const f of files) {
+          const path = join(y, m, d, f)
+          try {
+            const content = readFileSync(join(channelDir, path), 'utf-8')
+            const { data, body } = parseFrontmatter(content)
+            const t = f.slice(0, 9)
+            const iso = `${y}-${m}-${d}T${t.slice(0,2)}:${t.slice(2,4)}:${t.slice(4,6)}.${t.slice(6,9)}Z`
+            out.push({
+              timestamp: String(data.timestamp ?? iso),
+              from:      String(data.from ?? '?'),
+              to:        String(data.to ?? '?'),
+              type:      String(data.type ?? 'text'),
+              body:      body.trim(),
+              path,
+            })
+          } catch {
+            // skip unreadable
+          }
+        }
+      }
+    }
+  }
+  return out
+}
+
+/** Print a single message to stdout in the canonical "[hh:mm:ss] from → to"
+ * header + 2-space indented body shape. Used by channel show, channel tail,
+ * and channel join's --backfill display. */
+export function printMessage(m: RenderedMessage): void {
+  const t = m.timestamp.slice(11, 19) // hh:mm:ss
+  const header = `[${t}] ${m.from} → ${m.to}` + (m.type !== 'text' ? `  (${m.type})` : '')
+  console.log(header)
+  for (const line of m.body.split('\n')) {
+    console.log(`  ${line}`)
+  }
+  console.log('')
+}

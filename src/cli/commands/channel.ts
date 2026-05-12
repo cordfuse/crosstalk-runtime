@@ -18,7 +18,7 @@ import type { Command } from 'commander'
 
 import { loadConfig } from '../../config.js'
 import { parseFrontmatter } from '../../frontmatter.js'
-import { listChannels, resolveChannel, formatRelativeTime } from '../lib/channel.js'
+import { listChannels, resolveChannel, formatRelativeTime, readChannelMessages, printMessage } from '../lib/channel.js'
 import { registerChannelJoin } from './channel-join.js'
 
 export function registerChannelCommand(program: Command): void {
@@ -221,15 +221,6 @@ function registerChannelShow(parent: Command): void {
     })
 }
 
-interface RenderedMessage {
-  timestamp: string
-  from:      string
-  to:        string
-  type:      string
-  body:      string
-  path:      string
-}
-
 async function runChannelShow(query: string, opts: ChannelShowOptions): Promise<void> {
   const config = await loadConfig()
   const guid = resolveChannel(config.transport, query)
@@ -254,59 +245,6 @@ async function runChannelShow(query: string, opts: ChannelShowOptions): Promise<
   for (const m of messages) {
     printMessage(m)
   }
-}
-
-function readChannelMessages(channelDir: string): RenderedMessage[] {
-  const out: RenderedMessage[] = []
-  const YEAR = /^\d{4}$/
-  const DD   = /^\d{2}$/
-  const MSG  = /^\d{9}Z\.md$/
-
-  let years: string[] = []
-  try { years = readdirSync(channelDir).filter(e => YEAR.test(e)).sort() } catch { return out }
-  for (const y of years) {
-    let months: string[] = []
-    try { months = readdirSync(join(channelDir, y)).filter(e => DD.test(e)).sort() } catch { continue }
-    for (const m of months) {
-      let days: string[] = []
-      try { days = readdirSync(join(channelDir, y, m)).filter(e => DD.test(e)).sort() } catch { continue }
-      for (const d of days) {
-        let files: string[] = []
-        try { files = readdirSync(join(channelDir, y, m, d)).filter(e => MSG.test(e)).sort() } catch { continue }
-        for (const f of files) {
-          const path = join(y, m, d, f)
-          try {
-            const content = readFileSync(join(channelDir, path), 'utf-8')
-            const { data, body } = parseFrontmatter(content)
-            const t = f.slice(0, 9)
-            const iso = `${y}-${m}-${d}T${t.slice(0,2)}:${t.slice(2,4)}:${t.slice(4,6)}.${t.slice(6,9)}Z`
-            out.push({
-              timestamp: String(data.timestamp ?? iso),
-              from:      String(data.from ?? '?'),
-              to:        String(data.to ?? '?'),
-              type:      String(data.type ?? 'text'),
-              body:      body.trim(),
-              path,
-            })
-          } catch {
-            // skip unreadable
-          }
-        }
-      }
-    }
-  }
-  return out
-}
-
-function printMessage(m: RenderedMessage): void {
-  const t = m.timestamp.slice(11, 19) // hh:mm:ss
-  const header = `[${t}] ${m.from} → ${m.to}` + (m.type !== 'text' ? `  (${m.type})` : '')
-  console.log(header)
-  // Indent body 2 spaces
-  for (const line of m.body.split('\n')) {
-    console.log(`  ${line}`)
-  }
-  console.log('')
 }
 
 // ── channel tail ────────────────────────────────────────────────────────
