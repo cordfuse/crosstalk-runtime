@@ -6,20 +6,23 @@ on:
       - 'v*'
 
 # Distribution model (v0.6.0-alpha.4+): pure node npm package, no per-platform
-# binaries. Users install via:
+# binaries. Users install via the GitHub release tarball:
 #
-#   npm install -g cordfuse/crosstalk-runtime#vX.Y.Z          (git URL — current)
-#   npm install -g @cordfuse/crosstalk-runtime                (npm registry — once
-#                                                              the @cordfuse scope's
-#                                                              email correction lands)
+#   npm install -g https://github.com/cordfuse/crosstalk-runtime/releases/download/vX.Y.Z/crosstalk-runtime-X.Y.Z.tgz
 #
-# The npm install runs the package's `prepare` script which compiles TS → dist/.
+# OR (once @cordfuse npm scope is fixed):
+#
+#   npm install -g @cordfuse/crosstalk-runtime
+#
+# **NOT supported: git-URL install** (e.g. `npm install -g cordfuse/crosstalk-runtime#tag`).
+# npm runs the package's `prepare` lifecycle on git-URL installs BEFORE
+# installing devDependencies in the temp clone — so `tsc` isn't on PATH
+# when prepare fires. The .tgz install path works because CI runs
+# `npm install` (with devDeps) BEFORE `npm pack`, baking dist/ into the
+# tarball. End users just consume pre-built dist/ from the .tgz.
+#
 # @homebridge's install script fetches/builds the right native PTY for the
 # user's host platform automatically (no cross-compile, no .node bundling).
-#
-# This workflow now just produces a GitHub Release entry with a packed tarball
-# attached as a convenience asset. The actual install path is the git URL form
-# above — it works against the tag directly without any registry involvement.
 
 jobs:
   release:
@@ -45,6 +48,10 @@ jobs:
       - name: List artifacts
         run: ls -la *.tgz
 
+      - name: Compute version-without-v for tarball URL
+        id: vinfo
+        run: echo "vnum=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -53,13 +60,21 @@ jobs:
           body: |
             Crosstalk runtime ${{ github.ref_name }}.
 
-            **Install (git URL — current):**
+            **Install:**
 
             ```sh
-            npm install -g cordfuse/crosstalk-runtime#${{ github.ref_name }}
+            npm install -g https://github.com/cordfuse/crosstalk-runtime/releases/download/${{ github.ref_name }}/crosstalk-runtime-${{ steps.vinfo.outputs.vnum }}.tgz
             ```
 
-            Works for npm, pnpm, yarn, and `bunx`. The `prepare` script compiles TypeScript → `dist/`, and `@homebridge/node-pty-prebuilt-multiarch` builds its native PTY module for your platform automatically. Requires Node `>=18` and (for source-build fallback) Xcode CLI tools on Mac or `python3 make g++` on Linux.
+            The tarball ships pre-built `dist/` so `npm install` doesn't have to compile TypeScript on your machine. `@homebridge/node-pty-prebuilt-multiarch` does build its native PTY module locally — requires Node `>=18` and (for source-build fallback) Xcode CLI tools on Mac or `python3 make g++` on Linux. Most dev users have these.
+
+            **Why not `npm install -g cordfuse/crosstalk-runtime#${{ github.ref_name }}` (git URL form)?** npm runs the package's `prepare` lifecycle on git-URL installs BEFORE installing devDependencies in the temp clone — so `tsc` isn't on PATH when prepare fires and the build fails. Stick to the tarball URL above; it Just Works.
+
+            Once the npm `@cordfuse` scope's email correction lands, install will simplify to:
+
+            ```sh
+            npm install -g @cordfuse/crosstalk-runtime
+            ```
 
             See [WHATSNEW.md](https://github.com/cordfuse/crosstalk/blob/main/WHATSNEW.md) for changes — runtime changelog lives in the operator-facing repo.
           files: |
