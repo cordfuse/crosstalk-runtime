@@ -23,20 +23,18 @@
  *     in ~/.crosstalk/config.toml extend or override DEFAULT_AGENTS. Plus
  *     pushWithRetry for join/leave system messages (rebase-and-retry on
  *     push rejection — fixes the alpha.6-era one-shot push fragility).
- *   - alpha.7 (THIS): live message injection. Watcher polls the channel
- *     dir every 500ms; new messages from other actors get formatted as
+ *   - alpha.7: live message injection. Watcher polls the channel dir
+ *     every 500ms; new messages from other actors get formatted as
  *     [crosstalk inbound] blocks and written to the agent's PTY stdin so
  *     the agent processes them as inline conversational input.
+ *   - alpha.8 (THIS): inject refinements. (1) `to:`-targeting filter:
+ *     skip messages not addressed to <self> (or "all" broadcast);
+ *     `--inject-all` flag bypasses. (2) Prompt-ready clustering: buffer
+ *     injects in a queue while agent stdout is active; flush only when
+ *     stdout has been silent for `--quiet-ms` (default 750). Avoids
+ *     visual mid-response mixing.
  *
- * What this still does NOT do (deferred to alpha.8 + final):
- *   - alpha.8: `to:` filter rules — currently every new channel message
- *     gets injected; alpha.8 adds "only inject when to: includes <self>"
- *     filter + flag override
- *   - alpha.8 (or later): prompt-ready detection — currently injects fire
- *     immediately regardless of agent state (OS PTY buffer queues bytes;
- *     agent reads on next stdin iteration). Mid-response visual mixing is
- *     acceptable as the alpha trade-off; prompt-ready detection clusters
- *     injects between turns
+ * v0.6.0 final cuts after alpha.8 stabilises in operator usage.
  *
  * See cordfuse/crosstalk TODO #21 for the full v0.6 design.
  */
@@ -53,10 +51,12 @@ import { scanAllLayers } from '../lib/actors.js'
 import { resolveChannel, readChannelMessages, printMessage } from '../lib/channel.js'
 
 interface JoinOptions {
-  agent:     string
-  as?:       string
-  backfill?: string  // string per commander; we parseInt
-  push?:     boolean // commander inverts --no-push to push: false
+  agent:      string
+  as?:        string
+  backfill?:  string  // string per commander; we parseInt
+  push?:      boolean // commander inverts --no-push to push: false
+  injectAll?: boolean // alpha.8: bypass `to:`-targeting filter
+  quietMs?:   string  // alpha.8: prompt-ready threshold in ms; we parseInt
 }
 
 /** Built-in default agent invocation map.
@@ -90,6 +90,8 @@ export function registerChannelJoin(parent: Command): void {
     .requiredOption('-a, --agent <name>',  `AI agent CLI to wrap (built-in: ${Object.keys(DEFAULT_AGENTS).sort().join(', ')}; operator-defined extras live in [agents.X] of config.toml)`)
     .option('--as <actor>',                'identity to post join/leave under (defaults to default-human-actor in config.toml)')
     .option('--backfill <n>',              'print last N channel messages before spawning the agent (default: 10; 0 to skip)')
+    .option('--inject-all',                'inject every new channel message (default: only inject messages where to: includes <self> or "all")')
+    .option('--quiet-ms <n>',              'prompt-ready threshold — inject only after agent stdout has been silent for N ms (default: 750)')
     .option('--no-push',                   'commit join/leave locally without pushing')
     .action(async (channelArg: string, opts: JoinOptions) => {
       await runJoin(channelArg, opts)
@@ -174,7 +176,7 @@ async function runJoin(channelArg: string, opts: JoinOptions): Promise<void> {
   }
 
   // 5. Post join system message
-  const joinBody = `Joined as ${fromActor} via ${agentName} (v0.6.0-alpha.7 — PTY-wrapped + backfill + operator agent registry + LIVE INJECTION).`
+  const joinBody = `Joined as ${fromActor} via ${agentName} (v0.6.0-alpha.8 — PTY-wrapped + backfill + operator agent registry + live injection with to:-filter + prompt-ready clustering).`
   if (!await postSystemMessage({
     transport:    config.transport,
     channelGuid,
@@ -210,18 +212,31 @@ async function runJoin(channelArg: string, opts: JoinOptions): Promise<void> {
     }
   }
 
+  // alpha.8: parse + validate inject knobs
+  const injectAll = opts.injectAll === true
+  const quietMs = opts.quietMs !== undefined ? parseInt(opts.quietMs, 10) : 750
+  if (Number.isNaN(quietMs) || quietMs < 0) {
+    console.error(`✗ --quiet-ms must be a non-negative integer (got '${opts.quietMs}')`)
+    process.exit(1)
+  }
+
   console.log(`  Spawning ${agentBin} (${spawnCmd.join(' ')}) under PTY — Ctrl-D or quit the agent to leave.`)
-  console.log(`  Live injection ON: new channel messages (excluding your own) will be injected as [crosstalk inbound] blocks into the agent's input.`)
+  if (injectAll) {
+    console.log(`  Live injection ON (--inject-all): EVERY new channel message (except your own) injects as [crosstalk inbound]. Quiet threshold ${quietMs}ms.`)
+  } else {
+    console.log(`  Live injection ON: messages where to: includes ${fromActor} or "all" inject as [crosstalk inbound]. Quiet threshold ${quietMs}ms. (--inject-all to bypass filter.)`)
+  }
   console.log(`  ──────────────────────────────────────────────────────`)
 
   // 7. Spawn agent under PTY + live-inject watcher. The runtime owns stdio
-  // and polls the channel dir every 500ms; new messages from other actors
-  // get formatted as [crosstalk inbound] blocks and written to the agent's
-  // PTY stdin so the agent processes them as inline input.
+  // and polls the channel dir every 500ms. Filtered messages enqueue;
+  // queue flushes when agent stdout has been silent for `quietMs`.
   const agentStatus = await runAgentInPty(spawnCmd, {
     channelDir,
     fromActor,
     seen: new Set(allExisting.map(m => m.path)),
+    injectAll,
+    quietMs,
   })
 
   // 6. Post leave message — always, even on agent error/crash
@@ -258,13 +273,31 @@ async function runJoin(channelArg: string, opts: JoinOptions): Promise<void> {
  * the surrounding lifecycle (post leave + exit) operates against a normal
  * terminal.
  */
-/** Context for the live-injection watcher (alpha.7). The PTY session polls
+/** Context for the live-injection watcher (alpha.7+). The PTY session polls
  * the channel directory for new messages and writes them to the agent's
- * stdin so the agent processes them as inline conversational input. */
+ * stdin so the agent processes them as inline conversational input.
+ *
+ * alpha.8 additions:
+ *   - injectAll: bypass the `to:`-targeting filter (default: only inject
+ *     messages where `to:` includes `<self>` or is `all`)
+ *   - quietMs: prompt-ready threshold. Injects buffer in a queue while
+ *     agent is producing stdout; queue flushes once stdout has been
+ *     silent for this many ms. Default 750.
+ */
 interface InjectCtx {
   channelDir: string
   fromActor:  string  // skip messages from this identity (no echo of self)
   seen:       Set<string>  // message paths already injected/backfilled
+  injectAll:  boolean
+  quietMs:    number
+}
+
+/** Returns true when the message's `to:` field targets `self` (either
+ * directly by name, or via the `all` broadcast keyword). Comma-list
+ * tolerant. Case-insensitive. */
+function isMessageForSelf(toField: string, self: string): boolean {
+  const targets = toField.split(',').map(t => t.trim().toLowerCase())
+  return targets.includes('all') || targets.includes(self.toLowerCase())
 }
 
 async function runAgentInPty(spawnCmd: string[], inject: InjectCtx): Promise<number> {
@@ -287,8 +320,15 @@ async function runAgentInPty(spawnCmd: string[], inject: InjectCtx): Promise<num
       return
     }
 
-    // PTY → terminal display (transparent passthrough)
-    const onPtyData = (data: string) => process.stdout.write(data)
+    // PTY → terminal display (transparent passthrough). Also tracks
+    // lastStdoutMs for the prompt-ready clustering heuristic (alpha.8):
+    // injects buffer in a queue while agent is producing stdout; queue
+    // flushes once stdout has been silent for inject.quietMs.
+    let lastStdoutMs = Date.now()
+    const onPtyData = (data: string) => {
+      lastStdoutMs = Date.now()
+      process.stdout.write(data)
+    }
     term.onData(onPtyData)
 
     // Terminal stdin → PTY input (raw mode captures every byte including
@@ -311,24 +351,43 @@ async function runAgentInPty(spawnCmd: string[], inject: InjectCtx): Promise<num
     }
     process.on('SIGWINCH', onResize)
 
-    // Live-injection watcher (alpha.7). Polls the channel dir every 500ms.
-    // For each new message NOT from <self>: format as a [crosstalk inbound]
-    // block and write to the agent's PTY stdin. Bytes go to OS PTY buffer
-    // so the agent reads them on its next stdin iteration — handles
-    // mid-response inject gracefully via OS-level queueing. Visual mid-
-    // response mixing is acceptable as alpha trade-off; alpha.8 will add
-    // prompt-ready detection so injects cluster between turns.
+    // Live-injection watcher (alpha.7 + alpha.8 refinements). Polls the
+    // channel dir every 500ms.
     //
-    // No `to:` filter rule yet — every new message gets injected. alpha.8
-    // adds the "only inject when to: includes <self>" filter + flag override.
+    // alpha.7 baseline: for each new message NOT from <self>, write a
+    // [crosstalk inbound] block to the agent's PTY stdin.
+    //
+    // alpha.8 additions:
+    //   - to:-targeting filter: skip messages not addressed to <self>
+    //     (and not the `all` broadcast). --inject-all bypasses.
+    //   - prompt-ready clustering: buffer injects in a queue while agent
+    //     stdout is active; flush only when stdout has been silent for
+    //     inject.quietMs. Avoids visual mid-response mixing.
+    //
+    // Same poll loop also handles the queue flush check, so we don't
+    // need a second interval. Latency-to-flush is bounded by the 500ms
+    // poll cadence (good enough — operators won't notice).
+    const queue: Array<{ from: string; timestamp: string; body: string }> = []
     const pollInterval = setInterval(() => {
+      // Stage 1: scan for new messages, filter, enqueue
       const current = readChannelMessages(inject.channelDir)
       for (const m of current) {
         if (inject.seen.has(m.path)) continue
         inject.seen.add(m.path)
-        if (m.from === inject.fromActor) continue   // skip own messages — no echo
-        const block = formatInbound(m)
-        try { term.write(block) } catch { /* term exited mid-poll, harmless */ }
+        if (m.from === inject.fromActor) continue       // skip own messages — no echo
+        if (!inject.injectAll && !isMessageForSelf(m.to, inject.fromActor)) continue   // skip not-for-me unless --inject-all
+        queue.push({ from: m.from, timestamp: m.timestamp, body: m.body })
+      }
+
+      // Stage 2: flush queue if agent stdout has been quiet long enough
+      // (prompt-ready heuristic). Don't fire mid-response.
+      if (queue.length > 0 && (Date.now() - lastStdoutMs) > inject.quietMs) {
+        for (const m of queue) {
+          const block = formatInbound(m)
+          try { term.write(block) } catch { /* term exited mid-poll, harmless */ }
+        }
+        queue.length = 0
+        lastStdoutMs = Date.now()  // injects count as "agent activity" so back-to-back injects don't all fire at once
       }
     }, 500)
 
