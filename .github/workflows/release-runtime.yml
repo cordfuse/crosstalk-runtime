@@ -65,28 +65,18 @@ jobs:
           name: crosstalk-macos-arm64
           path: crosstalk-macos-arm64
 
-  build-macos-x64:
-    runs-on: macos-13        # last x64 macos GH-hosted runner
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-      - name: Build macos-x64 binary
-        run: bun build --compile --minify src/index.ts --outfile crosstalk-macos-x64
-      - uses: actions/upload-artifact@v4
-        with:
-          name: crosstalk-macos-x64
-          path: crosstalk-macos-x64
+  # macos-x64 build dropped from this release: macos-13 (the last GH-hosted
+  # x64 macOS runner) is being deprecated and the runner pool is heavily
+  # backed up — the v0.6.0-alpha.3 attempt sat queued for 30+ minutes. No
+  # current crosstalk users are on x64 Macs (Steve's Mac is M-series arm64).
+  # Re-add when (a) macos-13 pool frees up, OR (b) we figure out
+  # macos-arm64-runner-with-Rosetta cross-compile to x64. Backlog item.
 
   release:
     needs:
       - build-linux-x64
       - build-linux-arm64
       - build-macos-arm64
-      - build-macos-x64
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -101,10 +91,10 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Verify all four binaries present
+      - name: Verify expected binaries present
         run: |
           ls -la artifacts/
-          for f in crosstalk-linux-x64 crosstalk-linux-arm64 crosstalk-macos-x64 crosstalk-macos-arm64; do
+          for f in crosstalk-linux-x64 crosstalk-linux-arm64 crosstalk-macos-arm64; do
             test -f "artifacts/$f" || { echo "MISSING: $f"; exit 1; }
           done
 
@@ -124,6 +114,5 @@ jobs:
           files: |
             artifacts/crosstalk-linux-x64
             artifacts/crosstalk-linux-arm64
-            artifacts/crosstalk-macos-x64
             artifacts/crosstalk-macos-arm64
             artifacts/SHA256SUMS
