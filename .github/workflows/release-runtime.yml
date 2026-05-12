@@ -31,14 +31,32 @@ jobs:
           bun-version: latest
       - name: Install dependencies
         run: bun install --frozen-lockfile
-      - name: Stage native pty.node into literal-require path
+      - name: Stage native pty.node where bun's bundler finds it
         run: |
           plat=$(bun -e "console.log(process.platform)")
           arch=$(bun -e "console.log(process.arch)")
           abi=$(bun -e "console.log(process.versions.modules)")
-          mkdir -p node_modules/@homebridge/node-pty-prebuilt-multiarch/build/Release
-          cp "node_modules/@homebridge/node-pty-prebuilt-multiarch/prebuilds/$plat-$arch/node.abi$abi.node" \
-             node_modules/@homebridge/node-pty-prebuilt-multiarch/build/Release/pty.node
+          # bun --compile walks prebuilds/<plat-arch>/ to auto-discover .node
+          # files for the vfs (this is how linux builds have always worked —
+          # the @homebridge npm tarball ships prebuilds/linux-* by default).
+          # On macOS the install script puts the .node at build/Release/
+          # instead, which bun's auto-discovery doesn't crawl. So mirror it.
+          pkg_root="node_modules/@homebridge/node-pty-prebuilt-multiarch"
+          src="$pkg_root/prebuilds/$plat-$arch/node.abi$abi.node"
+          alt="$pkg_root/build/Release/pty.node"
+          mkdir -p "$pkg_root/prebuilds/$plat-$arch" "$pkg_root/build/Release"
+          if [ -f "$src" ]; then
+            cp "$src" "$alt"
+            echo "staged from prebuilds/: $src → $alt"
+          elif [ -f "$alt" ]; then
+            cp "$alt" "$src"
+            echo "staged from build/: $alt → $src (so bun bundler discovers it)"
+          else
+            echo "ERROR: neither $src nor $alt found"
+            ls -la "$pkg_root/prebuilds/" || true
+            ls -la "$pkg_root/build/" || true
+            exit 1
+          fi
       - name: Build linux-x64 binary
         run: bun build --compile --minify src/index.ts --outfile crosstalk-linux-x64
       - name: Smoke-test built binary
@@ -57,14 +75,32 @@ jobs:
           bun-version: latest
       - name: Install dependencies
         run: bun install --frozen-lockfile
-      - name: Stage native pty.node into literal-require path
+      - name: Stage native pty.node where bun's bundler finds it
         run: |
           plat=$(bun -e "console.log(process.platform)")
           arch=$(bun -e "console.log(process.arch)")
           abi=$(bun -e "console.log(process.versions.modules)")
-          mkdir -p node_modules/@homebridge/node-pty-prebuilt-multiarch/build/Release
-          cp "node_modules/@homebridge/node-pty-prebuilt-multiarch/prebuilds/$plat-$arch/node.abi$abi.node" \
-             node_modules/@homebridge/node-pty-prebuilt-multiarch/build/Release/pty.node
+          # bun --compile walks prebuilds/<plat-arch>/ to auto-discover .node
+          # files for the vfs (this is how linux builds have always worked —
+          # the @homebridge npm tarball ships prebuilds/linux-* by default).
+          # On macOS the install script puts the .node at build/Release/
+          # instead, which bun's auto-discovery doesn't crawl. So mirror it.
+          pkg_root="node_modules/@homebridge/node-pty-prebuilt-multiarch"
+          src="$pkg_root/prebuilds/$plat-$arch/node.abi$abi.node"
+          alt="$pkg_root/build/Release/pty.node"
+          mkdir -p "$pkg_root/prebuilds/$plat-$arch" "$pkg_root/build/Release"
+          if [ -f "$src" ]; then
+            cp "$src" "$alt"
+            echo "staged from prebuilds/: $src → $alt"
+          elif [ -f "$alt" ]; then
+            cp "$alt" "$src"
+            echo "staged from build/: $alt → $src (so bun bundler discovers it)"
+          else
+            echo "ERROR: neither $src nor $alt found"
+            ls -la "$pkg_root/prebuilds/" || true
+            ls -la "$pkg_root/build/" || true
+            exit 1
+          fi
       - name: Build linux-arm64 binary
         run: bun build --compile --minify src/index.ts --outfile crosstalk-linux-arm64
       - name: Smoke-test built binary
