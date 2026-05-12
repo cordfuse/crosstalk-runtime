@@ -5,6 +5,7 @@
  *   crosstalk channel list [--include-system] [--json]
  *   crosstalk channel show <name-or-guid> [--last N]
  *   crosstalk channel tail <name-or-guid>
+ *   crosstalk channel join <name-or-guid> --agent <name> [--as <actor>]
  *
  * The top-level `crosstalk ls` is a friendly shortcut for `channel list`
  * (registered separately in src/cli/commands/ls.ts).
@@ -18,6 +19,7 @@ import type { Command } from 'commander'
 import { loadConfig } from '../../config.js'
 import { parseFrontmatter } from '../../frontmatter.js'
 import { listChannels, resolveChannel, formatRelativeTime } from '../lib/channel.js'
+import { registerChannelJoin } from './channel-join.js'
 
 export function registerChannelCommand(program: Command): void {
   const channel = program
@@ -28,6 +30,7 @@ export function registerChannelCommand(program: Command): void {
   registerChannelList(channel)
   registerChannelShow(channel)
   registerChannelTail(channel)
+  registerChannelJoin(channel)
 }
 
 // ── channel new ─────────────────────────────────────────────────────────
