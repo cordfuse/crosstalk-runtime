@@ -14,6 +14,8 @@ import pkg from '../../package.json' with { type: 'json' }
 import { registerVersionCommand } from './commands/version.js'
 import { registerInitCommand } from './commands/init.js'
 import { registerPostCommand } from './commands/post.js'
+import { registerChannelCommand } from './commands/channel.js'
+import { registerLsCommand } from './commands/ls.js'
 
 export async function runCLI(argv: string[]): Promise<void> {
   const program = new Command()
@@ -31,6 +33,8 @@ export async function runCLI(argv: string[]): Promise<void> {
   registerVersionCommand(program)
   registerInitCommand(program)
   registerPostCommand(program)
+  registerChannelCommand(program)
+  registerLsCommand(program)
 
   await program.parseAsync(argv)
 }

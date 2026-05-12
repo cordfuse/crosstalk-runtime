@@ -29,14 +29,14 @@
  * Atomic file write + git add + git commit + git push (in the operator's
  * transport clone). --no-push leaves the commit local.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import type { Command } from 'commander'
 
 import { loadConfig } from '../../config.js'
 import { loadRegistry } from '../../registry.js'
-import { parseFrontmatter } from '../../frontmatter.js'
+import { resolveChannel } from '../lib/channel.js'
 
 interface PostOptions {
   channel:               string
@@ -141,65 +141,6 @@ async function runPost(opts: PostOptions): Promise<void> {
   } else {
     console.log(`  (skipped push — --no-push)`)
   }
-}
-
-// ── Channel resolution ──────────────────────────────────────────────────────
-
-function resolveChannel(transport: string, query: string): string {
-  const channelsDir = join(transport, 'channels')
-  if (!existsSync(channelsDir)) {
-    console.error(`✗ Transport has no channels/ directory: ${transport}`)
-    process.exit(1)
-  }
-
-  // GUID-shaped input: accept directly if the directory exists
-  const guidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-  if (guidPattern.test(query)) {
-    if (existsSync(join(channelsDir, query))) return query
-    console.error(`✗ Channel GUID not found: ${query}`)
-    process.exit(1)
-  }
-
-  // Friendly-name lookup via _header.md scan
-  const candidates: { guid: string; name: string }[] = []
-  for (const entry of readdirSync(channelsDir)) {
-    if (entry.startsWith('.') || entry.startsWith('_')) continue
-    const headerPath = join(channelsDir, entry, '_header.md')
-    if (!existsSync(headerPath)) continue
-    try {
-      const content = readFileSync(headerPath, 'utf-8')
-      const { data } = parseFrontmatter(content)
-      const name = String(data.name ?? '').trim()
-      if (name) candidates.push({ guid: entry, name })
-    } catch {
-      // ignore unreadable headers
-    }
-  }
-
-  // Exact match
-  const exact = candidates.find(c => c.name === query)
-  if (exact) return exact.guid
-
-  // Single substring match (case-insensitive)
-  const partial = candidates.filter(c =>
-    c.name.toLowerCase().includes(query.toLowerCase())
-  )
-  if (partial.length === 1) return partial[0]!.guid
-  if (partial.length > 1) {
-    console.error(`✗ Ambiguous channel name '${query}'. Matches:`)
-    for (const p of partial) console.error(`    ${p.name}  (${p.guid})`)
-    process.exit(1)
-  }
-
-  // No match
-  console.error(`✗ No channel matches '${query}'`)
-  if (candidates.length === 0) {
-    console.error(`  No channels with _header.md exist yet. Use \`crosstalk channel new\` (lands in alpha.4).`)
-  } else {
-    console.error(`  Available channels:`)
-    for (const c of candidates) console.error(`    ${c.name}  (${c.guid.slice(0, 8)}...)`)
-  }
-  process.exit(1)
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
