@@ -43,7 +43,7 @@ import { spawnSync } from 'node:child_process'
 import type { Command } from 'commander'
 
 import { loadConfig } from '../../config.js'
-import { loadRegistry } from '../../registry.js'
+import { scanAllLayers } from '../lib/actors.js'
 import { resolveChannel } from '../lib/channel.js'
 
 interface JoinOptions {
@@ -92,13 +92,24 @@ async function runJoin(channelArg: string, opts: JoinOptions): Promise<void> {
     process.exit(1)
   }
 
-  // Validate the actor exists in the registry — joining as a non-registered
-  // actor would post an unattributable system message
-  const registry = await loadRegistry(config.transport)
-  if (!registry.has(fromActor)) {
-    const known = [...registry.keys()].sort().join(', ')
-    console.error(`✗ Actor '${fromActor}' is not in the registry.`)
+  // Validate the actor exists across all profile layers — joining as a
+  // non-registered actor would post an unattributable system message.
+  //
+  // We use scanAllLayers (framework + custom + ~/.crosstalk/actors) rather
+  // than loadRegistry, because loadRegistry filters to dispatchable actors
+  // (agent or command set) and humans are spec-forbidden from carrying
+  // those fields — so loadRegistry never sees them.
+  const profiles = scanAllLayers(config.transport)
+  const profile  = profiles.find(p => p.name === fromActor)
+  if (!profile) {
+    const known = profiles.map(p => `${p.name} (${p.data.type ?? '?'})`).sort().join(', ')
+    console.error(`✗ Actor '${fromActor}' is not defined in any profile layer.`)
     console.error(`  Known actors: ${known || '(none)'}`)
+    process.exit(1)
+  }
+  if (profile.data.type !== 'human') {
+    console.error(`✗ Actor '${fromActor}' has type='${profile.data.type ?? '?'}'.`)
+    console.error(`  --as must reference a human actor; machines aren't operators joining a channel.`)
     process.exit(1)
   }
 
