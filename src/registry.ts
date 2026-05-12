@@ -11,6 +11,7 @@ const CUSTOM_ACTORS_SUBPATH = join('manifest', 'custom', 'actors');
 const KEBAB_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 
 const FRAMEWORK_FIELDS = new Set([
+  'name', 'type', 'role', 'parent',
   'command', 'args', 'agent', 'model', 'git-email',
   'heartbeat-interval', 'docker', 'volumes',
 ]);
