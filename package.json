@@ -5,7 +5,8 @@
   "module": "src/index.ts",
   "type": "module",
   "bin": {
-    "crosstalk": "src/index.ts"
+    "crosstalk": "src/index.ts",
+    "ct":        "src/index.ts"
   },
   "scripts": {
     "start": "bun run src/index.ts",
