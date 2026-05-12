@@ -9,9 +9,18 @@
  * debugging.
  *
  * `actor validate` checks each actor profile against the framework spec
- * (kebab-case name, required fields per type, parent chain consistency).
- * Exits non-zero if any actor fails. Forward-compat with TODO #23 — human-
- * actor strict validation comes when that spec lands.
+ * (manifest/framework/PROFILES.md). Exits non-zero if any actor fails.
+ *
+ * Strict per PROFILES.md (locked in TODO #23, shipped in v0.5 alpha.9):
+ *   - kebab-case name matching the filename
+ *   - frontmatter `name:` matches filename
+ *   - required: name, type, role, parent
+ *   - type ∈ {machine, human}
+ *   - machine: agent OR command required (model defaulted if missing → warn)
+ *   - human: agent/model warn (humans never headlessly dispatched)
+ *   - parent: missing field → ERROR (catches typos like `paren:`); blank
+ *     value → top-of-chain; self-parent → ERROR; chain cycles → ERROR;
+ *     parent not in registry → WARN (degrades gracefully)
  */
 import type { Command } from 'commander'
 
@@ -126,9 +135,15 @@ async function runActorValidate(name: string | undefined, opts: ActorValidateOpt
   const config = await loadConfig()
   const layer = opts.registry ?? 'all'
 
+  // Always build the full merged registry — needed for parent-chain cycle
+  // detection even when validating only one layer.
+  const allEntries = scanAllLayers(config.transport)
+  const registry = new Map<string, ActorEntry>()
+  for (const e of allEntries) registry.set(e.name, e)
+
   let entries: ActorEntry[]
   if (layer === 'all') {
-    entries = scanAllLayers(config.transport)
+    entries = allEntries
   } else if (layer === 'framework' || layer === 'custom' || layer === 'local') {
     entries = scanActorLayer(config.transport, layer as ActorLayer)
   } else {
@@ -146,7 +161,7 @@ async function runActorValidate(name: string | undefined, opts: ActorValidateOpt
 
   const issues: ValidationIssue[] = []
   for (const e of entries) {
-    issues.push(...validateActor(e))
+    issues.push(...validateActor(e, registry))
   }
 
   if (issues.length === 0) {
@@ -177,7 +192,7 @@ async function runActorValidate(name: string | undefined, opts: ActorValidateOpt
   if (errorCount > 0) process.exit(1)
 }
 
-function validateActor(e: ActorEntry): ValidationIssue[] {
+function validateActor(e: ActorEntry, registry: Map<string, ActorEntry>): ValidationIssue[] {
   const out: ValidationIssue[] = []
   const issue = (severity: 'error' | 'warn', message: string): ValidationIssue =>
     ({ actor: e.name, layer: e.layer, severity, message })
@@ -191,9 +206,23 @@ function validateActor(e: ActorEntry): ValidationIssue[] {
     out.push(issue('error', `name '${e.name}' is not kebab-case (must match /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/)`))
   }
 
+  // name field must equal the filename-derived name
+  const declaredName = e.data.name == null ? '' : String(e.data.name)
+  if (!declaredName) {
+    out.push(issue('error', `missing 'name' field — must equal filename '${e.name}'`))
+  } else if (declaredName !== e.name) {
+    out.push(issue('error', `name mismatch — frontmatter says 'name: ${declaredName}' but filename is '${e.name}.md'`))
+  }
+
+  // role required (short Title-Case label per PROFILES.md)
+  if (e.data.role == null || String(e.data.role).trim() === '') {
+    out.push(issue('error', `missing 'role' field — short label required by PROFILES.md (e.g. 'Code Reviewer')`))
+  }
+
+  // type required + valid
   const type = String(e.data.type ?? '')
   if (!type) {
-    out.push(issue('warn', `missing 'type' field — should be 'machine' or 'human'`))
+    out.push(issue('error', `missing 'type' field — must be 'machine' or 'human'`))
   } else if (type !== 'machine' && type !== 'human') {
     out.push(issue('error', `invalid type '${type}' — must be 'machine' or 'human'`))
   }
@@ -202,8 +231,7 @@ function validateActor(e: ActorEntry): ValidationIssue[] {
   const model = String(e.data.model ?? '')
   const command = String(e.data.command ?? '')
 
-  if (type === 'machine' || (!type && agent)) {
-    // Machine actors need either (agent + model) for native dispatch or `command` for custom
+  if (type === 'machine') {
     if (!agent && !command) {
       out.push(issue('error', `machine actor missing 'agent' (claude|gemini|qwen|opencode) or 'command' (custom)`))
     }
@@ -216,9 +244,44 @@ function validateActor(e: ActorEntry): ValidationIssue[] {
     }
   }
 
-  // parent: TODO #23 will require this. For now, warn if missing entirely.
+  // parent: required field per PROFILES.md.
+  //   missing field           → ERROR (catches typos like `paren:`)
+  //   empty value (null/'')   → valid, top-of-chain
+  //   self-reference          → ERROR (cycle of length 1)
+  //   chain cycle             → ERROR
+  //   parent not in registry  → WARN (degrades gracefully across operators)
   if (!('parent' in e.data)) {
-    out.push(issue('warn', `missing 'parent' field — TODO #23 will require this. Use 'parent:' (blank) for top-of-chain, 'parent: <name>' otherwise`))
+    out.push(issue('error', `missing 'parent' field — required by PROFILES.md (use 'parent:' blank for top-of-chain, 'parent: <name>' otherwise; absence cannot be distinguished from typos like 'paren:')`))
+  } else {
+    const parentValue = e.data.parent
+    const hasParent = parentValue !== null && parentValue !== undefined && String(parentValue).trim() !== ''
+    if (hasParent) {
+      const parentName = String(parentValue).trim()
+      if (parentName === e.name) {
+        out.push(issue('error', `self-parent — 'parent: ${parentName}' on the actor's own profile is a cycle of length 1`))
+      } else {
+        // Walk the chain. Stop on cycle (error), missing parent (warn), or top-of-chain (ok).
+        const visited = new Set<string>([e.name])
+        let cursorName: string | undefined = parentName
+        while (cursorName) {
+          if (visited.has(cursorName)) {
+            out.push(issue('error', `parent chain cycle detected — chain returns to '${cursorName}'`))
+            break
+          }
+          visited.add(cursorName)
+          const next: ActorEntry | undefined = registry.get(cursorName)
+          if (!next) {
+            out.push(issue('warn', `parent '${cursorName}' is not in the actor registry — chain ends here (may be defined on another operator's machine-local layer)`))
+            break
+          }
+          const nextParent = next.data.parent
+          if (nextParent === null || nextParent === undefined || String(nextParent).trim() === '') {
+            break  // reached top-of-chain, no cycle
+          }
+          cursorName = String(nextParent).trim()
+        }
+      }
+    }
   }
 
   return out
