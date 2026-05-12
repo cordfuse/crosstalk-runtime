@@ -7,14 +7,19 @@ on:
 
 # Per-platform CI runners. node-pty's native binary needs to be the right one
 # for each target architecture. Cross-compile from a Linux runner to
-# bun-darwin-arm64 has been tried and fails: bun's --compile bundles whatever
-# .node files exist in node_modules, which on a Linux host means only the
-# linux prebuilds. The result is a Mach-O binary missing pty.node, which
-# crashes on launch with "Cannot require module ../build/Release/pty.node".
+# bun-darwin-arm64 has been tried and fails: bun's --compile bundler can only
+# statically follow LITERAL-string require() calls. The @homebridge prebuild
+# loader does dynamic path.resolve(__dirname, '../prebuilds/' + os.platform() +
+# ...) which bun cannot follow, so the .node file isn't embedded into the
+# binary's vfs even when it exists on disk.
 #
-# Solution: each binary builds on its own native runner, so the prebuild
-# fetched by trustedDependencies' install script (postinstall via
-# prebuild-install) is the right one for the target.
+# Solution: each binary builds on its own native runner so the right prebuild
+# is on disk, AND we copy that prebuild to '../build/Release/pty.node' (a
+# LITERAL string require path that @homebridge's unixTerminal.js does follow).
+# bun's bundler statically embeds the copied .node into the vfs.
+#
+# Empirically validated on cachy (linux-x64): bun --compile cleanly bundles
+# the .node when reachable via literal-string require; binary works post-launch.
 
 jobs:
   build-linux-x64:
@@ -26,8 +31,18 @@ jobs:
           bun-version: latest
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      - name: Stage native pty.node into literal-require path
+        run: |
+          plat=$(bun -e "console.log(process.platform)")
+          arch=$(bun -e "console.log(process.arch)")
+          abi=$(bun -e "console.log(process.versions.modules)")
+          mkdir -p node_modules/@homebridge/node-pty-prebuilt-multiarch/build/Release
+          cp "node_modules/@homebridge/node-pty-prebuilt-multiarch/prebuilds/$plat-$arch/node.abi$abi.node" \
+             node_modules/@homebridge/node-pty-prebuilt-multiarch/build/Release/pty.node
       - name: Build linux-x64 binary
         run: bun build --compile --minify src/index.ts --outfile crosstalk-linux-x64
+      - name: Smoke-test built binary
+        run: ./crosstalk-linux-x64 version
       - uses: actions/upload-artifact@v4
         with:
           name: crosstalk-linux-x64
@@ -42,8 +57,18 @@ jobs:
           bun-version: latest
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      - name: Stage native pty.node into literal-require path
+        run: |
+          plat=$(bun -e "console.log(process.platform)")
+          arch=$(bun -e "console.log(process.arch)")
+          abi=$(bun -e "console.log(process.versions.modules)")
+          mkdir -p node_modules/@homebridge/node-pty-prebuilt-multiarch/build/Release
+          cp "node_modules/@homebridge/node-pty-prebuilt-multiarch/prebuilds/$plat-$arch/node.abi$abi.node" \
+             node_modules/@homebridge/node-pty-prebuilt-multiarch/build/Release/pty.node
       - name: Build linux-arm64 binary
         run: bun build --compile --minify src/index.ts --outfile crosstalk-linux-arm64
+      - name: Smoke-test built binary
+        run: ./crosstalk-linux-arm64 version
       - uses: actions/upload-artifact@v4
         with:
           name: crosstalk-linux-arm64
@@ -58,8 +83,33 @@ jobs:
           bun-version: latest
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      - name: Stage native pty.node into literal-require path
+        run: |
+          plat=$(bun -e "console.log(process.platform)")
+          arch=$(bun -e "console.log(process.arch)")
+          abi=$(bun -e "console.log(process.versions.modules)")
+          # On darwin, prebuild-install (run via trustedDependencies) fetches
+          # the native .node into prebuilds/$plat-$arch/. If that path isn't
+          # populated, the install script fell back to source build, in which
+          # case the file would be at build/Release/pty.node already.
+          src="node_modules/@homebridge/node-pty-prebuilt-multiarch/prebuilds/$plat-$arch/node.abi$abi.node"
+          dst="node_modules/@homebridge/node-pty-prebuilt-multiarch/build/Release/pty.node"
+          if [ -f "$src" ]; then
+            mkdir -p "$(dirname "$dst")"
+            cp "$src" "$dst"
+            echo "staged $src → $dst"
+          elif [ -f "$dst" ]; then
+            echo "$dst already present (likely source build); leaving as-is"
+          else
+            echo "ERROR: neither $src nor $dst found — prebuild-install + source build both failed?"
+            ls -la node_modules/@homebridge/node-pty-prebuilt-multiarch/prebuilds/ || true
+            ls -la node_modules/@homebridge/node-pty-prebuilt-multiarch/build/ || true
+            exit 1
+          fi
       - name: Build macos-arm64 binary
         run: bun build --compile --minify src/index.ts --outfile crosstalk-macos-arm64
+      - name: Smoke-test built binary
+        run: ./crosstalk-macos-arm64 version
       - uses: actions/upload-artifact@v4
         with:
           name: crosstalk-macos-arm64
