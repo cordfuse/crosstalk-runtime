@@ -119,27 +119,30 @@ jobs:
           bun-version: latest
       - name: Install dependencies
         run: bun install --frozen-lockfile
-      - name: Stage native pty.node into literal-require path
+      - name: Stage native pty.node where bun's bundler finds it
         run: |
           plat=$(bun -e "console.log(process.platform)")
           arch=$(bun -e "console.log(process.arch)")
           abi=$(bun -e "console.log(process.versions.modules)")
-          # On darwin, prebuild-install (run via trustedDependencies) fetches
-          # the native .node into prebuilds/$plat-$arch/. If that path isn't
-          # populated, the install script fell back to source build, in which
-          # case the file would be at build/Release/pty.node already.
-          src="node_modules/@homebridge/node-pty-prebuilt-multiarch/prebuilds/$plat-$arch/node.abi$abi.node"
-          dst="node_modules/@homebridge/node-pty-prebuilt-multiarch/build/Release/pty.node"
+          # bun --compile walks prebuilds/<plat-arch>/ to auto-discover .node
+          # files for the vfs (this is how linux builds have always worked —
+          # the @homebridge npm tarball ships prebuilds/linux-* by default).
+          # On macOS the install script puts the .node at build/Release/
+          # instead, which bun's auto-discovery doesn't crawl. So mirror it.
+          pkg_root="node_modules/@homebridge/node-pty-prebuilt-multiarch"
+          src="$pkg_root/prebuilds/$plat-$arch/node.abi$abi.node"
+          alt="$pkg_root/build/Release/pty.node"
+          mkdir -p "$pkg_root/prebuilds/$plat-$arch" "$pkg_root/build/Release"
           if [ -f "$src" ]; then
-            mkdir -p "$(dirname "$dst")"
-            cp "$src" "$dst"
-            echo "staged $src → $dst"
-          elif [ -f "$dst" ]; then
-            echo "$dst already present (likely source build); leaving as-is"
+            cp "$src" "$alt"
+            echo "staged from prebuilds/: $src → $alt"
+          elif [ -f "$alt" ]; then
+            cp "$alt" "$src"
+            echo "staged from build/: $alt → $src (so bun bundler discovers it)"
           else
-            echo "ERROR: neither $src nor $dst found — prebuild-install + source build both failed?"
-            ls -la node_modules/@homebridge/node-pty-prebuilt-multiarch/prebuilds/ || true
-            ls -la node_modules/@homebridge/node-pty-prebuilt-multiarch/build/ || true
+            echo "ERROR: neither $src nor $alt found"
+            ls -la "$pkg_root/prebuilds/" || true
+            ls -la "$pkg_root/build/" || true
             exit 1
           fi
       - name: Build macos-arm64 binary
