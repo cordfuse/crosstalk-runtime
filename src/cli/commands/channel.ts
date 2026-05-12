@@ -24,7 +24,7 @@ import { registerChannelJoin } from './channel-join.js'
 export function registerChannelCommand(program: Command): void {
   const channel = program
     .command('channel')
-    .description('manage channels (subcommands: new, list, show, tail)')
+    .description('manage channels (subcommands: new, list, show, tail, join)')
 
   registerChannelNew(channel)
   registerChannelList(channel)
