@@ -8,6 +8,16 @@ import { dispatch } from './dispatch.js';
 import { join } from 'path';
 import { parseFrontmatter } from './frontmatter.js';
 
+// CLI dispatch — if a subcommand is passed, route to the CLI module and exit.
+// No-args invocation (and `RELAY_MODE=server`) falls through to the daemon
+// path below, preserving back-compat for everyone scripting `crosstalk`
+// today as a daemon launcher.
+if (process.argv.length > 2 && process.env.RELAY_MODE !== 'server') {
+  const { runCLI } = await import('./cli/index.js');
+  await runCLI(process.argv);
+  process.exit(0);
+}
+
 console.log('[crosstalk] starting');
 
 const config = await loadConfig();

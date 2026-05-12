@@ -4,12 +4,16 @@
   "description": "Crosstalk runtime — watches a transport for new messages and dispatches to registered actor processes",
   "module": "src/index.ts",
   "type": "module",
+  "bin": {
+    "crosstalk": "src/index.ts"
+  },
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun --watch run src/index.ts",
     "build": "bun build --compile --minify src/index.ts --outfile crosstalk"
   },
   "dependencies": {
+    "commander": "^14.0.3",
     "smol-toml": "^1.6.1",
     "yaml": "^2.7.0"
   },
