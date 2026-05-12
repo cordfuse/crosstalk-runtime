@@ -16,6 +16,10 @@ export interface Config {
   transport: string;
   actorEmailSuffix: string;
   defaultHeartbeatInterval: number;
+  /** Default identity for `crosstalk post`/`channel join` when --as/--from
+   * is omitted. Optional — operators with multiple human profiles must
+   * pass --from explicitly. Forward-compat with TODO #23 (human-actor spec). */
+  defaultHumanActor?: string;
   relay: RelayConfig;
 }
 
@@ -98,5 +102,9 @@ export async function loadConfig(): Promise<Config> {
       : {}),
   };
 
-  return { transport, actorEmailSuffix, defaultHeartbeatInterval, relay };
+  const defaultHumanActor = typeof data['default-human-actor'] === 'string'
+    ? data['default-human-actor'] as string
+    : undefined;
+
+  return { transport, actorEmailSuffix, defaultHeartbeatInterval, defaultHumanActor, relay };
 }
