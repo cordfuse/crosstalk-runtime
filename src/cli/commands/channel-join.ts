@@ -49,13 +49,13 @@ interface JoinOptions {
   push?:     boolean // commander inverts --no-push to push: false
 }
 
-/** Hardcoded agent invocation map for alpha.1.
+/** Built-in default agent invocation map.
  *
- * alpha.4 lifts this into operator-overridable [agents.X] config entries,
- * but for the skeleton these defaults cover every agent the dispatch path
- * already knows about (Claude, Gemini, Qwen, OpenCode) plus Codex (which
- * the dispatch path doesn't yet handle but is a common operator agent). */
-const SPAWN_MAP: Record<string, string[]> = {
+ * Operators extend or override these via `[agents.X]` tables in
+ * `~/.crosstalk/config.toml` (loaded by config.ts as `config.agents`).
+ * Operator entries win on name collision and operator-only names extend
+ * the map. Resolution happens at use site via {@link resolveAgentMap}. */
+const DEFAULT_AGENTS: Record<string, string[]> = {
   claude:   ['claude'],
   gemini:   ['gemini', '-i'],
   codex:    ['codex'],
@@ -63,11 +63,21 @@ const SPAWN_MAP: Record<string, string[]> = {
   opencode: ['opencode'],
 }
 
+/** Merge built-in defaults with operator-defined `[agents.X]` config entries.
+ * Operator entries override built-ins on name collision. */
+function resolveAgentMap(operatorAgents: Record<string, { spawn: string[] }>): Record<string, string[]> {
+  const merged: Record<string, string[]> = { ...DEFAULT_AGENTS }
+  for (const [name, def] of Object.entries(operatorAgents)) {
+    merged[name] = def.spawn
+  }
+  return merged
+}
+
 export function registerChannelJoin(parent: Command): void {
   parent
     .command('join <name-or-guid>')
-    .description('join a channel interactively — wraps an AI agent CLI as a child process (PTY + injection in later alphas)')
-    .requiredOption('-a, --agent <name>',  `AI agent CLI to wrap (one of: ${Object.keys(SPAWN_MAP).sort().join(', ')})`)
+    .description('join a channel interactively — wraps an AI agent CLI as a child process (PTY-wrapped; live message injection in later alphas)')
+    .requiredOption('-a, --agent <name>',  `AI agent CLI to wrap (built-in: ${Object.keys(DEFAULT_AGENTS).sort().join(', ')}; operator-defined extras live in [agents.X] of config.toml)`)
     .option('--as <actor>',                'identity to post join/leave under (defaults to default-human-actor in config.toml)')
     .option('--backfill <n>',              'print last N channel messages before spawning the agent (default: 10; 0 to skip)')
     .option('--no-push',                   'commit join/leave locally without pushing')
@@ -111,14 +121,27 @@ async function runJoin(channelArg: string, opts: JoinOptions): Promise<void> {
     process.exit(1)
   }
 
-  // 3. Resolve agent. Hardcoded map for alpha.1.
+  // 3. Resolve agent against the merged built-in + operator map.
+  // Built-ins (claude/gemini/codex/qwen/opencode) live in DEFAULT_AGENTS;
+  // operator extras come from [agents.X] tables in ~/.crosstalk/config.toml
+  // (config.ts loads them into config.agents). Operator entries win on
+  // name collision so they can override built-in defaults (e.g. point
+  // 'claude' at a wrapper script).
+  const agentMap = resolveAgentMap(config.agents)
   const agentName = opts.agent.toLowerCase()
-  const spawnCmd = SPAWN_MAP[agentName]
+  const spawnCmd = agentMap[agentName]
   if (!spawnCmd) {
-    const known = Object.keys(SPAWN_MAP).sort().join(', ')
+    const builtIns = Object.keys(DEFAULT_AGENTS).sort()
+    const operator = Object.keys(config.agents).sort()
     console.error(`✗ Unknown agent '${opts.agent}'.`)
-    console.error(`  Supported in alpha.1: ${known}`)
-    console.error(`  Operator-defined agents land in alpha.4.`)
+    console.error(`  Built-in: ${builtIns.join(', ')}`)
+    if (operator.length > 0) {
+      console.error(`  Operator-defined (config.toml): ${operator.join(', ')}`)
+    } else {
+      console.error(`  Define operator agents in ~/.crosstalk/config.toml:`)
+      console.error(`    [agents.my-bot]`)
+      console.error(`    spawn = ["python3", "/path/to/my-bot.py", "--interactive"]`)
+    }
     process.exit(1)
   }
 

@@ -52,6 +52,7 @@ async function runConfigShow(opts: ConfigShowOptions): Promise<void> {
         : null,
       port:   config.relay.port,
     },
+    agents: config.agents,
   }
 
   if (opts.json) {
@@ -72,5 +73,13 @@ async function runConfigShow(opts: ConfigShowOptions): Promise<void> {
   console.log(`url = "${safe.relay.url}"`)
   if (safe.relay.secret) {
     console.log(`secret = "${safe.relay.secret}"`)
+  }
+  // Operator-defined [agents.X] entries (alpha.6+). Built-in defaults
+  // (claude/gemini/codex/qwen/opencode) live in code, not config —
+  // this section only shows what the operator explicitly added.
+  for (const [name, def] of Object.entries(safe.agents)) {
+    console.log(``)
+    console.log(`[agents.${name}]`)
+    console.log(`spawn = ${JSON.stringify(def.spawn)}`)
   }
 }
