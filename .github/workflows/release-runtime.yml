@@ -5,203 +5,62 @@ on:
     tags:
       - 'v*'
 
-# Per-platform CI runners. node-pty's native binary needs to be the right one
-# for each target architecture. Cross-compile from a Linux runner to
-# bun-darwin-arm64 has been tried and fails: bun's --compile bundler can only
-# statically follow LITERAL-string require() calls. The @homebridge prebuild
-# loader does dynamic path.resolve(__dirname, '../prebuilds/' + os.platform() +
-# ...) which bun cannot follow, so the .node file isn't embedded into the
-# binary's vfs even when it exists on disk.
+# Distribution model (v0.6.0-alpha.4+): pure node npm package, no per-platform
+# binaries. Users install via:
 #
-# Solution: each binary builds on its own native runner so the right prebuild
-# is on disk, AND we copy that prebuild to '../build/Release/pty.node' (a
-# LITERAL string require path that @homebridge's unixTerminal.js does follow).
-# bun's bundler statically embeds the copied .node into the vfs.
+#   npm install -g cordfuse/crosstalk-runtime#vX.Y.Z          (git URL — current)
+#   npm install -g @cordfuse/crosstalk-runtime                (npm registry — once
+#                                                              the @cordfuse scope's
+#                                                              email correction lands)
 #
-# Empirically validated on cachy (linux-x64): bun --compile cleanly bundles
-# the .node when reachable via literal-string require; binary works post-launch.
+# The npm install runs the package's `prepare` script which compiles TS → dist/.
+# @homebridge's install script fetches/builds the right native PTY for the
+# user's host platform automatically (no cross-compile, no .node bundling).
+#
+# This workflow now just produces a GitHub Release entry with a packed tarball
+# attached as a convenience asset. The actual install path is the git URL form
+# above — it works against the tag directly without any registry involvement.
 
 jobs:
-  build-linux-x64:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-      - name: Stage native pty.node where bun's bundler finds it
-        run: |
-          plat=$(bun -e "console.log(process.platform)")
-          arch=$(bun -e "console.log(process.arch)")
-          abi=$(bun -e "console.log(process.versions.modules)")
-          # bun --compile walks prebuilds/<plat-arch>/ to auto-discover .node
-          # files for the vfs (this is how linux builds have always worked —
-          # the @homebridge npm tarball ships prebuilds/linux-* by default).
-          # On macOS the install script puts the .node at build/Release/
-          # instead, which bun's auto-discovery doesn't crawl. So mirror it.
-          pkg_root="node_modules/@homebridge/node-pty-prebuilt-multiarch"
-          src="$pkg_root/prebuilds/$plat-$arch/node.abi$abi.node"
-          alt="$pkg_root/build/Release/pty.node"
-          mkdir -p "$pkg_root/prebuilds/$plat-$arch" "$pkg_root/build/Release"
-          if [ -f "$src" ]; then
-            cp "$src" "$alt"
-            echo "staged from prebuilds/: $src → $alt"
-          elif [ -f "$alt" ]; then
-            cp "$alt" "$src"
-            echo "staged from build/: $alt → $src (so bun bundler discovers it)"
-          else
-            echo "ERROR: neither $src nor $alt found"
-            ls -la "$pkg_root/prebuilds/" || true
-            ls -la "$pkg_root/build/" || true
-            exit 1
-          fi
-      - name: Build linux-x64 binary
-        run: bun build --compile --minify src/index.ts --outfile crosstalk-linux-x64
-      - name: Smoke-test built binary
-        run: ./crosstalk-linux-x64 version
-      - uses: actions/upload-artifact@v4
-        with:
-          name: crosstalk-linux-x64
-          path: crosstalk-linux-x64
-
-  build-linux-arm64:
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-      - name: Stage native pty.node where bun's bundler finds it
-        run: |
-          plat=$(bun -e "console.log(process.platform)")
-          arch=$(bun -e "console.log(process.arch)")
-          abi=$(bun -e "console.log(process.versions.modules)")
-          # bun --compile walks prebuilds/<plat-arch>/ to auto-discover .node
-          # files for the vfs (this is how linux builds have always worked —
-          # the @homebridge npm tarball ships prebuilds/linux-* by default).
-          # On macOS the install script puts the .node at build/Release/
-          # instead, which bun's auto-discovery doesn't crawl. So mirror it.
-          pkg_root="node_modules/@homebridge/node-pty-prebuilt-multiarch"
-          src="$pkg_root/prebuilds/$plat-$arch/node.abi$abi.node"
-          alt="$pkg_root/build/Release/pty.node"
-          mkdir -p "$pkg_root/prebuilds/$plat-$arch" "$pkg_root/build/Release"
-          if [ -f "$src" ]; then
-            cp "$src" "$alt"
-            echo "staged from prebuilds/: $src → $alt"
-          elif [ -f "$alt" ]; then
-            cp "$alt" "$src"
-            echo "staged from build/: $alt → $src (so bun bundler discovers it)"
-          else
-            echo "ERROR: neither $src nor $alt found"
-            ls -la "$pkg_root/prebuilds/" || true
-            ls -la "$pkg_root/build/" || true
-            exit 1
-          fi
-      - name: Build linux-arm64 binary
-        run: bun build --compile --minify src/index.ts --outfile crosstalk-linux-arm64
-      - name: Smoke-test built binary
-        run: ./crosstalk-linux-arm64 version
-      - uses: actions/upload-artifact@v4
-        with:
-          name: crosstalk-linux-arm64
-          path: crosstalk-linux-arm64
-
-  build-macos-arm64:
-    runs-on: macos-latest    # macos-latest is arm64 (M-series) since 2024-10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-      - name: Stage native pty.node where bun's bundler finds it
-        run: |
-          plat=$(bun -e "console.log(process.platform)")
-          arch=$(bun -e "console.log(process.arch)")
-          abi=$(bun -e "console.log(process.versions.modules)")
-          # bun --compile walks prebuilds/<plat-arch>/ to auto-discover .node
-          # files for the vfs (this is how linux builds have always worked —
-          # the @homebridge npm tarball ships prebuilds/linux-* by default).
-          # On macOS the install script puts the .node at build/Release/
-          # instead, which bun's auto-discovery doesn't crawl. So mirror it.
-          pkg_root="node_modules/@homebridge/node-pty-prebuilt-multiarch"
-          src="$pkg_root/prebuilds/$plat-$arch/node.abi$abi.node"
-          alt="$pkg_root/build/Release/pty.node"
-          mkdir -p "$pkg_root/prebuilds/$plat-$arch" "$pkg_root/build/Release"
-          if [ -f "$src" ]; then
-            cp "$src" "$alt"
-            echo "staged from prebuilds/: $src → $alt"
-          elif [ -f "$alt" ]; then
-            cp "$alt" "$src"
-            echo "staged from build/: $alt → $src (so bun bundler discovers it)"
-          else
-            echo "ERROR: neither $src nor $alt found"
-            ls -la "$pkg_root/prebuilds/" || true
-            ls -la "$pkg_root/build/" || true
-            exit 1
-          fi
-      - name: Build macos-arm64 binary
-        run: bun build --compile --minify src/index.ts --outfile crosstalk-macos-arm64
-      - name: Smoke-test built binary
-        run: ./crosstalk-macos-arm64 version
-      - uses: actions/upload-artifact@v4
-        with:
-          name: crosstalk-macos-arm64
-          path: crosstalk-macos-arm64
-
-  # macos-x64 build dropped from this release: macos-13 (the last GH-hosted
-  # x64 macOS runner) is being deprecated and the runner pool is heavily
-  # backed up — the v0.6.0-alpha.3 attempt sat queued for 30+ minutes. No
-  # current crosstalk users are on x64 Macs (Steve's Mac is M-series arm64).
-  # Re-add when (a) macos-13 pool frees up, OR (b) we figure out
-  # macos-arm64-runner-with-Rosetta cross-compile to x64. Backlog item.
-
   release:
-    needs:
-      - build-linux-x64
-      - build-linux-arm64
-      - build-macos-arm64
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Extract version
-        id: version
-        run: echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+      - uses: actions/checkout@v4
 
-      - name: Download all binary artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/setup-node@v4
         with:
-          path: artifacts
-          merge-multiple: true
+          node-version: '20'
 
-      - name: Verify expected binaries present
-        run: |
-          ls -la artifacts/
-          for f in crosstalk-linux-x64 crosstalk-linux-arm64 crosstalk-macos-arm64; do
-            test -f "artifacts/$f" || { echo "MISSING: $f"; exit 1; }
-          done
+      - name: Install dependencies (runs prepare → tsc)
+        run: npm install
 
-      - name: Checksums
-        working-directory: artifacts
-        run: sha256sum crosstalk-* > SHA256SUMS
+      - name: Smoke-test compiled binary
+        run: node dist/index.js version
+
+      - name: Pack tarball
+        run: npm pack
+
+      - name: List artifacts
+        run: ls -la *.tgz
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Runtime ${{ steps.version.outputs.version }}
+          name: Runtime ${{ github.ref_name }}
           body: |
-            Crosstalk runtime ${{ steps.version.outputs.version }}.
+            Crosstalk runtime ${{ github.ref_name }}.
+
+            **Install (git URL — current):**
+
+            ```sh
+            npm install -g cordfuse/crosstalk-runtime#${{ github.ref_name }}
+            ```
+
+            Works for npm, pnpm, yarn, and `bunx`. The `prepare` script compiles TypeScript → `dist/`, and `@homebridge/node-pty-prebuilt-multiarch` builds its native PTY module for your platform automatically. Requires Node `>=18` and (for source-build fallback) Xcode CLI tools on Mac or `python3 make g++` on Linux.
 
             See [WHATSNEW.md](https://github.com/cordfuse/crosstalk/blob/main/WHATSNEW.md) for changes — runtime changelog lives in the operator-facing repo.
           files: |
-            artifacts/crosstalk-linux-x64
-            artifacts/crosstalk-linux-arm64
-            artifacts/crosstalk-macos-arm64
-            artifacts/SHA256SUMS
+            crosstalk-runtime-*.tgz
