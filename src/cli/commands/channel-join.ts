@@ -40,12 +40,13 @@ import type { Command } from 'commander'
 
 import { loadConfig } from '../../config.js'
 import { scanAllLayers } from '../lib/actors.js'
-import { resolveChannel } from '../lib/channel.js'
+import { resolveChannel, readChannelMessages, printMessage } from '../lib/channel.js'
 
 interface JoinOptions {
-  agent: string
-  as?:   string
-  push?: boolean   // commander inverts --no-push to push: false
+  agent:     string
+  as?:       string
+  backfill?: string  // string per commander; we parseInt
+  push?:     boolean // commander inverts --no-push to push: false
 }
 
 /** Hardcoded agent invocation map for alpha.1.
@@ -68,6 +69,7 @@ export function registerChannelJoin(parent: Command): void {
     .description('join a channel interactively — wraps an AI agent CLI as a child process (PTY + injection in later alphas)')
     .requiredOption('-a, --agent <name>',  `AI agent CLI to wrap (one of: ${Object.keys(SPAWN_MAP).sort().join(', ')})`)
     .option('--as <actor>',                'identity to post join/leave under (defaults to default-human-actor in config.toml)')
+    .option('--backfill <n>',              'print last N channel messages before spawning the agent (default: 10; 0 to skip)')
     .option('--no-push',                   'commit join/leave locally without pushing')
     .action(async (channelArg: string, opts: JoinOptions) => {
       await runJoin(channelArg, opts)
@@ -139,7 +141,7 @@ async function runJoin(channelArg: string, opts: JoinOptions): Promise<void> {
   }
 
   // 5. Post join system message
-  const joinBody = `Joined as ${fromActor} via ${agentName} (v0.6.0-alpha.3 — PTY-wrapped, no injection yet).`
+  const joinBody = `Joined as ${fromActor} via ${agentName} (v0.6.0-alpha.5 — PTY-wrapped + backfill, no injection yet).`
   if (!postSystemMessage({
     transport:    config.transport,
     channelGuid,
@@ -152,10 +154,32 @@ async function runJoin(channelArg: string, opts: JoinOptions): Promise<void> {
   }
 
   console.log(`✓ Joined channel ${channelGuid} as ${fromActor}`)
+
+  // 6. Backfill: print last N channel messages so the operator (and the
+  // agent, via terminal scrollback) sees recent context before going live.
+  // Default 10. --backfill 0 skips. Same display format as `crosstalk
+  // channel show / tail` so the operator gets a consistent view.
+  const backfillN = opts.backfill !== undefined ? parseInt(opts.backfill, 10) : 10
+  if (Number.isNaN(backfillN) || backfillN < 0) {
+    console.error(`✗ --backfill must be a non-negative integer (got '${opts.backfill}')`)
+    process.exit(1)
+  }
+  if (backfillN > 0) {
+    const channelDir = join(config.transport, 'channels', channelGuid)
+    const all = readChannelMessages(channelDir)
+    const tail = all.slice(-backfillN)
+    if (tail.length > 0) {
+      console.log(`  ── last ${tail.length} message${tail.length === 1 ? '' : 's'} (backfill) ──\n`)
+      for (const m of tail) printMessage(m)
+    } else {
+      console.log(`  (channel has no prior messages)`)
+    }
+  }
+
   console.log(`  Spawning ${agentBin} (${spawnCmd.join(' ')}) under PTY — Ctrl-D or quit the agent to leave.`)
   console.log(`  ──────────────────────────────────────────────────────`)
 
-  // 6. Spawn agent under PTY. The runtime now owns stdio: forwards user
+  // 7. Spawn agent under PTY. The runtime now owns stdio: forwards user
   // keystrokes to agent input, agent output to terminal, propagates resize.
   const agentStatus = await runAgentInPty(spawnCmd)
 
