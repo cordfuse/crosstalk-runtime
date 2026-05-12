@@ -1,6 +1,6 @@
 {
   "name": "crosstalk-runtime",
-  "version": "0.6.0-alpha.6",
+  "version": "0.6.0-alpha.7",
   "description": "Crosstalk runtime — watches a transport for new messages and dispatches to registered actor processes",
   "type": "module",
   "main": "dist/index.js",
