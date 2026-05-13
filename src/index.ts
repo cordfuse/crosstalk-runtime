@@ -73,10 +73,11 @@ if (config.relay.mode === 'server') {
   // SESSION_ID is per-boot — used only in announcements
   startWatcher(config.transport, () => registry, config.actorEmailSuffix, MACHINE_ID, config.defaultHeartbeatInterval, bootstrapCache, config.bootstrap.deferOnNoCoordinator);
 
-  // Bootstrap pass — if we host the coordinator, post `session-open` for any
-  // channel that's currently 'deferred', BEFORE the startup-scan touches them.
-  // This unblocks our own dispatch + signals other daemons watching the same
-  // transport to unblock theirs too.
+  // Bootstrap pass — if we host the coordinator, run the opening governance
+  // pass: walk each channel for inconsistencies, post `bootstrap-conflict` if
+  // any are found, else post `session-open` for any channel currently
+  // 'deferred'. This unblocks our own dispatch + signals other daemons
+  // watching the same transport to unblock theirs too.
   const decision = shouldRunBootstrapPass(config.transport, registry);
   console.log(`[bootstrap] coordinator decision: ${decision.reason}`);
   if (decision.should && decision.coordinatorActor) {
@@ -85,11 +86,23 @@ if (config.relay.mode === 'server') {
       const { readdir: readdirFn } = await import('fs/promises');
       const guidsForBootstrap = await readdirFn(channelsDirForBootstrap).catch(() => []);
       const eligible = guidsForBootstrap.filter(g => !g.startsWith('.') && !g.startsWith('_'));
-      const summary = await buildBootstrapSummary(config.transport, registry);
+
+      const { walkGovernanceMessages, findInconsistencies, postBootstrapConflict } = await import('./governance.js');
+
       for (const guid of eligible) {
+        const channelDir = join(config.transport, 'channels', guid);
+        const govMessages = walkGovernanceMessages(channelDir);
+        const inconsistencies = findInconsistencies(govMessages);
+        if (inconsistencies.length > 0) {
+          console.log(`[bootstrap] channel ${guid.slice(0, 8)} has ${inconsistencies.length} inconsistency(ies) — posting bootstrap-conflict`);
+          await postBootstrapConflict(config.transport, guid, decision.coordinatorActor, inconsistencies, config.actorEmailSuffix);
+          bootstrapCache.invalidate(guid);
+          continue;  // don't post session-open over a conflict
+        }
         const state = bootstrapCache.get(guid);
         if (state === 'deferred') {
           console.log(`[bootstrap] posting session-open for ${guid.slice(0, 8)} (coordinator: ${decision.coordinatorActor})`);
+          const summary = await buildBootstrapSummary(config.transport, registry, channelDir);
           await postSessionOpen(config.transport, guid, decision.coordinatorActor, summary, config.actorEmailSuffix);
           bootstrapCache.invalidate(guid);
         }
@@ -98,6 +111,17 @@ if (config.relay.mode === 'server') {
       console.error(`[bootstrap] pass failed: ${err}`);
     }
   }
+
+  // Start time-decay automation. No-op if active ROE doesn't specify
+  // `deadlock-pattern: time-decay`, OR if we don't host the coordinator.
+  // The checker walks all channels on each tick.
+  const { startDecayChecker } = await import('./governance.js');
+  const decayChecker = startDecayChecker(
+    config.transport,
+    config.bootstrap.decayCheckIntervalMs,
+    () => decision.should ? (decision.coordinatorActor ?? null) : null,
+    config.actorEmailSuffix,
+  );
 
   // Startup scan — dispatch any messages missed while daemon was down.
   // Bootstrap-deferred channels skip non-always-pass message types per
@@ -125,14 +149,19 @@ if (config.relay.mode === 'server') {
         if (registry.has(from)) continue;
 
         // Bootstrap gate: defer non-always-pass types when channel is in
-        // 'deferred' state. Cursor is NOT advanced for deferred messages —
-        // they get re-evaluated on next startup or on watcher pickup once
-        // session-open lands.
+        // 'deferred' state. In 'conflict' state, only roe-* defer; work
+        // continues. Cursor is NOT advanced for deferred messages — they
+        // get re-evaluated on next startup or on watcher pickup once the
+        // state transitions back to 'open'.
         if (!ALWAYS_PASS_TYPES.has(type)) {
           const state = bootstrapCache.get(guid);
           if (state === 'deferred') {
             console.log(`[crosstalk] startup scan defer (bootstrap pending) ${guid.slice(0,8)}/${relPath} (type=${type})`);
             break;  // stop processing this channel — preserve order, retry after session-open
+          }
+          if (state === 'conflict' && type.startsWith('roe-')) {
+            console.log(`[crosstalk] startup scan defer (bootstrap-conflict, governance only) ${guid.slice(0,8)}/${relPath} (type=${type})`);
+            continue;  // skip THIS message but keep walking — work in same channel still dispatches
           }
         }
 
@@ -152,6 +181,7 @@ if (config.relay.mode === 'server') {
 
   const shutdown = async () => {
     console.log('[crosstalk] shutting down');
+    decayChecker.stop();
     await announceOffline(config.transport);
     process.exit(0);
   };

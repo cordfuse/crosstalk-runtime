@@ -31,6 +31,13 @@ export interface BootstrapConfig {
    * synchronisation (false, default — degrades to current pre-alpha.2
    * behaviour for transports that don't use governance). */
   deferOnNoCoordinator: boolean;
+  /** How often the time-decay checker walks channels for past-decay-timer
+   * pending amendments (v0.7.0-alpha.5+). Per DEADLOCK.md time-decay
+   * pattern — when active ROE specifies it, expired-vote-window proposals
+   * past their decay timer get auto-resolved via `roe-deadlock-resolution`
+   * messages. Default 60s; lower for testing, higher (300-600s) for
+   * production-scale transports. */
+  decayCheckIntervalMs: number;
 }
 
 export interface Config {
@@ -64,6 +71,7 @@ const DEFAULTS = {
   bootstrap: {
     timeoutMs: 300_000,         // 5 min per BOOTSTRAP.md
     deferOnNoCoordinator: false, // safe default — no governance = no gating
+    decayCheckIntervalMs: 60_000, // 60s — bounds latency on time-decay auto-resolution
   },
 };
 
@@ -89,7 +97,7 @@ export async function loadConfig(): Promise<Config> {
         ...(process.env.WEBHOOK_SECRET ? { webhookSecret: process.env.WEBHOOK_SECRET } : {}),
       },
       agents: {},
-      bootstrap: { ...DEFAULTS.bootstrap },
+      bootstrap: { ...DEFAULTS.bootstrap, decayCheckIntervalMs: DEFAULTS.bootstrap.decayCheckIntervalMs },
     };
   }
 
@@ -172,6 +180,9 @@ export async function loadConfig(): Promise<Config> {
     deferOnNoCoordinator: typeof bootstrapTable['defer-on-no-coordinator'] === 'boolean'
       ? bootstrapTable['defer-on-no-coordinator'] as boolean
       : DEFAULTS.bootstrap.deferOnNoCoordinator,
+    decayCheckIntervalMs: typeof bootstrapTable['decay-check-interval-ms'] === 'number'
+      ? bootstrapTable['decay-check-interval-ms'] as number
+      : DEFAULTS.bootstrap.decayCheckIntervalMs,
   };
 
   return { transport, actorEmailSuffix, defaultHeartbeatInterval, defaultHumanActor, relay, agents, bootstrap };

@@ -79,7 +79,7 @@ const MSG_RE = MESSAGE_FILE_RE
 
 // ── State + types ─────────────────────────────────────────────────────────
 
-export type BootstrapState = 'open' | 'deferred'
+export type BootstrapState = 'open' | 'deferred' | 'conflict'
 
 export interface BootstrapOpts {
   /** Bootstrap timeout in ms — if no `session-open` lands within this window
@@ -118,6 +118,13 @@ interface TimedEvent {
  * message, or null if none exists. */
 export function findLastSessionOpen(channelDir: string): TimedEvent | null {
   return findLastMessageMatching(channelDir, (data) => String(data.type ?? '') === 'session-open')
+}
+
+/** Walk a channel's history and return the most recent `type: bootstrap-conflict`
+ * message, or null if none. Used by `isChannelBootstrapped` to detect the
+ * conflict-state degraded mode. */
+export function findLastBootstrapConflict(channelDir: string): TimedEvent | null {
+  return findLastMessageMatching(channelDir, (data) => String(data.type ?? '') === 'bootstrap-conflict')
 }
 
 /** Walk `_system/` and return the most recent `type: system, reason: offline`
@@ -215,6 +222,35 @@ export function isChannelBootstrapped(
   opts: BootstrapOpts,
   now: number = Date.now(),
 ): BootstrapState {
+  // First compute baseline open/deferred state.
+  const baseline = computeBaselineState(channelDir, systemDir, registry, opts, now)
+
+  // Then check for conflict state — bootstrap-conflict messages override
+  // open/deferred if no session-open has been posted after the conflict.
+  // Operators resolve conflict by amending/removing conflicting messages,
+  // then posting a new session-open which lands AFTER the conflict and
+  // clears it.
+  const lastConflict = findLastBootstrapConflict(channelDir)
+  if (!lastConflict) return baseline
+
+  const lastOpen = findLastSessionOpen(channelDir)
+  if (!lastOpen) return 'conflict'
+
+  const conflictTime = Date.parse(lastConflict.iso)
+  const openTime     = Date.parse(lastOpen.iso)
+  if (!Number.isFinite(conflictTime) || !Number.isFinite(openTime)) return 'conflict'
+
+  // If session-open is more recent than conflict, conflict is cleared
+  return openTime > conflictTime ? baseline : 'conflict'
+}
+
+function computeBaselineState(
+  channelDir: string,
+  systemDir: string,
+  registry: Registry,
+  opts: BootstrapOpts,
+  now: number,
+): 'open' | 'deferred' {
   const lastOpen = findLastSessionOpen(channelDir)
   const lastBoundary = findLastSessionBoundary(systemDir, registry)
 
@@ -394,17 +430,30 @@ export interface BootstrapSummary {
   flaggedOffline: Array<{ name: string; lastSeen: string | null }>
   roeVersion: string
   roeLayer: 'custom' | 'framework' | 'none'
+  /** Pending amendments in this channel (proposals/motions without a
+   * roe-vote-result, roe-ratified, or roe-deadlock-resolution). v0.7.0-
+   * alpha.5+ — empty when channelDir is omitted (back-compat). */
+  pendingAmendments?: Array<{
+    anchorId: string
+    fromActor: string
+    target: string
+    voteWindow: string | null
+    expired: boolean | null
+    votes: { yes: number; no: number; abstain: number; total: number }
+  }>
 }
 
-/** Build the MVP alpha.2 bootstrap summary content. Walks `_system/` for
- * recent online events to determine who's been seen lately; flags actors
- * in the registry without a recent online event as offline.
+/** Build the bootstrap summary content. Walks `_system/` + (optionally)
+ * the channel for pending amendments. Posted as the body of `session-open`.
  *
- * Full bootstrap-pass content (outstanding amendment processing, deadlock
- * resolution, vote-window expiry handling) lives in alpha.4. */
+ * v0.7.0-alpha.5+ adds per-channel pending-amendment surfacing — pass
+ * `channelDir` to include it. Without it, falls back to the alpha.2 MVP
+ * shape (actors + ROE version only).
+ */
 export async function buildBootstrapSummary(
   transportRoot: string,
   _registry: Registry,  // accepted for backward compat; uses all-actors set internally
+  channelDir?: string,
 ): Promise<BootstrapSummary> {
   // Use the governance lens (all actor profiles), not the dispatch registry.
   // Humans are the typical coordinators in real templates and need to be
@@ -414,18 +463,38 @@ export async function buildBootstrapSummary(
 
   // alpha.2 MVP: don't try to track per-actor lastSeen — the existing
   // system.ts event format doesn't write per-actor online messages, so we
-  // can't infer per-actor presence from history. Cross-machine actor
-  // presence detection arrives in alpha.4 alongside `bootstrap-conflict`.
+  // can't infer per-actor presence from history.
   const flaggedOffline: Array<{ name: string; lastSeen: string | null }> = []
 
   const roe = locateActiveROE(transportRoot)
   const roeVersion = roe ? await gitFileSha(transportRoot, roe.relativePath) : 'unknown'
+
+  // alpha.5+: surface pending amendments per channel
+  let pendingAmendments: BootstrapSummary['pendingAmendments'] | undefined
+  if (channelDir) {
+    try {
+      const { walkGovernanceMessages, findPendingAmendments } = await import('./governance.js')
+      const govMessages = walkGovernanceMessages(channelDir)
+      const pending = findPendingAmendments(govMessages)
+      pendingAmendments = pending.map(p => ({
+        anchorId: p.anchorId,
+        fromActor: p.definingMessage.from,
+        target: String(p.definingMessage.data.target ?? p.definingMessage.data['motion-class'] ?? '?'),
+        voteWindow: typeof p.definingMessage.data['vote-window'] === 'string' ? p.definingMessage.data['vote-window'] as string : null,
+        expired: p.expiredAsOf,
+        votes: p.votes,
+      }))
+    } catch (err) {
+      console.error(`[bootstrap] failed to surface pending amendments: ${err}`)
+    }
+  }
 
   return {
     onlineActors,
     flaggedOffline,
     roeVersion,
     roeLayer: roe ? roe.layer : 'none',
+    pendingAmendments,
   }
 }
 
@@ -472,6 +541,14 @@ export async function postSessionOpen(
     ? '- (none)'
     : summary.flaggedOffline.map(f => `- ${f.name}${f.lastSeen ? ` (last seen ${f.lastSeen})` : ''}`).join('\n')
 
+  const pendingSection = !summary.pendingAmendments || summary.pendingAmendments.length === 0
+    ? '- (none)'
+    : summary.pendingAmendments.map(p =>
+        `- \`${p.anchorId}\` from ${p.fromActor} (target: ${p.target}, vote-window: ${p.voteWindow ?? 'none'}, ` +
+        `${p.expired === true ? 'EXPIRED' : p.expired === false ? 'within window' : 'unknown'}, ` +
+        `votes: y=${p.votes.yes}/n=${p.votes.no}/a=${p.votes.abstain})`
+      ).join('\n')
+
   const body =
     `---\n` +
     `from: ${coordinatorActor}\n` +
@@ -487,7 +564,8 @@ export async function postSessionOpen(
     `- Active ROE version: ${summary.roeVersion}\n` +
     `- Online actors: ${summary.onlineActors.join(', ') || '(none)'}\n` +
     `- Offline actors flagged:\n  ${offlineSection.split('\n').join('\n  ')}\n\n` +
-    `_alpha.2 MVP content: full amendment-walk + deadlock resolution arrives in alpha.4_\n`
+    `## Pending amendments\n\n` +
+    `${pendingSection}\n`
 
   const channelDir = join(transportRoot, 'channels', channelGuid, datePath)
   await mkdir(channelDir, { recursive: true })
