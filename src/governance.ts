@@ -127,6 +127,154 @@ function anchorId(m: GovernanceMessage): string | null {
   return null
 }
 
+// ── Vote tally (template-aware) ──────────────────────────────────────────
+
+export interface VoteTally {
+  yes:              number
+  no:               number
+  abstain:          number
+  totalCast:        number
+  ineligibleVotes:  number  // vote messages from non-members (per template)
+  expiredVotes:     number  // votes after vote-window expiry
+  quorumMet:        boolean | null  // null when template doesn't specify quorum
+  ratified:         'passed' | 'failed' | 'tied' | 'quorum-failed'
+  threshold:        'simple-majority' | 'two-thirds' | 'consensus' | null
+  reason:           string
+}
+
+/** Compute the result of voting on a proposal/motion, applying template-
+ * specific rules (member-only voting for Parliamentary, two-thirds
+ * threshold for amendments, quorum check, vote-window expiry). Used both
+ * by `crosstalk roe validate` to surface semantic issues and by future
+ * auto-tally logic when a vote-window expires and no roe-vote-result
+ * has been posted.
+ *
+ * `templateConfig` may be null — then this is a permissive tally with
+ * no eligibility check (everyone counts) and simple-majority threshold.
+ *
+ * `isAmendment` controls which threshold applies: true → amendment
+ * threshold (typically two-thirds for Parliamentary); false → motion
+ * threshold (typically simple-majority).
+ */
+export function computeTally(
+  proposalAnchorId: string,
+  messages: GovernanceMessage[],
+  templateConfig: import('./templates.js').TemplateConfig,
+  isAmendment: boolean = false,
+  asOf: number = Date.now(),
+): VoteTally {
+  // Find the defining proposal/motion
+  const definingMessage = messages.find(m =>
+    (m.type === 'roe-amendment-proposal' || m.type === 'roe-motion') &&
+    (m.data['proposal-id'] === proposalAnchorId || m.data['motion-id'] === proposalAnchorId)
+  )
+
+  // Determine eligible-voter set per template
+  let eligibleVoters: Set<string> | null = null
+  if (templateConfig) {
+    if (templateConfig.template === 'parliamentary') eligibleVoters = new Set(templateConfig.members)
+    if (templateConfig.template === 'scrum')         eligibleVoters = new Set(templateConfig.team)
+    if (templateConfig.template === 'casual')        eligibleVoters = new Set(templateConfig.humans)
+    // Monarchy + Conductor-Orchestra don't vote — eligibleVoters stays null (or empty)
+    if (templateConfig.template === 'monarchy' || templateConfig.template === 'conductor-orchestra') {
+      eligibleVoters = new Set()
+    }
+  }
+
+  // Determine vote-window expiry
+  let voteWindowMs: number | null = null
+  let proposalTimeMs: number | null = null
+  if (definingMessage) {
+    const window = typeof definingMessage.data['vote-window'] === 'string' ? definingMessage.data['vote-window'] as string : null
+    if (window) voteWindowMs = parseIsoDuration(window)
+    const t = Date.parse(definingMessage.timestamp)
+    if (Number.isFinite(t)) proposalTimeMs = t
+  }
+
+  // Tally
+  const tally = { yes: 0, no: 0, abstain: 0, totalCast: 0, ineligibleVotes: 0, expiredVotes: 0 }
+  for (const m of messages) {
+    if (m.type !== 'roe-vote') continue
+    if (m.data.on !== proposalAnchorId) continue
+
+    // Eligibility check
+    if (eligibleVoters && !eligibleVoters.has(m.from)) {
+      tally.ineligibleVotes++
+      continue
+    }
+
+    // Vote-window check (votes after expiry are excluded from tally)
+    if (voteWindowMs !== null && proposalTimeMs !== null) {
+      const voteTime = Date.parse(m.timestamp)
+      if (Number.isFinite(voteTime) && voteTime > proposalTimeMs + voteWindowMs) {
+        tally.expiredVotes++
+        continue
+      }
+    }
+
+    const v = String(m.data.vote ?? '')
+    if (v === 'yes')     { tally.yes++;     tally.totalCast++ }
+    if (v === 'no')      { tally.no++;      tally.totalCast++ }
+    if (v === 'abstain') { tally.abstain++; tally.totalCast++ }
+  }
+
+  // Threshold
+  let threshold: VoteTally['threshold'] = null
+  if (templateConfig?.template === 'parliamentary') {
+    threshold = isAmendment ? (templateConfig.amendmentThreshold ?? 'two-thirds') : 'simple-majority'
+  } else if (templateConfig?.template === 'casual') {
+    threshold = 'consensus'
+  } else if (templateConfig?.template === 'scrum') {
+    threshold = 'simple-majority'  // for non-role-change votes; role-change requires PO+SM consent (separate path)
+  }
+
+  // Quorum
+  let quorum: number | null = null
+  let quorumMet: boolean | null = null
+  if (templateConfig?.template === 'parliamentary') {
+    quorum = templateConfig.quorum
+    if (quorum !== null) {
+      const nonAbstain = tally.yes + tally.no
+      quorumMet = nonAbstain >= quorum
+    }
+  } else if (templateConfig?.template === 'casual') {
+    // Consensus = N% of humans must affirmatively vote yes (no quorum gate; we
+    // just check the ratio).
+    quorumMet = true  // no quorum requirement; consensus checked at threshold step
+  }
+
+  // Ratification decision
+  const nonAbstain = tally.yes + tally.no
+  let ratified: VoteTally['ratified'] = 'failed'
+  let reason = ''
+
+  if (quorumMet === false) {
+    ratified = 'quorum-failed'
+    reason = `quorum not met: ${nonAbstain} non-abstain vote(s), need ${quorum}`
+  } else if (threshold === 'simple-majority') {
+    if (tally.yes > tally.no)      { ratified = 'passed'; reason = 'simple majority' }
+    else if (tally.yes < tally.no) { ratified = 'failed'; reason = 'simple majority against' }
+    else                            { ratified = 'tied';   reason = 'tied vote' }
+  } else if (threshold === 'two-thirds') {
+    if (nonAbstain === 0) { ratified = 'failed'; reason = 'no non-abstain votes' }
+    else if (tally.yes / nonAbstain >= 2 / 3) { ratified = 'passed'; reason = `${tally.yes}/${nonAbstain} >= 2/3` }
+    else                                      { ratified = 'failed'; reason = `${tally.yes}/${nonAbstain} < 2/3` }
+  } else if (threshold === 'consensus') {
+    const total = templateConfig?.template === 'casual' ? (templateConfig.humans.length || 1) : (nonAbstain || 1)
+    const ratio = tally.yes / total
+    const consensusThreshold = templateConfig?.template === 'casual' ? templateConfig.consensusThreshold : 0.51
+    if (ratio >= consensusThreshold) { ratified = 'passed'; reason = `${(ratio*100).toFixed(0)}% >= consensus threshold ${(consensusThreshold*100).toFixed(0)}%` }
+    else                              { ratified = 'failed'; reason = `${(ratio*100).toFixed(0)}% < consensus threshold ${(consensusThreshold*100).toFixed(0)}%` }
+  } else {
+    // No template → permissive simple-majority
+    if (tally.yes > tally.no)      { ratified = 'passed'; reason = 'simple majority (no template)' }
+    else if (tally.yes < tally.no) { ratified = 'failed'; reason = 'simple majority against (no template)' }
+    else                            { ratified = 'tied';   reason = 'tied vote (no template)' }
+  }
+
+  return { ...tally, quorumMet, ratified, threshold, reason }
+}
+
 // ── Pending amendments + inconsistencies ─────────────────────────────────
 
 export interface PendingAmendment {

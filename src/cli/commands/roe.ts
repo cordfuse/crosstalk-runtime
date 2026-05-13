@@ -225,6 +225,15 @@ async function runRoeValidate(opts: RoeValidateOptions): Promise<void> {
   // catch "from: someone-not-in-the-swarm" votes/proposals.
   const registry = new Set<string>(scanAllLayers(config.transport).map(e => e.name))
 
+  // Load the active template config (alpha.6+). Enables per-template
+  // semantic enforcement in the validator (Parliamentary member-only
+  // voting, etc.). Null when no template detected → permissive validator.
+  const { loadTemplateConfig } = await import('../../templates.js')
+  const templateConfig = loadTemplateConfig(config.transport)
+  if (templateConfig) {
+    console.log(`(active template: ${templateConfig.template})`)
+  }
+
   interface Result {
     channel:     string
     channelGuid: string
@@ -241,7 +250,7 @@ async function runRoeValidate(opts: RoeValidateOptions): Promise<void> {
     const channelDir = join(config.transport, 'channels', t.guid)
     const all = readChannelMessages(channelDir)
     const gov = filterGovernanceMessages(all)
-    const issues = validateGovernance(gov, registry)
+    const issues = validateGovernance(gov, registry, templateConfig)
     results.push({ channel: t.name, channelGuid: t.guid, issues, governanceCount: gov.length })
     totalGov += gov.length
     for (const i of issues) {

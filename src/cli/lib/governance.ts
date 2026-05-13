@@ -22,6 +22,7 @@
  * file; alpha.5+ refinement.
  */
 import type { RenderedMessage } from './channel.js'
+import type { TemplateConfig } from '../../templates.js'
 
 export const ROE_MESSAGE_TYPES = [
   'roe-amendment-proposal',
@@ -116,10 +117,21 @@ export function groupByAnchor(messages: GovernanceMessage[]): Map<string, Govern
  * `knownActors` is the merged actor registry (framework + custom + local).
  * Pass an empty Set to skip `from:` actor-registry checks (useful when the
  * caller hasn't loaded the registry).
+ *
+ * `templateConfig` (v0.7.0-alpha.6+) is the parsed active ROE template
+ * config. When provided, semantic-enforcement rules apply:
+ * - Parliamentary: `roe-vote` from non-members → ERROR
+ * - Scrum: `roe-vote` on role-change amendment from non-PO/SM → WARN
+ * - Casual: no per-message check (consensus is at result-tally time)
+ * - Monarchy / Conductor-Orchestra: any `roe-vote` → WARN (unilateral
+ *   templates don't vote; informational only)
+ *
+ * Pass null to skip semantic enforcement (alpha.5-and-prior behavior).
  */
 export function validateGovernance(
   messages: GovernanceMessage[],
   knownActors: ReadonlySet<string>,
+  templateConfig: TemplateConfig = null,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = []
   // anchor-id → defining message (proposal or motion). Used for uniqueness
@@ -165,6 +177,22 @@ export function validateGovernance(
       const v = m.data.vote
       if (v !== 'yes' && v !== 'no' && v !== 'abstain') {
         issues.push(issue('error', m, `vote: must be yes|no|abstain, got '${String(v)}'`))
+      }
+
+      // Per-template semantic enforcement (v0.7.0-alpha.6+)
+      if (templateConfig?.template === 'parliamentary') {
+        if (!templateConfig.members.includes(m.from)) {
+          issues.push(issue('error', m,
+            `Parliamentary: only members may vote. '${m.from}' is not in members list [${templateConfig.members.join(', ')}]`))
+        }
+      } else if (templateConfig?.template === 'scrum') {
+        if (!templateConfig.team.includes(m.from)) {
+          issues.push(issue('warn', m,
+            `Scrum: voter '${m.from}' is not on the team [${templateConfig.team.join(', ')}]; vote will not count toward sprint consensus`))
+        }
+      } else if (templateConfig?.template === 'monarchy' || templateConfig?.template === 'conductor-orchestra') {
+        issues.push(issue('warn', m,
+          `${templateConfig.template}: votes are informational, not authoritative. The ${templateConfig.template === 'monarchy' ? 'monarch' : 'conductor'} decides unilaterally.`))
       }
 
       // Rule: roe-vote posted after the proposal's vote-window expired
