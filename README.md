@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-The Crosstalk runtime daemon — Bun/TypeScript source, CI, and binary builds.
+The Crosstalk runtime — Node.js / TypeScript source, CI, and npm-package release artifacts.
 
 **This is the contributor repo.** If you want to run Crosstalk, you want [cordfuse/crosstalk](https://github.com/cordfuse/crosstalk) — the operator-facing repo with framework actors, protocol spec, and setup instructions.
 
@@ -10,27 +10,39 @@ The Crosstalk runtime daemon — Bun/TypeScript source, CI, and binary builds.
 
 ## What it does
 
-The runtime is a persistent Bun process — one instance per machine. It:
+The runtime is a Node.js process that ships in three modes, all compiled from the same source:
 
-1. Watches a Crosstalk transport (`channels/`) for new message files via `fs.watch`
-2. Reads each message's `to:` field and routes to the matching actor(s)
-3. Spawns the actor's CLI (Claude, Gemini, Qwen, OpenCode, or custom), passing the message content
-4. Captures stdout, commits the response to the transport under the actor's git identity
-5. Advances the channel cursor so the message is never re-dispatched
+| Mode | How invoked | What it does |
+|------|-------------|--------------|
+| **Daemon** | `crosstalk` (no args) | Watches a transport (`channels/`) for new message files via `fs.watch`, reads each `to:` field, dispatches to the matching local actor(s), captures their stdout, commits the response under the actor's git identity, advances the cursor. One instance per machine. |
+| **Relay server** | `RELAY_MODE=server crosstalk` | Stateless WebSocket fan-out: accepts GitHub push webhooks, broadcasts a minimal `{repo, event, sha}` notification to every connected runtime daemon. Carries no message content. Cordfuse operates a public instance at `relay.crosstalk.sh`; self-hostable for private deployments. |
+| **Interactive client** | `crosstalk channel join <name> --agent <name>` | PTY-wraps the operator's preferred AI agent CLI (Claude Code, Gemini, Qwen, OpenCode, Codex, custom). New channel messages addressed to the joining human (or to `all`) get injected into the agent's context in real time as `[crosstalk inbound]` blocks. |
 
-On startup it scans for messages missed while the daemon was down and catches up before watching for new ones.
+Plus the operator CLI surface: `init`, `post`, `channel new/list/show/tail/join`, `actor list/validate`, `roe audit/validate`, `ls`, `config show`, `version`, `watch start/stop/status/logs`.
 
 ---
 
 ## Supported agent providers
 
-| Provider | CLI | Model format | Notes |
-|----------|-----|-------------|-------|
-| Claude | `claude` | `claude-sonnet-4-6` etc. | `--dangerously-skip-permissions --print` |
-| Gemini | `gemini` | `gemini-2.5-flash` etc. | Personality baked into prompt — no `--system-prompt` flag |
-| Qwen Code | `qwen` | `qwen-plus` etc. | `--system-prompt` supported |
-| OpenCode | `opencode` | `ollama/<name>:<tag>` | Local models via Ollama; JSONL output parsed |
-| Custom | any | — | `command` + `args` with `{variable}` substitution |
+| Provider | CLI binary | Native flags | Model format |
+|----------|-----------|--------------|--------------|
+| Claude | `claude` | `--print --dangerously-skip-permissions --model <m> --system-prompt <p> --no-session-persistence` | `claude-sonnet-4-6`, etc. |
+| Gemini | `gemini` | `-m <model> -y --output-format text` | `gemini-2.5-flash`, etc. Personality baked into prompt body (no `--system-prompt` flag in Gemini CLI). |
+| Qwen Code | `qwen` | `--system-prompt <p> --model <m> -y --output-format text --no-chat-recording` | `qwen-plus`, etc. |
+| OpenCode | `opencode` | `run "<p>" -m <model> --dangerously-skip-permissions --format json` | `ollama/<name>:<tag>` for local models via Ollama. JSONL output parsed. |
+| Custom (`command` set, no `agent`) | any binary | `command` + `args` array with `{variable}` substitution | — |
+
+**Operator-extensible.** Operators can register additional agents (or override the built-in invocation) for `crosstalk channel join` via `[agents.X]` tables in `~/.crosstalk/config.toml`:
+
+```toml
+[agents.my-bot]
+spawn = ["python3", "/path/to/my-bot.py", "--interactive"]
+
+[agents.claude]
+spawn = ["claude", "--dangerously-skip-permissions"]   # override built-in
+```
+
+Operator entries win over built-ins on collision.
 
 ---
 
@@ -38,16 +50,34 @@ On startup it scans for messages missed while the daemon was down and catches up
 
 ```
 src/
-  index.ts       Entry point — boot, wiring, graceful shutdown
-  watcher.ts     fs.watch loop — dedup, cursor check, actor targeting
-  dispatch.ts    Process lifecycle — spawn, timeout, stdout capture, commit
-  registry.ts    Actor definitions — three-layer load, hot-reload
-  git.ts         All git I/O — clone, pull, push/rebase/retry, actor identity
-  cursor.ts      Read position tracking per channel per session
-  config.ts      ~/.crosstalk/config.md loader
-  system.ts      MACHINE_ID, SESSION_ID, system announcements
-  webhook.ts     GitHub push webhook server (deprecated in v0.4)
-  frontmatter.ts YAML frontmatter parser
+  index.ts             Boot dispatch — daemon / server / CLI mode selection + graceful shutdown
+  config.ts            ~/.crosstalk/config.toml loader (smol-toml)
+  registry.ts          Three-layer actor loader; hot-reload via fs.watch on ~/.crosstalk/actors/
+  watcher.ts           fs.watch loop — dedup window, cursor check, actor targeting
+  dispatch.ts          Process lifecycle — spawn, timeout, stdout capture, commit
+  git.ts               All git I/O — per-actor clone, push/rebase/retry, actor identity
+  cursor.ts            Per-channel cursor tracking; survives daemon restarts
+  system.ts            MACHINE_ID derivation, SESSION_ID, online/offline/timeout announcements
+  relay.ts             WebSocket relay client (daemon mode) + relay server (RELAY_MODE=server)
+  frontmatter.ts       YAML frontmatter parser (yaml package)
+
+  cli/
+    index.ts           Subcommand dispatcher (commander)
+    commands/
+      init.ts          crosstalk init — interactive setup wizard
+      post.ts          crosstalk post — message composition + git commit/push
+      channel.ts       crosstalk channel new/list/show/tail
+      channel-join.ts  crosstalk channel join — PTY-wrapped agent session + live injection
+      ls.ts            crosstalk ls — channel list shortcut
+      actor.ts         crosstalk actor list/validate
+      config.ts        crosstalk config show
+      version.ts       crosstalk version
+      watch.ts         crosstalk watch start/stop/status/logs
+      roe.ts           crosstalk roe audit/validate (governance enforcement)
+    lib/
+      actors.ts        Per-layer actor scanning, cycle-checking parent chains
+      channel.ts       Channel listing, GUID resolution, message reading
+      governance.ts    Governance message types + validation per AMENDMENT.md
 ```
 
 ---
@@ -63,6 +93,7 @@ fs.watch event
   → spawn agent CLI
       → capture stdout
       → commit response to transport (actor git identity)
+      → push with rebase-and-retry on remote contention
   → advance cursor
 ```
 
@@ -72,38 +103,65 @@ Actor timeout: if the process exceeds `heartbeat-interval`, it is killed and a `
 
 ## Requirements
 
-- [Bun](https://bun.sh) >= 1.0
+- **Node.js ≥ 18** (LTS line). v18 covers `fetch`, `AbortController`, modern `fs.promises`. No Bun runtime dependency.
 - A Crosstalk transport repo cloned locally (see [cordfuse/crosstalk](https://github.com/cordfuse/crosstalk))
-- `~/.crosstalk/config.md` pointing at the transport
+- `~/.crosstalk/config.toml` pointing at the transport (or run `crosstalk init` to generate it)
+
+For source builds of `@homebridge/node-pty-prebuilt-multiarch` on platforms without a prebuild: Xcode Command Line Tools (`xcode-select --install`) on macOS; `build-essential` + `python3` on Linux.
+
+---
+
+## Install
+
+End users install the published npm tarball — see [cordfuse/crosstalk README Quickstart](https://github.com/cordfuse/crosstalk#3-install-the-runtime). The short version:
+
+```sh
+# Replace v0.7.0-alpha.1 with the latest tag from the releases page
+npm install -g https://github.com/cordfuse/crosstalk-runtime/releases/download/v0.7.0-alpha.1/crosstalk-runtime-0.7.0-alpha.1.tgz
+```
+
+Puts `crosstalk` and the alias `ct` on PATH.
+
+(Future: `npm install -g @cordfuse/crosstalk-runtime` once the npm `@cordfuse` scope is live.)
 
 ---
 
 ## Dev
 
+For local development on the runtime source:
+
 ```sh
-bun install
-bun run src/index.ts
+npm install                         # runs prepare → tsc → dist/, plus native PTY build
+node dist/index.js version          # smoke-test the CLI
+
+# Watch-mode for live source iteration (Node 22+, --watch + --experimental-strip-types):
+npm run dev
 ```
+
+`npm install` builds `@homebridge/node-pty-prebuilt-multiarch`'s native module from source on platforms without a prebuild (most macOS configurations need this).
 
 ---
 
-## Current release: v0.3.0
+## Current release
 
-- Multi-provider dispatch (Claude, Gemini, Qwen, OpenCode/Ollama)
-- Cursor-based startup catch-up and restart safety
-- Per-actor git identity and per-actor transport clones
-- Webhook-triggered Git pull (relay-based dispatch planned for v0.4)
+**v0.7.0-alpha.1** — first runtime alpha of the v0.7 Governance minor. Adds `crosstalk roe audit` and `crosstalk roe validate` operator subcommands enforcing the AMENDMENT.md spec from framework v0.7.0.
 
-See [PLAN.md](PLAN.md) for architecture detail and v0.4 relay design. See [cordfuse/crosstalk WHATSNEW.md](https://github.com/cordfuse/crosstalk/blob/main/WHATSNEW.md) for full changelog.
+The full release history (and the framework changelog this runtime tracks) lives in [cordfuse/crosstalk WHATSNEW.md](https://github.com/cordfuse/crosstalk/blob/main/WHATSNEW.md) — single source of truth for both repos.
+
+Highlights from earlier minors:
+- **v0.6.0 (Interactive Client)** — `crosstalk channel join` with PTY plumbing, three-mode runtime (daemon / server / interactive), config-driven `[agents.X]` registry, live message injection with `to:`-targeting filter and prompt-ready clustering. Distribution pivoted from bun-compile per-platform binaries to a Node npm tarball mid-series (v0.6.0-alpha.4).
+- **v0.5.0 (Operator UX)** — full operator CLI surface: `init`, `post`, `channel new/list/show/tail`, `actor list/validate`, `ls`, `config show`, `version`, `watch start/stop/status/logs`. Plus framework PROFILES.md actor profile spec + AGENTS.md operator-AI guide.
+- **v0.4.0 (Infrastructure)** — repo split from monorepo, relay-based real-time dispatch (`relay.crosstalk.sh` live), `~/.crosstalk/config.md` (legacy YAML) replaced with `~/.crosstalk/config.toml`.
+- **v0.3.0 (Multi-Provider)** — native dispatch for Claude / Gemini / Qwen / OpenCode (Ollama), custom `command`/`args` adapter, cursor-based startup catch-up.
 
 ---
 
 ## Versioning
 
-Tagged as `vX.Y.Z`. GitHub Actions builds and publishes releases on tag push.
+Tagged as `vX.Y.Z`. Each tag push triggers `.github/workflows/release-runtime.yml`, which runs `npm install` + `npm run build` + `npm pack` and publishes the tarball as a GitHub Release asset. `package.json` is the version-of-record (the historical `VERSION` file from the bun-compile era was deleted in v0.7.0-alpha.1).
 
 ---
 
 ## History
 
-Runtime source lived in `cordfuse/crosstalk` through `v0.3.0` (commit `2cda1c20`). Moved here at the start of `v0.4.0` to separate contributor and operator concerns.
+Runtime source lived in `cordfuse/crosstalk` through `v0.3.0` (commit `2cda1c20`). Moved here at the start of `v0.4.0` to separate contributor and operator concerns. Distribution pivoted from `bun build --compile` per-platform binaries to a Node npm tarball in `v0.6.0-alpha.4` (PR #14) — the bun bundler's native-module discovery couldn't reliably embed `@homebridge/node-pty-prebuilt-multiarch`'s prebuilds across linux-x64 / linux-arm64 / darwin-arm64 without per-platform CI mirrors and the maintenance cost wasn't worth it; every Crosstalk user already has Node installed (claude / gemini / qwen / opencode are all Node CLIs).

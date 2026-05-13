@@ -13,17 +13,20 @@ This file is intentionally agent-neutral: it does not auto-load into any specifi
 
 | File | Purpose |
 |------|---------|
-| `src/index.ts` | Entry point — loads config, registry, starts watcher, webhook server, startup scan |
+| `src/index.ts` | Boot dispatch — chooses daemon / `RELAY_MODE=server` / `crosstalk <subcommand>` mode at startup |
 | `src/watcher.ts` | `fs.watch` loop — detects new message files, dedup, cursor check, routes to dispatch |
 | `src/dispatch.ts` | Spawns actor processes — routes by `agent` field, handles all providers, captures stdout, commits response |
 | `src/registry.ts` | Loads actor definitions from three layers, hot-reloads on filesystem change |
-| `src/git.ts` | All git operations — per-actor clone, pull, commit, push, actor email identity |
+| `src/git.ts` | All git operations — per-actor clone, pull, commit, push (rebase-and-retry), actor email identity |
 | `src/cursor.ts` | Read position tracking — per channel per session, survives daemon restarts |
-| `src/config.ts` | Loads `~/.crosstalk/config.md` |
+| `src/config.ts` | Loads `~/.crosstalk/config.toml` (smol-toml) |
 | `src/system.ts` | MACHINE_ID derivation, SESSION_ID, online/offline/timeout announcements |
-| `src/frontmatter.ts` | YAML frontmatter parser |
-| `src/webhook.ts` | HTTP server for GitHub push webhook — triggers `pullTransport` on push event |
-| `VERSION` | Current runtime version (semver, single line) |
+| `src/relay.ts` | WebSocket relay client (daemon mode) + relay server (`RELAY_MODE=server`) |
+| `src/frontmatter.ts` | YAML frontmatter parser (`yaml` package) |
+| `src/cli/index.ts` | `commander` subcommand dispatcher — invoked when `crosstalk <subcommand>` is run |
+| `src/cli/commands/*.ts` | One file per subcommand (`init`, `post`, `channel`, `channel-join`, `ls`, `actor`, `config`, `version`, `watch`, `roe`) |
+| `src/cli/lib/*.ts` | Shared CLI helpers (`actors.ts`, `channel.ts`, `governance.ts`) |
+| `package.json` | Version-of-record (semver). The historical `VERSION` file from the bun-compile era was deleted in v0.7.0-alpha.1. |
 
 ---
 
@@ -31,14 +34,22 @@ This file is intentionally agent-neutral: it does not auto-load into any specifi
 
 ```
 index.ts
-  ├── config.ts        load ~/.crosstalk/config.md
-  ├── registry.ts      load actors from three layers; hot-reload on change
-  ├── system.ts        MACHINE_ID (sha256(hostname)[:16]), SESSION_ID (per-boot UUID), announcements
-  ├── watcher.ts       fs.watch on transport/channels/; dedup; cursor check; route to dispatch
-  │     └── dispatch.ts  spawn actor process; capture stdout; commit response to transport
-  │           └── git.ts   per-actor clone; pull; push/rebase/retry; actor git identity
-  ├── webhook.ts       GitHub push webhook → pullTransport()
-  └── cursor.ts        read/write ~/.crosstalk/sessions/<MACHINE_ID>/cursors/<channel-guid>
+  ├── (no args)               → daemon mode
+  │   ├── config.ts             load ~/.crosstalk/config.toml
+  │   ├── registry.ts           load actors from three layers; hot-reload on change
+  │   ├── system.ts             MACHINE_ID (sha256(hostname)[:16]), SESSION_ID (per-boot UUID), announcements
+  │   ├── relay.ts              outbound WebSocket client → relay.crosstalk.sh
+  │   ├── watcher.ts            fs.watch on transport/channels/; dedup; cursor check; route to dispatch
+  │   │     └── dispatch.ts       spawn actor process; capture stdout; commit response to transport
+  │   │           └── git.ts        per-actor clone; pull; push/rebase/retry; actor git identity
+  │   └── cursor.ts             read/write ~/.crosstalk/sessions/<MACHINE_ID>/cursors/<channel-guid>
+  │
+  ├── RELAY_MODE=server       → relay-server mode
+  │   └── relay.ts              accept GitHub webhooks; broadcast {repo, event, sha} over WebSocket
+  │
+  └── crosstalk <sub> ...     → CLI mode
+      └── cli/index.ts          commander dispatcher
+          └── cli/commands/<sub>.ts
 ```
 
 ---
@@ -68,31 +79,28 @@ Each `agent` value maps to a specific spawner in `dispatch.ts`. Exact CLI contra
 
 ## Config Reference
 
-`~/.crosstalk/config.md`:
-```yaml
----
-transport: ~/path/to/transport-repo
-webhook-port: 3456         # optional — enables GitHub push webhook (deprecated in v0.4)
-webhook-secret: <secret>   # required if webhook-port is set
-default-heartbeat-interval: 120   # fallback timeout if actor omits heartbeat-interval; default 30s
----
+`~/.crosstalk/config.toml` (TOML, parsed by `smol-toml`):
+
+```toml
+transport = "/path/to/transport-repo"
+actor-email-suffix = "your-domain.example"
+default-heartbeat-interval = 120        # fallback if actor omits heartbeat-interval; default 30s
+default-human-actor = "alice"           # optional — used by `crosstalk post` / `channel join` when --as omitted
+
+[relay]
+mode = "client"                         # "client" (daemon mode) | "server" (RELAY_MODE=server overrides this)
+url = "wss://relay.crosstalk.sh"        # Cordfuse-operated public relay (open mode, no auth required)
+# secret = "<relay-secret>"             # Optional — only set when self-hosting an authenticated relay
+
+# Operator-extensible agent registry — extends or overrides the built-in agents map
+# used by `crosstalk channel join`. Operator entries win on collision with built-ins.
+[agents.my-bot]
+spawn = ["python3", "/path/to/my-bot.py", "--interactive"]
 ```
 
-v0.4 will add:
-```yaml
-relay-url: wss://relay.crosstalk.sh    # relay WebSocket endpoint (public, Cordfuse-operated)
-relay-secret: <secret>                 # HMAC auth between relay and runtime
-```
+The legacy `~/.crosstalk/config.md` (YAML) is no longer read. `webhook-port` / `webhook-secret` are removed — direct webhook listening was replaced by the relay model in v0.4.0.
 
-**Local development on steve-cachyos.** The relay server runs as a container on `proxy_net`, listening on **port 3003**, reverse-proxied by Caddy at `https://crosstalk-relay.linux.internal`. Two equivalent ways to point a local runtime at it:
-
-```yaml
-# Through Caddy (TLS internal — requires trusted local CA, AdGuard DNS resolves the hostname):
-relay-url: wss://crosstalk-relay.linux.internal
-
-# Direct to container host port (plain ws, no CA setup — fastest for iteration):
-relay-url: ws://localhost:3003
-```
+**Local development against the in-repo relay server.** The relay server runs from this same source via `RELAY_MODE=server`. For dev, point a local daemon at a locally-running relay container — use `ws://localhost:3003` for the fastest iteration, or `wss://<your-internal-hostname>` if you have a TLS-terminating reverse proxy in front of the container.
 
 ---
 

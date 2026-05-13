@@ -2,129 +2,67 @@
 
 ## What this is
 
-The runtime daemon is the process that bridges the Crosstalk transport (a git repo full of markdown files) and the actor CLIs (claude, gemini, qwen, opencode, or custom). It is a persistent Bun process. One instance per machine.
+The runtime is a Node.js process that bridges the Crosstalk transport (a git repo full of markdown files) and the actor processes (claude, gemini, qwen, opencode, or custom CLIs). One source tree, three runtime modes — daemon / relay-server / interactive client — selected at startup.
 
-Protocol spec and framework actors are in [cordfuse/crosstalk](https://github.com/cordfuse/crosstalk). This repo contains only the daemon source.
-
----
-
-## Current State — v0.3.0
-
-### What is implemented
-
-**Transport watching**
-- `fs.watch` on `<transport>/channels/` — recursive, event-driven, zero polling
-- Dedup window (2s) — prevents double-dispatch from duplicate inotify events
-- Cursor check — drops any message at or before the channel cursor; prevents git rebase re-fire on startup
-
-**Actor registry**
-- Three-layer resolution: `framework/` → `custom/` → `~/.crosstalk/actors/`; last wins
-- Kebab-case enforcement on actor filenames
-- Hot-reload — `fs.watch` on `~/.crosstalk/actors/`; registry reloads without restart
-- Silently skips actor files that have no `agent` or `command` field (e.g. `runtime.md`)
-
-**Dispatch**
-- Routes by `agent` field: `claude`, `gemini`, `qwen`, `opencode`, or custom
-- Spawns agent CLI as a child process, captures stdout, commits response to transport
-- Per-actor git identity: `<name>@<actor-email-suffix>` or explicit `git-email` override
-- Per-actor transport clone: `~/.crosstalk/actor-clones/<namespace>/<name>/` — eliminates git index lock contention on concurrent dispatch
-- Actor timeout: kills process and posts `type: system, reason: timeout` to `_system/` if heartbeat-interval exceeded
-- Custom actor guard: throws descriptive error if `command` is undefined rather than passing undefined to spawn
-
-**Startup scan**
-- On boot, reads all channels, compares against cursor, dispatches any messages missed while daemon was down
-- MACHINE_ID (`sha256(hostname).hex[:16]`) is stable across restarts — cursors survive reboots
-
-**System announcements**
-- `type: system, reason: online` — posted to `_system/` on startup, includes actor list, protocol version, machine hash
-- `type: system, reason: offline` — posted on SIGINT/SIGTERM
-- `type: system, reason: timeout` — posted when actor process exceeds heartbeat-interval
-
-**Multi-provider dispatch (v0.3.0)**
-- `agent: claude` — Claude Code CLI, `--print` headless mode
-- `agent: gemini` — Gemini CLI, personality baked into prompt body
-- `agent: qwen` — Qwen Code CLI, `--system-prompt` supported
-- `agent: opencode` — OpenCode CLI, `--format json` JSONL output parsed
-- Custom — `command`/`args` with `{variable}` substitution
-
-**Webhook server (v0.1.3, deprecated in v0.4)**
-- Bun HTTP server on configurable port
-- HMAC-SHA256 verification of GitHub push events (`x-hub-signature-256`)
-- On verified push: calls `pullTransport` → `fs.watch` picks up new files naturally
+Protocol spec, framework actors, and operator docs are in [cordfuse/crosstalk](https://github.com/cordfuse/crosstalk). This repo contains only the daemon/server/CLI source. Changelog and roadmap live in the framework repo.
 
 ---
 
-## v0.4.0 Plan — Relay-based dispatch
+## Current state
 
-### Problem with current webhook model
+Tracking framework versions; runtime ships its own alpha series within each shared minor.
 
-Each machine must expose a public HTTP endpoint and register it with the Git host separately. Requires a public IP or tunnel (Tailscale Funnel, Cloudflare Tunnel, ngrok, etc.) on every machine. Not scalable to a multi-machine swarm where operators may be behind NAT.
+- **v0.3.0** ✓ — multi-provider dispatch (Claude, Gemini, Qwen, OpenCode/Ollama), cursor-based startup catch-up, per-actor git identity, three-layer actor registry
+- **v0.4.0** ✓ — repo split from `cordfuse/crosstalk`; relay-based dispatch (`src/relay.ts` outbound WebSocket client + `RELAY_MODE=server` for the relay itself); direct-webhook server removed; config moved from `~/.crosstalk/config.md` (legacy YAML) to `~/.crosstalk/config.toml` (smol-toml)
+- **v0.5.0** ✓ — full operator CLI: `init`, `post`, `channel new/list/show/tail`, `ls`, `actor list/validate`, `config show`, `version`, `watch start/stop/status/logs`. Plus framework PROFILES.md spec + AGENTS.md operator-AI guide
+- **v0.5.1** ✓ — human-actor profile spec; framework `system` actor type
+- **v0.6.0** ✓ — interactive client: `crosstalk channel join` with PTY plumbing (`@homebridge/node-pty-prebuilt-multiarch`), `--backfill N`, config-driven `[agents.X]` registry, live message injection (`to:`-targeting filter + prompt-ready clustering). Distribution pivoted to Node npm tarball at alpha.4
+- **v0.7.0-alpha.1** ✓ ← current — `crosstalk roe audit` + `crosstalk roe validate` operator subcommands. Begins runtime enforcement of the framework v0.7.0 governance specs (AMENDMENT.md / DEADLOCK.md / BOOTSTRAP.md)
 
-Polling `git ls-remote` as an alternative hits API rate limits at scale.
-
-### Solution: relay + WebSocket
-
-A relay server sits between the Git host and the runtimes:
-
-```
-Git host → webhook → relay → WebSocket → all connected runtimes
-```
-
-- Runtime connects **outbound** to the relay via WebSocket on startup — works behind NAT, no inbound port required
-- Git host fires one webhook to the relay
-- Relay pushes a minimal notification `{ repo, event, sha }` to all connected runtimes
-- Each runtime pulls the transport and dispatches locally
-- Relay carries no message content — only the ping. Content stays in the git transport.
-
-### Runtime changes for v0.4.0
-
-1. **New: `src/relay.ts`** — WebSocket client that connects to `relay-url` on startup, reconnects on disconnect, handles incoming notifications by calling `pullTransport`
-2. **Remove: direct webhook server** — `src/webhook.ts` deleted (or kept behind deprecated config flag for one release)
-3. **Config additions:**
-   ```yaml
-   relay-url: wss://relay.crosstalk.sh
-   relay-secret: <secret>
-   ```
-4. **Auth:** relay sends HMAC of `{ repo, sha }` signed with `relay-secret` — runtime verifies before pulling
-
-### Relay server (in-repo: `src/relay-server.ts`)
-
-The relay server is **not** a separate repo — it ships inside `crosstalk-runtime` alongside the runtime daemon and the file-handling code. One codebase, two run modes (runtime daemon vs. relay server), selected at startup.
-
-Lightweight stateless service:
-- Accepts webhook POST from Git hosts (verified via HMAC)
-- Maintains WebSocket connections from runtimes
-- On webhook: broadcasts `{ repo, event, sha }` to all connected runtimes
-- No storage, no message routing, no state beyond open connections
-- Cordfuse operates `relay.crosstalk.sh` as a free public instance (domain registered 2026-05-11)
-- Self-hostable for private deployments
-
-**Local dev on steve-cachyos:** relay listens on **port 3003**, exposed via Caddy at `https://crosstalk-relay.linux.internal`. Runtime can point at `wss://crosstalk-relay.linux.internal` (Caddy, TLS internal) or `ws://localhost:3003` (direct).
+The full per-alpha changelog (covering both repos) is at [cordfuse/crosstalk WHATSNEW.md](https://github.com/cordfuse/crosstalk/blob/main/WHATSNEW.md).
 
 ---
 
-## Module Responsibilities
+## Module responsibilities
 
 | Module | Owns |
 |--------|------|
-| `index.ts` | Boot sequence, wiring, graceful shutdown |
-| `config.ts` | Config loading and validation — one authoritative parse |
-| `registry.ts` | Actor definitions — loading, merging, hot-reload |
-| `watcher.ts` | Filesystem event routing — dedup, cursor guard, targeting |
-| `dispatch.ts` | Process lifecycle — spawn, timeout, stdout capture, commit |
-| `git.ts` | All git I/O — nothing else touches git |
-| `cursor.ts` | All cursor I/O — nothing else touches cursor files |
-| `system.ts` | Identity (MACHINE_ID, SESSION_ID) and system event writing |
-| `webhook.ts` | HTTP webhook server — deprecated in v0.4 |
-| `relay.ts` | (v0.4) WebSocket relay client |
-| `frontmatter.ts` | YAML frontmatter parsing — used by registry, watcher, startup scan |
+| `index.ts` | Boot dispatch — daemon / `RELAY_MODE=server` / `crosstalk <subcommand>` mode selection; graceful shutdown |
+| `config.ts` | Load and validate `~/.crosstalk/config.toml`; environment-variable overrides for server mode |
+| `registry.ts` | Three-layer actor loader; hot-reload via `fs.watch` on `~/.crosstalk/actors/` |
+| `watcher.ts` | `fs.watch` loop on transport; dedup window (2s), cursor guard, `to:` targeting |
+| `dispatch.ts` | Process lifecycle — spawn agent CLI, capture stdout, commit response, push with rebase-and-retry |
+| `git.ts` | All git I/O — per-actor clone, pull, push/rebase/retry, actor identity, no other module touches git |
+| `cursor.ts` | Per-channel cursor I/O at `~/.crosstalk/sessions/<MACHINE_ID>/cursors/<channel-guid>` |
+| `system.ts` | `MACHINE_ID` derivation, `SESSION_ID`, `type: system` event writing (online/offline/timeout) |
+| `relay.ts` | WebSocket relay client (daemon mode) + relay server (`RELAY_MODE=server`); same file, two entry points |
+| `frontmatter.ts` | YAML frontmatter parser (`yaml` package) — used by registry, watcher, startup scan, validators |
+| `cli/index.ts` | `commander` subcommand dispatcher |
+| `cli/commands/*.ts` | One file per subcommand (`init`, `post`, `channel`, `channel-join`, `ls`, `actor`, `config`, `version`, `watch`, `roe`) |
+| `cli/lib/actors.ts` | Per-layer actor scanning + parent-chain cycle detection (used by `actor list/validate`) |
+| `cli/lib/channel.ts` | Channel listing, GUID resolution, message reading (used by all `channel *` subcommands + `roe audit/validate`) |
+| `cli/lib/governance.ts` | Governance message recognition + AMENDMENT.md syntactic validation (used by `roe audit/validate`) |
 
 ---
 
-## Open Items
+## v0.7.x runtime roadmap (in progress)
 
-- Relay implementation (v0.4.0) — see above
-- Webhook deprecation path — keep behind `webhook-port` config flag for v0.4, remove in v0.5
-- `crosstalk` binary (`bun build --compile`) — one-file distribution, no Bun runtime dep on target machine. Targeted for v1.0.
-- Full CLI (`crosstalk watch start/stop/status`, `crosstalk actor list`, etc.) — v1.0
-- GitHub event routing (v0.3.1+) — translate push/PR/issue events into channel messages. Currently the webhook only triggers a pull; the event-to-message translation is not implemented.
+Runtime enforcement of the framework v0.7.0 governance specs lands incrementally:
+
+- **alpha.1** ✓ — `crosstalk roe audit` + `crosstalk roe validate`. Operator tools that read channel history, identify governance messages (the `roe-*` family + `session-open` / `bootstrap-conflict`), render the amendment trail per anchor id, and apply AMENDMENT.md syntactic validation (proposal-id uniqueness, vote-on references live proposal, vote.vote ∈ {yes,no,abstain}, vote-window honoured, from in registry, second.seconds references live proposal). Self-testable on a synthetic transport; no Mac UAT blocker.
+- **alpha.2** — watcher integration: `type: session-open` detection per BOOTSTRAP.md + per-actor work-message gating. Riskier (touches dispatch path); needs cross-machine UAT to prove the multi-actor startup race-condition fix actually works.
+- **alpha.3** — time-decay automation per DEADLOCK.md: when active ROE specifies time-decay pattern + decay timer elapses with no resolution, runtime auto-posts `roe-deadlock-resolution` message.
+- **alpha.4** — bootstrap-conflict surface routing per BOOTSTRAP.md edge cases: when bootstrap pass detects inconsistent state (two `roe-vote-result` disagreeing on same proposal, `roe-ratified` referencing nonexistent commit SHA, etc.), runtime posts `type: bootstrap-conflict` and degrades the session pending human resolution.
+- **alpha.5+** — per-template semantic enforcement (Parliamentary member-only voting, Scrum role-change PO+SM consent, Conductor/Orchestra no-vote, etc.). Requires runtime to parse and interpret the active ROE file. Bigger scope; potentially multiple alphas. Can stay deferred indefinitely if syntactic validation + bootstrap infrastructure prove sufficient.
+- **v0.7.0 runtime final** when stable.
+
+After v0.7.x stabilises: **v0.8 = Privacy** (`age`-based per-actor keypair encryption, ephemeral messages, ROE encryption modes) per the framework ROADMAP.
+
+---
+
+## Open items (runtime-side, beyond v0.7.x)
+
+- **Standalone single-file binary distribution** — deferred to post-v1.0 once the PTY layer is rewritten as `bun:ffi` (eliminating the native-module bundling complexity that drove the bun-compile → npm pivot in v0.6.0-alpha.4)
+- **Daemon installer** — systemd user unit (Linux) + launchd plist (macOS) templates. Targeted at v1.0 hardening.
+- **Optional Docker deploy** — `crosstalk init` offers bare metal or Docker, generates systemd unit or `docker-compose.yml` accordingly. Solves multi-runtime-version isolation on a single machine. Targeted at v1.0.
+- **Native Windows support** — currently WSL only; native Windows replaces systemd with Windows Service / NSSM, resolves path-separator assumptions, tests `fs.watch` behaviour under Windows. Targeted at v1.x.
