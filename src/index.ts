@@ -112,11 +112,19 @@ if (config.relay.mode === 'server') {
     }
   }
 
-  // Start time-decay automation. No-op if active ROE doesn't specify
-  // `deadlock-pattern: time-decay`, OR if we don't host the coordinator.
-  // The checker walks all channels on each tick.
-  const { startDecayChecker } = await import('./governance.js');
+  // Start time-decay + auto-tally automation. No-op if active ROE doesn't
+  // require them OR we don't host the coordinator. Decay handles time-
+  // decay deadlock pattern per DEADLOCK.md; auto-tally handles
+  // Parliamentary/Scrum/Casual proposals where vote-window expired
+  // without a role-holder posting roe-vote-result.
+  const { startDecayChecker, startAutoTallyChecker } = await import('./governance.js');
   const decayChecker = startDecayChecker(
+    config.transport,
+    config.bootstrap.decayCheckIntervalMs,
+    () => decision.should ? (decision.coordinatorActor ?? null) : null,
+    config.actorEmailSuffix,
+  );
+  const autoTallyChecker = startAutoTallyChecker(
     config.transport,
     config.bootstrap.decayCheckIntervalMs,
     () => decision.should ? (decision.coordinatorActor ?? null) : null,
@@ -182,6 +190,7 @@ if (config.relay.mode === 'server') {
   const shutdown = async () => {
     console.log('[crosstalk] shutting down');
     decayChecker.stop();
+    autoTallyChecker.stop();
     await announceOffline(config.transport);
     process.exit(0);
   };
