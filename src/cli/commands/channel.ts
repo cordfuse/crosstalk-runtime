@@ -209,14 +209,20 @@ export async function runChannelList(opts: ChannelListOptions, glob?: string): P
 interface ChannelShowOptions {
   last?: string
   json?: boolean
+  as?:   string  // v0.8.0-alpha.7+ — actor identity to use for decryption
+  /** v0.8.0-alpha.7+ — commander inverts --no-decrypt to decrypt: false.
+   * Default true (decryption attempted with --as identity). */
+  decrypt?: boolean
 }
 
 function registerChannelShow(parent: Command): void {
   parent
     .command('show <name-or-guid>')
-    .description('print messages in a channel chronologically')
+    .description('print messages in a channel chronologically (v0.8+: encrypted bodies decrypted with --as identity)')
     .option('--last <n>',     'limit to the last N messages (default: all)')
     .option('--json',         'machine-readable JSON output')
+    .option('--as <actor>',   'identity to attempt decryption with (defaults to default-human-actor in config; v0.8+)')
+    .option('--no-decrypt',   'show encrypted bodies as opaque ciphertext (default: attempt decrypt with --as identity; v0.8+)')
     .action(async (query: string, opts: ChannelShowOptions) => {
       await runChannelShow(query, opts)
     })
@@ -233,6 +239,17 @@ async function runChannelShow(query: string, opts: ChannelShowOptions): Promise<
     messages = messages.slice(-limit)
   }
 
+  // v0.8.0-alpha.7+ decrypt-on-read. opts.decrypt defaults to true; --no-decrypt sets it to false.
+  if (opts.decrypt !== false) {
+    const asActor = opts.as ?? config.defaultHumanActor
+    if (asActor) {
+      messages = await Promise.all(messages.map(m => decryptForDisplay(m, asActor)))
+    }
+    // else: no identity available; encrypted messages render with placeholder
+    // (decryptForDisplay called with empty asActor produces a "no identity"
+    // placeholder via the same helper).
+  }
+
   if (opts.json) {
     console.log(JSON.stringify(messages, null, 2))
     return
@@ -246,6 +263,57 @@ async function runChannelShow(query: string, opts: ChannelShowOptions): Promise<
   for (const m of messages) {
     printMessage(m)
   }
+}
+
+/** Returns the message with its body replaced by either:
+ * - the decrypted plaintext (success)
+ * - a placeholder string explaining why decryption didn't happen
+ *   (no identity for asActor, identity not a recipient, etc.)
+ *
+ * Pure: doesn't mutate the input. Returns a new RenderedMessage with
+ * cleaned-up frontmatter (encryption fields stripped on success) so
+ * downstream renderers can show plaintext naturally. */
+async function decryptForDisplay(m: import('../lib/channel.js').RenderedMessage, asActor: string): Promise<import('../lib/channel.js').RenderedMessage> {
+  const enc = String(m.data.encryption ?? '')
+  if (enc !== 'age') return m  // not encrypted, pass through
+
+  const encryptedTo = String(m.data['encrypted-to'] ?? '?')
+
+  if (!asActor) {
+    return { ...m, body: `[encrypted to: ${encryptedTo}]\n[no decryption identity available — pass --as <actor> or set default-human-actor]` }
+  }
+
+  const { unwrapFromMessageBody, decrypt } = await import('../../crypto.js')
+  const armored = unwrapFromMessageBody(m.body)
+  if (!armored) {
+    return { ...m, body: `[encrypted to: ${encryptedTo}]\n[malformed: encryption: age set but no fenced age block in body]` }
+  }
+
+  const { loadActorIdentity, loadActorIdentityArchive } = await import('../../keys.js')
+  const current = loadActorIdentity(asActor)
+  const archived = loadActorIdentityArchive(asActor)
+  const candidates = current ? [current, ...archived] : archived
+
+  if (candidates.length === 0) {
+    return { ...m, body: `[encrypted to: ${encryptedTo}]\n[no private key for ${asActor} on this machine — run \`crosstalk actor key generate ${asActor}\`]` }
+  }
+
+  for (const id of candidates) {
+    try {
+      const plaintext = await decrypt(armored, id)
+      // Strip encryption fields from displayed frontmatter so the printed
+      // header doesn't redundantly show encryption: age (the body's already
+      // plaintext from the reader's perspective).
+      const cleanData = { ...m.data }
+      delete cleanData.encryption
+      delete cleanData['encrypted-to']
+      return { ...m, body: plaintext, data: cleanData }
+    } catch {
+      continue
+    }
+  }
+
+  return { ...m, body: `[encrypted to: ${encryptedTo}]\n[${asActor}'s identity is not a recipient — none of ${candidates.length} available identities (current + archive) could decrypt]` }
 }
 
 // ── channel tail ────────────────────────────────────────────────────────
