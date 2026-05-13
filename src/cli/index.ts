@@ -19,6 +19,7 @@ import { registerLsCommand } from './commands/ls.js'
 import { registerActorCommand } from './commands/actor.js'
 import { registerConfigCommand } from './commands/config.js'
 import { registerWatchCommand } from './commands/watch.js'
+import { registerRoeCommand } from './commands/roe.js'
 
 export async function runCLI(argv: string[]): Promise<void> {
   const program = new Command()
@@ -41,6 +42,7 @@ export async function runCLI(argv: string[]): Promise<void> {
   registerActorCommand(program)
   registerConfigCommand(program)
   registerWatchCommand(program)
+  registerRoeCommand(program)
 
   await program.parseAsync(argv)
 }

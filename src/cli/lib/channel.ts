@@ -167,6 +167,9 @@ export interface RenderedMessage {
   type:      string
   body:      string
   path:      string  // relative to channel dir, e.g. "2026/05/12/210642000Z.md"
+  /** Full parsed frontmatter — governance code needs fields beyond the
+   * canonical four (proposal-id, on, vote, vote-window, etc.). */
+  data:      Record<string, unknown>
 }
 
 /** Walk a channel's YYYY/MM/DD/HHMMSSsssZ.md tree in chronological order
@@ -203,6 +206,7 @@ export function readChannelMessages(channelDir: string): RenderedMessage[] {
               type:      String(data.type ?? 'text'),
               body:      body.trim(),
               path,
+              data,
             })
           } catch {
             // skip unreadable
