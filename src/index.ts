@@ -4,7 +4,7 @@ import { loadRegistry, watchRegistry } from './registry.js';
 import { startWatcher } from './watcher.js';
 import { startRelayServer, startRelayClient } from './relay.js';
 import { announceOnline, announceOffline, SESSION_ID, MACHINE_ID } from './system.js';
-import { readCursor, listMessages, messagesAfterCursor } from './cursor.js';
+import { readCursor, listMessages, messagesAfterCursor, migrateCursorsIfNeeded } from './cursor.js';
 import { dispatch } from './dispatch.js';
 import {
   BootstrapStateCache, shouldRunBootstrapPass, buildBootstrapSummary, postSessionOpen,
@@ -43,6 +43,12 @@ if (config.relay.mode === 'server') {
 } else {
   console.log(`[crosstalk] transport: ${config.transport}`);
   console.log(`[crosstalk] actor-email-suffix: ${config.actorEmailSuffix}`);
+
+  // One-shot cursor migration: if this is the first run after upgrading past
+  // the SESSION_ID → MACHINE_ID cursor-key change, migrate forward the
+  // most-advanced cursor per channel from legacy session dirs. No-op for
+  // genuinely-fresh installs and steady-state operation.
+  await migrateCursorsIfNeeded(MACHINE_ID);
 
   let registry = await loadRegistry(config.transport);
   console.log(`[crosstalk] actors: ${[...registry.keys()].join(', ') || 'none'}`);
