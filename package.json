@@ -1,6 +1,6 @@
 {
   "name": "crosstalk-runtime",
-  "version": "0.8.0-alpha.1",
+  "version": "0.8.0-alpha.2",
   "description": "Crosstalk runtime — watches a transport for new messages and dispatches to registered actor processes",
   "type": "module",
   "main": "dist/index.js",
@@ -25,6 +25,7 @@
   "dependencies": {
     "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
     "@inquirer/prompts": "^8.4.3",
+    "age-encryption": "^0.3.0",
     "commander": "^14.0.3",
     "smol-toml": "^1.6.1",
     "which": "^4.0.0",
