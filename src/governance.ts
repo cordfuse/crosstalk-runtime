@@ -191,6 +191,15 @@ export function computeTally(
     if (Number.isFinite(t)) proposalTimeMs = t
   }
 
+  // Detect Scrum role-change (per Scrum template spec — alpha.7+)
+  const isScrumRoleChange = templateConfig?.template === 'scrum' && definingMessage &&
+    isRoleChangeTarget(String(definingMessage.data.target ?? ''))
+
+  // Track latest vote per voter to compute role-change consent correctly
+  // (a voter's most-recent vote wins; per AMENDMENT.md votes are append-only
+  // but operators may post a corrective vote — most recent counts).
+  const latestVoteByVoter = new Map<string, 'yes' | 'no' | 'abstain'>()
+
   // Tally
   const tally = { yes: 0, no: 0, abstain: 0, totalCast: 0, ineligibleVotes: 0, expiredVotes: 0 }
   for (const m of messages) {
@@ -213,6 +222,9 @@ export function computeTally(
     }
 
     const v = String(m.data.vote ?? '')
+    if (v === 'yes' || v === 'no' || v === 'abstain') {
+      latestVoteByVoter.set(m.from, v as 'yes' | 'no' | 'abstain')
+    }
     if (v === 'yes')     { tally.yes++;     tally.totalCast++ }
     if (v === 'no')      { tally.no++;      tally.totalCast++ }
     if (v === 'abstain') { tally.abstain++; tally.totalCast++ }
@@ -241,6 +253,27 @@ export function computeTally(
     // Consensus = N% of humans must affirmatively vote yes (no quorum gate; we
     // just check the ratio).
     quorumMet = true  // no quorum requirement; consensus checked at threshold step
+  }
+
+  // Scrum role-change consent: BOTH PO and SM must have voted yes
+  // (per Scrum template spec). Override threshold path with this check.
+  if (isScrumRoleChange && templateConfig?.template === 'scrum') {
+    const po = templateConfig.productOwner
+    const sm = templateConfig.scrumMaster
+    const poVote = po ? latestVoteByVoter.get(po) : null
+    const smVote = sm ? latestVoteByVoter.get(sm) : null
+    const poConsented = poVote === 'yes'
+    const smConsented = smVote === 'yes'
+    if (poConsented && smConsented) {
+      return {
+        ...tally, quorumMet: true, ratified: 'passed', threshold: 'consensus',
+        reason: `Scrum role-change: PO (${po}) + SM (${sm}) both consented`,
+      }
+    }
+    return {
+      ...tally, quorumMet: null, ratified: 'failed', threshold: 'consensus',
+      reason: `Scrum role-change requires PO + SM both consent (yes-vote). PO=${po}:${poVote ?? 'missing'}, SM=${sm}:${smVote ?? 'missing'}`,
+    }
   }
 
   // Ratification decision
@@ -617,6 +650,143 @@ export function startDecayChecker(
       }
     } catch (err) {
       console.error(`[governance] decay checker error: ${err}`)
+    }
+  }, intervalMs)
+
+  return { stop: () => clearInterval(handle) }
+}
+
+// ── Auto-tally on vote-window expiry (alpha.7+) ──────────────────────────
+
+/** Detect whether a Scrum amendment target indicates a role change. Used by
+ * `computeTally` to apply the Scrum PO+SM consent rule. Heuristic substring
+ * match — role changes typically target sections named "Roles", "Members",
+ * "Team", or specifically reference PO/SM/team. Operators with novel section
+ * names can amend this heuristic in a future alpha; for MVP a name match is
+ * acceptable. */
+function isRoleChangeTarget(target: string): boolean {
+  const t = target.toLowerCase()
+  return /role|member|team|product[- ]?owner|scrum[- ]?master|\bpo\b|\bsm\b/.test(t)
+}
+
+/** Atomic write + commit + push of a `type: roe-vote-result` message. Used
+ * by the auto-tally path when a vote-window expires without a Speaker/SM
+ * posting the result. */
+export async function postVoteResult(
+  transportRoot: string,
+  channelGuid: string,
+  fromActor: string,
+  anchorId: string,
+  tally: VoteTally,
+  actorEmailSuffix: string,
+): Promise<void> {
+  const d = new Date()
+  const datePath = messageDatePath(d)
+  const fileName = messageFilename(d)
+  const iso = d.toISOString()
+
+  const body =
+    `---\n` +
+    `from: ${fromActor}\n` +
+    `to: all\n` +
+    `timestamp: ${iso}\n` +
+    `type: roe-vote-result\n` +
+    `on: ${anchorId}\n` +
+    `result: ${tally.ratified}\n` +
+    `yes-count: ${tally.yes}\n` +
+    `no-count: ${tally.no}\n` +
+    `abstain-count: ${tally.abstain}\n` +
+    `---\n\n` +
+    `## Auto-tally (vote-window expired without ${fromActor === 'speaker' ? 'Speaker' : 'role-holder'}-posted result)\n\n` +
+    `- Threshold: ${tally.threshold ?? 'permissive'}\n` +
+    `- Reason: ${tally.reason}\n` +
+    `${tally.quorumMet === false ? '- ⚠ Quorum not met\n' : ''}` +
+    `${tally.ineligibleVotes > 0 ? `- ${tally.ineligibleVotes} ineligible vote(s) excluded\n` : ''}` +
+    `${tally.expiredVotes > 0 ? `- ${tally.expiredVotes} expired vote(s) excluded\n` : ''}` +
+    `\n_Auto-posted by runtime when vote-window elapsed and no role-holder posted the result. This message is the formal outcome._\n`
+
+  const channelDir = join(transportRoot, 'channels', channelGuid, datePath)
+  await mkdir(channelDir, { recursive: true })
+  await writeFile(join(channelDir, fileName), body)
+
+  const relPath = `channels/${channelGuid}/${datePath}/${fileName}`
+  const gitEmail = `${fromActor}@${actorEmailSuffix}`
+  try {
+    await execFileP('git', ['-c', `user.name=${fromActor}`, '-c', `user.email=${gitEmail}`,
+      'add', relPath], { cwd: transportRoot })
+    await execFileP('git', ['-c', `user.name=${fromActor}`, '-c', `user.email=${gitEmail}`,
+      'commit', '-m', `roe-vote-result (auto-tally): ${anchorId} → ${tally.ratified}`], { cwd: transportRoot })
+    if (await hasRemote(transportRoot)) await pushWithRetry(transportRoot)
+  } catch (err) {
+    console.error(`[governance] failed to commit/push roe-vote-result: ${err}`)
+    throw err
+  }
+}
+
+/** Start the periodic auto-tally checker. Walks every channel, finds
+ * pending amendments past their vote-window without a roe-vote-result
+ * or roe-deadlock-resolution, computes the tally via template rules,
+ * and posts roe-vote-result automatically.
+ *
+ * Only fires when:
+ * - A template is detected (Parliamentary, Scrum, Casual — vote-aware templates)
+ * - We host the coordinator (avoids duplicate posts cross-machine)
+ *
+ * NOT fired when ROE specifies `deadlock-pattern: time-decay` — the
+ * time-decay path owns auto-resolution in that case. Otherwise auto-
+ * tally is the safety net for Parliamentary's "Speaker should post"
+ * (and Scrum's PO+SM consent).
+ */
+export function startAutoTallyChecker(
+  transportRoot: string,
+  intervalMs: number,
+  getCoordinator: () => string | null,
+  actorEmailSuffix: string,
+): DecayCheckerHandle {
+  const handle = setInterval(async () => {
+    try {
+      const { loadTemplateConfig } = await import('./templates.js')
+      const templateConfig = loadTemplateConfig(transportRoot)
+      if (!templateConfig) return
+
+      // Skip if time-decay pattern is set — that path owns auto-resolution
+      const deadlockConfig = readDeadlockConfig(transportRoot)
+      if (deadlockConfig.pattern === 'time-decay') return
+
+      const coordinator = getCoordinator()
+      if (!coordinator) return
+
+      const channelsDir = join(transportRoot, 'channels')
+      if (!existsSync(channelsDir)) return
+
+      let guids: string[] = []
+      try { guids = readdirSync(channelsDir) } catch { return }
+
+      const now = Date.now()
+      for (const guid of guids) {
+        if (guid.startsWith('.') || guid.startsWith('_')) continue
+        const channelDir = join(channelsDir, guid)
+        const messages = walkGovernanceMessages(channelDir)
+        const pending = findPendingAmendments(messages, now)
+
+        for (const p of pending) {
+          if (!p.expiredAsOf) continue
+
+          // Determine if this is an amendment (vs procedural motion)
+          const target = String(p.definingMessage.data.target ?? '')
+          const isAmendment = p.definingMessage.type === 'roe-amendment-proposal' || target.length > 0
+
+          const tally = computeTally(p.anchorId, messages, templateConfig, isAmendment, now)
+          try {
+            await postVoteResult(transportRoot, guid, coordinator, p.anchorId, tally, actorEmailSuffix)
+            console.log(`[governance] auto-tally posted ${guid.slice(0, 8)}/${p.anchorId} → ${tally.ratified} (${tally.reason})`)
+          } catch (err) {
+            console.error(`[governance] failed to auto-tally ${guid.slice(0, 8)}/${p.anchorId}: ${err}`)
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`[governance] auto-tally checker error: ${err}`)
     }
   }, intervalMs)
 
