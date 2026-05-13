@@ -116,6 +116,66 @@ function spawnCustom(actor: ActorConfig, vars: Record<string, string>): ChildPro
   });
 }
 
+/** Inspect a raw message file. If it's encrypted (encryption: age frontmatter
+ * + fenced ```age block in body), attempt to decrypt with this actor's
+ * private key (current + archived for rotated keys). On success, return a
+ * new message-file string with the body replaced by the decrypted plaintext
+ * — frontmatter preserved EXCEPT the encryption-related fields are stripped
+ * so downstream code (agents, validators) sees a normal plaintext message.
+ *
+ * Returns:
+ * - the original messageContent unchanged if not encrypted
+ * - the decrypted-body messageContent if encrypted + we have a key that works
+ * - the literal string 'skip' if encrypted + we don't have a key that works
+ *   (caller should skip dispatch, not propagate ciphertext to the agent)
+ *
+ * Throws on unexpected errors (malformed armor, etc.) — caller treats as
+ * skip + cursor-advance to avoid retry loops.
+ */
+async function maybeDecryptInbound(messageContent: string, actorName: string): Promise<string | 'skip'> {
+  const { parseFrontmatter } = await import('./frontmatter.js')
+  const { data, body } = parseFrontmatter(messageContent)
+  const encryption = String(data.encryption ?? '')
+  if (encryption !== 'age') return messageContent  // not encrypted, pass through
+
+  const { unwrapFromMessageBody, decrypt } = await import('./crypto.js')
+  const armored = unwrapFromMessageBody(body)
+  if (!armored) {
+    throw new Error(`encryption: age set but no fenced age block in body`)
+  }
+
+  const { loadActorIdentity, loadActorIdentityArchive } = await import('./keys.js')
+  const current = loadActorIdentity(actorName)
+  const archived = loadActorIdentityArchive(actorName)
+
+  // Try current first, then archived (newest archive first per loader sort).
+  // Any one matching identity successfully decrypts (age multi-recipient envelope
+  // unwraps with whichever key is in the recipient list).
+  const candidates = current ? [current, ...archived] : archived
+  if (candidates.length === 0) {
+    return 'skip'
+  }
+
+  for (const id of candidates) {
+    try {
+      const plaintext = await decrypt(armored, id)
+      // Successfully decrypted. Reconstruct the message file with plaintext body
+      // and encryption fields stripped from frontmatter.
+      const cleanData: Record<string, unknown> = { ...data }
+      delete cleanData.encryption
+      delete cleanData['encrypted-to']
+      const fmLines = Object.entries(cleanData).map(([k, v]) => `${k}: ${v}`).join('\n')
+      return `---\n${fmLines}\n---\n\n${plaintext}\n`
+    } catch {
+      continue  // try next identity
+    }
+  }
+
+  // None of our identities (current + archived) could decrypt — message is
+  // encrypted to a recipient set that doesn't include any of our actor's keys.
+  return 'skip'
+}
+
 export async function dispatch(
   actor: ActorConfig,
   transportRoot: string,
@@ -143,6 +203,27 @@ export async function dispatch(
     messageContent = await readFile(join(transportRoot, 'channels', channelGuid, messagePath), 'utf-8');
   } catch {
     console.error(`[dispatch] could not read message: ${messagePath}`);
+    return;
+  }
+
+  // v0.8.0-alpha.4+ inbound decryption: if the message is encrypted with age,
+  // decrypt the body using this actor's private key before passing to the
+  // agent. If decryption fails (no key, wrong key, malformed ciphertext),
+  // log + skip dispatch — never pass ciphertext to an agent that can't read it,
+  // and never silent-fail to plaintext.
+  try {
+    const decrypted = await maybeDecryptInbound(messageContent, actor.name)
+    if (decrypted === 'skip') {
+      console.warn(`[dispatch] skipping ${actor.name} for ${messagePath}: encrypted message + no usable key on this machine`)
+      // Advance cursor so we don't keep retrying — operator must add a key (or
+      // accept the message stays undelivered to this actor).
+      await writeCursor(sessionId, channelGuid, messagePath);
+      return;
+    }
+    messageContent = decrypted
+  } catch (err) {
+    console.error(`[dispatch] ${actor.name} decryption error for ${messagePath}: ${err}`)
+    await writeCursor(sessionId, channelGuid, messagePath);
     return;
   }
 
