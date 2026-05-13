@@ -47,6 +47,7 @@ interface PostOptions {
   type?:                 string
   push?:                 boolean   // commander inverts --no-push to push: false
   allowUnknownTargets?:  boolean
+  encrypt?:              boolean   // v0.8.0-alpha.5+ — encrypt body to recipients' age pubkeys
 }
 
 export function registerPostCommand(program: Command): void {
@@ -60,6 +61,7 @@ export function registerPostCommand(program: Command): void {
     .option('--type <type>',                         'message type: text (attachment-ref support lands in a later alpha)', 'text')
     .option('--no-push',                             'commit but do not push (leaves the commit local)')
     .option('--allow-unknown-targets',               'do not error when --to actors are missing from the registry')
+    .option('--encrypt',                             'encrypt body to each --to actor\'s age pubkey (v0.8+; requires recipients to have keys in manifest/{custom,framework}/keys/<actor>.pub)')
     .action(async (options: PostOptions) => {
       await runPost(options)
     })
@@ -110,12 +112,45 @@ async function runPost(opts: PostOptions): Promise<void> {
   const targetDir = join(config.transport, 'channels', channelGuid, datePath)
   const targetFile = join(targetDir, filename)
   const toField   = targets === 'all' ? 'all' : (targets as string[]).join(', ')
+
+  // v0.8.0-alpha.5+ encryption path
+  let body = opts.body
+  let encryptionFields: { encryption?: string; 'encrypted-to'?: string } = {}
+  if (opts.encrypt) {
+    if (targets === 'all') {
+      console.error(`✗ --encrypt with --to all is forbidden (encrypting to every actor defeats the privacy purpose).`)
+      console.error(`  Use --to <actor[,actor]> with specific targets instead.`)
+      process.exit(1)
+    }
+    const recipientNames = targets as string[]
+    const { loadActorRecipients } = await import('../../keys.js')
+    const recipientMap = loadActorRecipients(config.transport, recipientNames)
+    const missing = recipientNames.filter(n => !recipientMap.has(n))
+    if (missing.length === recipientNames.length) {
+      console.error(`✗ --encrypt: NO recipients have public keys in the transport.`)
+      console.error(`  Recipients without pubkey: ${missing.join(', ')}`)
+      console.error(`  Each recipient needs to run \`crosstalk actor key generate <name>\` and commit their .pub file to manifest/custom/keys/.`)
+      process.exit(1)
+    }
+    if (missing.length > 0) {
+      console.warn(`⚠ --encrypt: ${missing.length} recipient(s) without pubkey will see encrypted body but cannot decrypt: ${missing.join(', ')}`)
+    }
+    const recipients = [...recipientMap.values()]
+    const encryptedToNames = [...recipientMap.keys()]
+    const { encrypt, wrapForMessageBody } = await import('../../crypto.js')
+    const armored = await encrypt(opts.body, recipients)
+    body = wrapForMessageBody(armored).trimEnd()  // trim — composeMessage adds its own trailing \n
+    encryptionFields = { encryption: 'age', 'encrypted-to': encryptedToNames.join(', ') }
+    console.log(`✓ Encrypted to ${recipientMap.size} recipient(s): ${encryptedToNames.join(', ')}`)
+  }
+
   const messageContent = composeMessage({
     from,
     to:        toField,
     timestamp: now.toISOString(),
     type:      'text',
-    body:      opts.body,
+    body,
+    extraFrontmatter: encryptionFields,
   })
 
   // Atomic write — temp in same directory as target so rename never crosses fs
@@ -155,15 +190,23 @@ interface MessageInputs {
   timestamp: string
   type:      string
   body:      string
+  /** v0.8.0-alpha.5+ — extra frontmatter fields (e.g. encryption: age,
+   * encrypted-to: alice, bob) appended after the canonical four. Order
+   * preserved per-call; absent/empty when not encrypting. */
+  extraFrontmatter?: Record<string, string>
 }
 
 function composeMessage(m: MessageInputs): string {
+  const extraLines = m.extraFrontmatter
+    ? Object.entries(m.extraFrontmatter).map(([k, v]) => `${k}: ${v}`)
+    : []
   return [
     `---`,
     `from: ${m.from}`,
     `to: ${m.to}`,
     `timestamp: ${m.timestamp}`,
     `type: ${m.type}`,
+    ...extraLines,
     `---`,
     ``,
     m.body,
