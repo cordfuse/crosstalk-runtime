@@ -117,7 +117,7 @@ if (config.relay.mode === 'server') {
   // decay deadlock pattern per DEADLOCK.md; auto-tally handles
   // Parliamentary/Scrum/Casual proposals where vote-window expired
   // without a role-holder posting roe-vote-result.
-  const { startDecayChecker, startAutoTallyChecker } = await import('./governance.js');
+  const { startDecayChecker, startAutoTallyChecker, startEphemeralExpirationChecker } = await import('./governance.js');
   const decayChecker = startDecayChecker(
     config.transport,
     config.bootstrap.decayCheckIntervalMs,
@@ -125,6 +125,15 @@ if (config.relay.mode === 'server') {
     config.actorEmailSuffix,
   );
   const autoTallyChecker = startAutoTallyChecker(
+    config.transport,
+    config.bootstrap.decayCheckIntervalMs,
+    () => decision.should ? (decision.coordinatorActor ?? null) : null,
+    config.actorEmailSuffix,
+  );
+  // v0.8.0-alpha.1+ — auto-expire ephemerals past their expires-at (per
+  // EPHEMERAL.md). Independent of decay/auto-tally; ephemeral expiration
+  // is a separate semantic.
+  const ephemeralExpirationChecker = startEphemeralExpirationChecker(
     config.transport,
     config.bootstrap.decayCheckIntervalMs,
     () => decision.should ? (decision.coordinatorActor ?? null) : null,
@@ -191,6 +200,7 @@ if (config.relay.mode === 'server') {
     console.log('[crosstalk] shutting down');
     decayChecker.stop();
     autoTallyChecker.stop();
+    ephemeralExpirationChecker.stop();
     await announceOffline(config.transport);
     process.exit(0);
   };

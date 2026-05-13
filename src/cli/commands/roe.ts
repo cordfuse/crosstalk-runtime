@@ -168,6 +168,12 @@ function summariseGovernanceMessage(m: GovernanceMessage): string {
       return `yielding-to=${String(d['yielding-to'] ?? '?')}`
     case 'bootstrap-conflict':
       return `conflict=${(m.body.split('\n')[0] ?? '').slice(0, 50)}`
+    case 'ephemeral':
+      return `id=${String(d['ephemeral-id'] ?? '?')} encryption=${String(d.encryption ?? '?')} expires=${String(d['expires-at'] ?? 'never')}`
+    case 'ephemeral-consumed':
+      return `on=${String(d.on ?? '?')} consumed-by=${String(d['consumed-by'] ?? m.from)}`
+    case 'ephemeral-expired':
+      return `on=${String(d.on ?? '?')} expires-at-was=${String(d['expires-at-was'] ?? '?')}`
   }
 }
 

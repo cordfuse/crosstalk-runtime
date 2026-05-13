@@ -41,6 +41,10 @@ export const ROE_MESSAGE_TYPES = [
   'session-open',
   'session-open-deferred',
   'bootstrap-conflict',
+  // v0.8.0-alpha.1+ — ephemeral message types per EPHEMERAL.md
+  'ephemeral',
+  'ephemeral-consumed',
+  'ephemeral-expired',
 ] as const
 
 export type RoeMessageType = typeof ROE_MESSAGE_TYPES[number]
@@ -223,6 +227,64 @@ export function validateGovernance(
       } else if (!definitions.has(s)) {
         issues.push(issue('error', m, `references seconds:'${s}' but no proposal/motion with that id exists in channel history`))
       }
+    }
+
+    // Rule (v0.8+ EPHEMERAL.md): type: ephemeral must:
+    //   - have to: != 'all'
+    //   - have encryption: age
+    //   - have ephemeral-id
+    if (m.type === 'ephemeral') {
+      if (m.to === 'all' || m.to.toLowerCase() === 'all') {
+        issues.push(issue('error', m, `type: ephemeral with to: all is forbidden per EPHEMERAL.md (defeats the privacy purpose; encrypting to every actor is equivalent to no encryption). Use targeted to: alice, bob instead.`))
+      }
+      const enc = String(m.data.encryption ?? '')
+      if (enc !== 'age') {
+        issues.push(issue('error', m, `type: ephemeral requires 'encryption: age' per EPHEMERAL.md (plaintext ephemerals are nonsense — defeats the deletion-on-acknowledgment purpose). Got encryption='${enc}'.`))
+      }
+      const eid = m.data['ephemeral-id']
+      if (typeof eid !== 'string' || !eid.trim()) {
+        issues.push(issue('error', m, `type: ephemeral missing required 'ephemeral-id' per EPHEMERAL.md (kebab-case operator-chosen identifier; needed so ephemeral-consumed tombstones can reference it).`))
+      }
+    }
+
+    // Rule (v0.8+ EPHEMERAL.md): type: ephemeral-consumed must reference a live ephemeral-id
+    if (m.type === 'ephemeral-consumed') {
+      const onId = m.data.on
+      if (typeof onId !== 'string' || !onId.trim()) {
+        issues.push(issue('error', m, `type: ephemeral-consumed missing required 'on:' field (the ephemeral-id being acknowledged).`))
+      }
+      // Live-reference check happens in a second pass below — we need to know
+      // all ephemeral-ids in the channel first.
+    }
+  }
+
+  // Second pass for ephemeral-consumed liveness + duplicate detection.
+  // Doing this in a second pass means we have the complete ephemeral-id index
+  // regardless of message ordering (an ephemeral-consumed posted before the
+  // ephemeral itself is impossible per timestamps but the validator shouldn't
+  // depend on that).
+  const ephemeralIds = new Set<string>()
+  for (const m of messages) {
+    if (m.type === 'ephemeral') {
+      const id = String(m.data['ephemeral-id'] ?? '').trim()
+      if (id) ephemeralIds.add(id)
+    }
+  }
+  const consumedIds = new Map<string, GovernanceMessage>()
+  for (const m of messages) {
+    if (m.type !== 'ephemeral-consumed') continue
+    const onId = String(m.data.on ?? '').trim()
+    if (!onId) continue  // already errored above
+    if (!ephemeralIds.has(onId)) {
+      issues.push({ severity: 'error', path: m.path, type: m.type,
+        message: `references ephemeral-id:'${onId}' but no type: ephemeral with that id exists in channel history (orphan tombstone).` })
+    }
+    if (consumedIds.has(onId)) {
+      const first = consumedIds.get(onId)!
+      issues.push({ severity: 'warn', path: m.path, type: m.type,
+        message: `duplicate ephemeral-consumed for id '${onId}' (first occurrence: ${first.path}). Per EPHEMERAL.md: first tombstone wins; subsequent ones are no-ops.` })
+    } else {
+      consumedIds.set(onId, m)
     }
   }
 

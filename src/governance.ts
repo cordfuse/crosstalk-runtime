@@ -58,6 +58,10 @@ export const ROE_TYPE_SET: ReadonlySet<string> = new Set([
   'session-open',
   'session-open-deferred',
   'bootstrap-conflict',
+  // v0.8.0-alpha.1+ — ephemeral types per EPHEMERAL.md
+  'ephemeral',
+  'ephemeral-consumed',
+  'ephemeral-expired',
 ])
 
 export interface GovernanceMessage {
@@ -787,6 +791,128 @@ export function startAutoTallyChecker(
       }
     } catch (err) {
       console.error(`[governance] auto-tally checker error: ${err}`)
+    }
+  }, intervalMs)
+
+  return { stop: () => clearInterval(handle) }
+}
+
+// ── Ephemeral auto-expiration (v0.8.0-alpha.1+ per EPHEMERAL.md) ─────────
+
+/** Atomic write + commit + push of a `type: ephemeral-expired` tombstone. */
+export async function postEphemeralExpired(
+  transportRoot: string,
+  channelGuid: string,
+  fromActor: string,
+  ephemeralId: string,
+  expiresAt: string,
+  actorEmailSuffix: string,
+): Promise<void> {
+  const d = new Date()
+  const datePath = messageDatePath(d)
+  const fileName = messageFilename(d)
+  const iso = d.toISOString()
+
+  const body =
+    `---\n` +
+    `from: ${fromActor}\n` +
+    `to: all\n` +
+    `timestamp: ${iso}\n` +
+    `type: ephemeral-expired\n` +
+    `on: ${ephemeralId}\n` +
+    `expires-at-was: ${expiresAt}\n` +
+    `---\n\n` +
+    `Ephemeral expired without recipient acknowledgement. Auto-posted by runtime per EPHEMERAL.md auto-expiration semantics.\n`
+
+  const channelDir = join(transportRoot, 'channels', channelGuid, datePath)
+  await mkdir(channelDir, { recursive: true })
+  await writeFile(join(channelDir, fileName), body)
+
+  const relPath = `channels/${channelGuid}/${datePath}/${fileName}`
+  const gitEmail = `${fromActor}@${actorEmailSuffix}`
+  try {
+    await execFileP('git', ['-c', `user.name=${fromActor}`, '-c', `user.email=${gitEmail}`,
+      'add', relPath], { cwd: transportRoot })
+    await execFileP('git', ['-c', `user.name=${fromActor}`, '-c', `user.email=${gitEmail}`,
+      'commit', '-m', `ephemeral-expired: ${ephemeralId} (auto-tombstone)`], { cwd: transportRoot })
+    if (await hasRemote(transportRoot)) await pushWithRetry(transportRoot)
+  } catch (err) {
+    console.error(`[governance] failed to commit/push ephemeral-expired: ${err}`)
+    throw err
+  }
+}
+
+/** Start the periodic ephemeral-expiration checker. Walks every channel,
+ * finds `type: ephemeral` messages with `expires-at` past now AND no
+ * corresponding `ephemeral-consumed` AND no corresponding `ephemeral-
+ * expired` tombstone, then auto-posts `ephemeral-expired`.
+ *
+ * Coordinator-only (avoids cross-machine duplicates).
+ *
+ * Note: this checker is independent of the deadlock/auto-tally checkers.
+ * Ephemeral expiration is a separate semantic from time-decay deadlock
+ * resolution or vote-window-expiry tally — fires regardless of those. */
+export function startEphemeralExpirationChecker(
+  transportRoot: string,
+  intervalMs: number,
+  getCoordinator: () => string | null,
+  actorEmailSuffix: string,
+): DecayCheckerHandle {
+  const handle = setInterval(async () => {
+    try {
+      const coordinator = getCoordinator()
+      if (!coordinator) return  // we don't host coordinator → skip
+
+      const channelsDir = join(transportRoot, 'channels')
+      if (!existsSync(channelsDir)) return
+
+      let guids: string[] = []
+      try { guids = readdirSync(channelsDir) } catch { return }
+
+      const now = Date.now()
+      for (const guid of guids) {
+        if (guid.startsWith('.') || guid.startsWith('_')) continue
+        const channelDir = join(channelsDir, guid)
+        const messages = walkGovernanceMessages(channelDir)
+
+        // Build sets of consumed + already-expired ephemeral ids
+        const consumedIds = new Set<string>()
+        const expiredIds = new Set<string>()
+        for (const m of messages) {
+          if (m.type === 'ephemeral-consumed') {
+            const id = String(m.data.on ?? '').trim()
+            if (id) consumedIds.add(id)
+          }
+          if (m.type === 'ephemeral-expired') {
+            const id = String(m.data.on ?? '').trim()
+            if (id) expiredIds.add(id)
+          }
+        }
+
+        // Scan ephemerals for expiration candidates
+        for (const m of messages) {
+          if (m.type !== 'ephemeral') continue
+          const id = String(m.data['ephemeral-id'] ?? '').trim()
+          if (!id) continue
+          if (consumedIds.has(id) || expiredIds.has(id)) continue  // already terminal-stated
+
+          const expiresAt = String(m.data['expires-at'] ?? '').trim()
+          if (!expiresAt) continue  // no expiration set — ephemeral lives until consumed
+
+          const expiresAtMs = Date.parse(expiresAt)
+          if (!Number.isFinite(expiresAtMs)) continue
+          if (now < expiresAtMs) continue  // not yet expired
+
+          try {
+            await postEphemeralExpired(transportRoot, guid, coordinator, id, expiresAt, actorEmailSuffix)
+            console.log(`[governance] ephemeral-expired auto-posted ${guid.slice(0, 8)}/${id} (expires-at was ${expiresAt})`)
+          } catch (err) {
+            console.error(`[governance] failed to auto-expire ephemeral ${guid.slice(0, 8)}/${id}: ${err}`)
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`[governance] ephemeral-expiration checker error: ${err}`)
     }
   }, intervalMs)
 
