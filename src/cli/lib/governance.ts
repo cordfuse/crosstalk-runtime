@@ -22,7 +22,7 @@
  * file; alpha.5+ refinement.
  */
 import type { RenderedMessage } from './channel.js'
-import type { TemplateConfig } from '../../templates.js'
+import type { TemplateConfig, EncryptionMode } from '../../templates.js'
 
 export const ROE_MESSAGE_TYPES = [
   'roe-amendment-proposal',
@@ -288,6 +288,72 @@ export function validateGovernance(
     }
   }
 
+  return issues
+}
+
+// ── Encryption-mode enforcement (v0.8.0-alpha.6+) ────────────────────────
+
+/** System + governance message types that are ALWAYS plaintext per PRIVACY.md
+ * regardless of encryption-mode. Auditability of these is load-bearing for
+ * operators verifying governance happened correctly. */
+const ALWAYS_PLAINTEXT_TYPES: ReadonlySet<string> = new Set([
+  'system',
+  // All ROE governance + bootstrap + ephemeral-tombstone types are plaintext;
+  // only the ephemeral message ITSELF is encrypted (handled by separate ephemeral
+  // wire-format rules in validateGovernance above).
+  'session-open',
+  'session-open-deferred',
+  'bootstrap-conflict',
+  'roe-amendment-proposal',
+  'roe-second',
+  'roe-motion',
+  'roe-vote',
+  'roe-vote-open',
+  'roe-vote-close',
+  'roe-vote-result',
+  'roe-ratified',
+  'roe-amendment-notice',
+  'roe-monarch-transfer',
+  'roe-conductor-transfer',
+  'roe-speaker-handoff',
+  'roe-deadlock-resolution',
+  'ephemeral-consumed',
+  'ephemeral-expired',
+])
+
+/** Validate channel messages against the ROE's `encryption-mode:` policy.
+ *
+ * Rules applied:
+ * - `none`: no checks (encryption not permitted, but if operator posted
+ *   an encrypted message, it's not actively rejected — it just lives there)
+ * - `optional`: no checks (operator chooses per-message)
+ * - `required`: work messages MUST have `encryption: age`; plaintext
+ *   work messages → ERROR. System + governance + ephemeral-tombstone types
+ *   bypass this rule (always plaintext per PRIVACY.md).
+ *
+ * Takes the FULL channel message stream (not just governance) since
+ * encryption-mode applies to all message types. Returns ValidationIssues
+ * for any violations.
+ */
+export function validateEncryptionMode(
+  messages: RenderedMessage[],
+  mode: EncryptionMode,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = []
+  if (mode !== 'required') return issues
+
+  for (const m of messages) {
+    if (ALWAYS_PLAINTEXT_TYPES.has(m.type)) continue
+    const enc = String(m.data.encryption ?? '')
+    if (enc === 'age') continue  // properly encrypted, OK
+
+    issues.push({
+      severity: 'error',
+      path: m.path,
+      type: m.type,
+      message: `encryption-mode is 'required' per active ROE, but this work message has no \`encryption: age\` frontmatter. Plaintext work messages are forbidden under required mode (system + governance + ephemeral-tombstone types are exempt; this is type='${m.type}').`,
+    })
+  }
   return issues
 }
 

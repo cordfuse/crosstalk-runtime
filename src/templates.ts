@@ -195,3 +195,19 @@ function matchAmendmentThreshold(content: string): 'simple-majority' | 'two-thir
 function escapeKey(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
+
+// ── Encryption mode (v0.8.0-alpha.6+) ────────────────────────────────────
+
+export type EncryptionMode = 'none' | 'optional' | 'required'
+
+/** Read the active ROE for the `encryption-mode:` field per PRIVACY.md.
+ * Returns 'none' (default — no encryption permitted) if the field is
+ * absent or invalid. Generic ROE field (not template-specific) so it
+ * lives here next to the template-config parsing. */
+export function loadEncryptionMode(transportRoot: string): EncryptionMode {
+  const content = readActiveROE(transportRoot)
+  if (!content) return 'none'
+  const v = matchString(content, 'encryption-mode')
+  if (v === 'optional' || v === 'required' || v === 'none') return v
+  return 'none'
+}

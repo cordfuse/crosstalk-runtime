@@ -231,14 +231,22 @@ async function runRoeValidate(opts: RoeValidateOptions): Promise<void> {
   // catch "from: someone-not-in-the-swarm" votes/proposals.
   const registry = new Set<string>(scanAllLayers(config.transport).map(e => e.name))
 
-  // Load the active template config (alpha.6+). Enables per-template
+  // Load the active template config (v0.7.0-alpha.6+). Enables per-template
   // semantic enforcement in the validator (Parliamentary member-only
   // voting, etc.). Null when no template detected → permissive validator.
-  const { loadTemplateConfig } = await import('../../templates.js')
+  const { loadTemplateConfig, loadEncryptionMode } = await import('../../templates.js')
   const templateConfig = loadTemplateConfig(config.transport)
   if (templateConfig) {
     console.log(`(active template: ${templateConfig.template})`)
   }
+
+  // Load encryption mode (v0.8.0-alpha.6+). 'required' triggers plaintext-
+  // work-message rejection across the channel.
+  const encryptionMode = loadEncryptionMode(config.transport)
+  if (encryptionMode !== 'none') {
+    console.log(`(encryption-mode: ${encryptionMode})`)
+  }
+  const { validateEncryptionMode } = await import('../lib/governance.js')
 
   interface Result {
     channel:     string
@@ -256,7 +264,9 @@ async function runRoeValidate(opts: RoeValidateOptions): Promise<void> {
     const channelDir = join(config.transport, 'channels', t.guid)
     const all = readChannelMessages(channelDir)
     const gov = filterGovernanceMessages(all)
-    const issues = validateGovernance(gov, registry, templateConfig)
+    const govIssues = validateGovernance(gov, registry, templateConfig)
+    const encIssues = validateEncryptionMode(all, encryptionMode)
+    const issues = [...govIssues, ...encIssues]
     results.push({ channel: t.name, channelGuid: t.guid, issues, governanceCount: gov.length })
     totalGov += gov.length
     for (const i of issues) {
