@@ -109,6 +109,15 @@ export function startWatcher(
         // for this channel or on the next startup scan.
         return;
       }
+      if (state === 'conflict' && type.startsWith('roe-')) {
+        // 'conflict' state per BOOTSTRAP.md: "actors can post ordinary messages
+        // (work continues) but no governance operations." Work messages pass;
+        // only roe-* governance messages defer until a human posts a new
+        // session-open (which clears the conflict). Same cursor-non-advance
+        // semantics as deferred.
+        console.log(`[watcher] defer (bootstrap-conflict, governance only) ${guid.slice(0, 8)}/${relPath} (type=${type})`);
+        return;
+      }
     }
 
     const targets = to === 'all'
