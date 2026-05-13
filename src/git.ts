@@ -42,7 +42,7 @@ function getRemoteUrl(repoPath: string): Promise<string | null> {
   });
 }
 
-async function hasRemote(repoPath: string): Promise<boolean> {
+export async function hasRemote(repoPath: string): Promise<boolean> {
   return (await getRemoteUrl(repoPath)) !== null;
 }
 

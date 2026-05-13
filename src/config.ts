@@ -19,6 +19,20 @@ export interface AgentSpawn {
   spawn: string[];
 }
 
+export interface BootstrapConfig {
+  /** Bootstrap timeout in ms — if no `session-open` lands within this window
+   * after a session-boundary, the watcher logs + treats the channel as
+   * 'open' (degraded mode). Per BOOTSTRAP.md "Coordinator crashes mid-
+   * bootstrap" edge case (default 5 min). */
+  timeoutMs: number;
+  /** When the daemon's startup-scan determines no coordinator exists in our
+   * registry AND the active ROE doesn't designate one for another machine
+   * to take, defer dispatch (true) or operate without bootstrap
+   * synchronisation (false, default — degrades to current pre-alpha.2
+   * behaviour for transports that don't use governance). */
+  deferOnNoCoordinator: boolean;
+}
+
 export interface Config {
   transport: string;
   actorEmailSuffix: string;
@@ -33,6 +47,9 @@ export interface Config {
    * defaults (claude/gemini/codex/qwen/opencode) at use site — operator
    * entries win on name collision, and operator-only names extend the map. */
   agents: Record<string, AgentSpawn>;
+  /** Bootstrap Coordinator settings (v0.7.0-alpha.2+). Loaded from the
+   * optional `[bootstrap]` table in config.toml. */
+  bootstrap: BootstrapConfig;
 }
 
 const DEFAULTS = {
@@ -43,6 +60,10 @@ const DEFAULTS = {
     url: 'wss://relay.crosstalk.sh',
     secret: '',
     port: 3003,
+  },
+  bootstrap: {
+    timeoutMs: 300_000,         // 5 min per BOOTSTRAP.md
+    deferOnNoCoordinator: false, // safe default — no governance = no gating
   },
 };
 
@@ -68,6 +89,7 @@ export async function loadConfig(): Promise<Config> {
         ...(process.env.WEBHOOK_SECRET ? { webhookSecret: process.env.WEBHOOK_SECRET } : {}),
       },
       agents: {},
+      bootstrap: { ...DEFAULTS.bootstrap },
     };
   }
 
@@ -140,5 +162,17 @@ export async function loadConfig(): Promise<Config> {
     }
   }
 
-  return { transport, actorEmailSuffix, defaultHeartbeatInterval, defaultHumanActor, relay, agents };
+  // [bootstrap] table — optional. Operators who don't use governance can
+  // omit it entirely; defaults preserve pre-v0.7.0-alpha.2 behaviour.
+  const bootstrapTable = (data.bootstrap ?? {}) as Record<string, unknown>;
+  const bootstrap: BootstrapConfig = {
+    timeoutMs: typeof bootstrapTable['timeout-ms'] === 'number'
+      ? bootstrapTable['timeout-ms'] as number
+      : DEFAULTS.bootstrap.timeoutMs,
+    deferOnNoCoordinator: typeof bootstrapTable['defer-on-no-coordinator'] === 'boolean'
+      ? bootstrapTable['defer-on-no-coordinator'] as boolean
+      : DEFAULTS.bootstrap.deferOnNoCoordinator,
+  };
+
+  return { transport, actorEmailSuffix, defaultHeartbeatInterval, defaultHumanActor, relay, agents, bootstrap };
 }
