@@ -1,12 +1,89 @@
 import { join } from 'path';
 import { homedir } from 'os';
-import { mkdir, readFile, writeFile } from 'fs/promises';
-import { readdir } from 'fs/promises';
+import { existsSync } from 'fs';
+import { mkdir, readFile, readdir, writeFile, stat } from 'fs/promises';
 
 const SESSIONS_DIR = join(homedir(), '.crosstalk', 'sessions');
 
 function cursorPath(sessionId: string, channelGuid: string): string {
   return join(SESSIONS_DIR, sessionId, 'cursors', channelGuid);
+}
+
+/** Migrate cursors from legacy session directories into the current
+ * `machineId` directory on first run.
+ *
+ * Background: the daemon historically keyed cursor files under a per-boot
+ * SESSION_ID (UUID). At some point the key switched to MACHINE_ID
+ * (`sha256(hostname).slice(0,16)`) for cursor persistence across restarts.
+ * Operators upgrading past that change find their MACHINE_ID directory
+ * empty and the daemon re-dispatches every channel's full history on
+ * first run — a real bug surfaced in v0.7.0-alpha.2 UAT on cachy where
+ * an unrelated demo channel re-dispatched 51 messages before being killed.
+ *
+ * This migration runs once per machineId. If the machineId cursor dir
+ * already has cursors (steady-state operation), it's a no-op. If empty
+ * (first run after upgrade, OR genuinely fresh install with no prior
+ * sessions), it walks every other session directory and copies forward
+ * the lexicographically-max cursor value per channel-guid — which equals
+ * the chronologically-latest cursor since the relPath format is
+ * `YYYY/MM/DD/HHMMSSsssZ[-uuid].md`.
+ *
+ * Genuinely fresh installs (no prior sessions at all) see no migration —
+ * the function silently finds nothing to copy. So this is safe to invoke
+ * unconditionally at daemon startup.
+ */
+export async function migrateCursorsIfNeeded(machineId: string): Promise<void> {
+  const targetCursorsDir = join(SESSIONS_DIR, machineId, 'cursors');
+
+  // Already have cursors in the machineId dir → migration already happened (or
+  // operator already running steady-state). Skip.
+  if (existsSync(targetCursorsDir)) {
+    let existing: string[] = [];
+    try { existing = await readdir(targetCursorsDir); } catch { /* keep empty */ }
+    if (existing.length > 0) return;
+  }
+
+  // SESSIONS_DIR may not exist yet on a truly fresh install
+  if (!existsSync(SESSIONS_DIR)) return;
+
+  let sessionDirs: string[] = [];
+  try { sessionDirs = await readdir(SESSIONS_DIR); } catch { return; }
+
+  // Build channelGuid → max-cursor-value across all non-machineId session dirs
+  const maxCursorByChannel = new Map<string, string>();
+
+  for (const sid of sessionDirs) {
+    if (sid === machineId) continue;  // skip our own dir
+    const sourceCursorsDir = join(SESSIONS_DIR, sid, 'cursors');
+    let entries: string[] = [];
+    try {
+      const st = await stat(sourceCursorsDir);
+      if (!st.isDirectory()) continue;
+      entries = await readdir(sourceCursorsDir);
+    } catch { continue; }
+
+    for (const channelGuid of entries) {
+      let value: string;
+      try {
+        value = (await readFile(join(sourceCursorsDir, channelGuid), 'utf8')).trim();
+      } catch { continue; }
+      if (!value) continue;
+      const existing = maxCursorByChannel.get(channelGuid);
+      if (!existing || value > existing) {
+        maxCursorByChannel.set(channelGuid, value);
+      }
+    }
+  }
+
+  if (maxCursorByChannel.size === 0) return;
+
+  // Write the migrated cursors
+  await mkdir(targetCursorsDir, { recursive: true });
+  for (const [channelGuid, value] of maxCursorByChannel) {
+    await writeFile(join(targetCursorsDir, channelGuid), value);
+  }
+
+  console.log(`[cursor] migrated ${maxCursorByChannel.size} cursor(s) from legacy session dirs to machineId=${machineId} on first run`);
 }
 
 export async function readCursor(sessionId: string, channelGuid: string): Promise<string | null> {
