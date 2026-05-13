@@ -35,6 +35,7 @@ import { spawnSync } from 'node:child_process'
 import type { Command } from 'commander'
 
 import { loadConfig } from '../../config.js'
+import { messageDatePath, messageFilename } from '../../filenames.js'
 import { loadRegistry } from '../../registry.js'
 import { resolveChannel } from '../lib/channel.js'
 
@@ -104,8 +105,8 @@ async function runPost(opts: PostOptions): Promise<void> {
 
   // Compose message
   const now = new Date()
-  const filename  = formatTimestampFilename(now)
-  const datePath  = formatDatePath(now)
+  const filename  = messageFilename(now)
+  const datePath  = messageDatePath(now)
   const targetDir = join(config.transport, 'channels', channelGuid, datePath)
   const targetFile = join(targetDir, filename)
   const toField   = targets === 'all' ? 'all' : (targets as string[]).join(', ')
@@ -145,20 +146,8 @@ async function runPost(opts: PostOptions): Promise<void> {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-function formatTimestampFilename(d: Date): string {
-  const hh = String(d.getUTCHours()).padStart(2, '0')
-  const mm = String(d.getUTCMinutes()).padStart(2, '0')
-  const ss = String(d.getUTCSeconds()).padStart(2, '0')
-  const ms = String(d.getUTCMilliseconds()).padStart(3, '0')
-  return `${hh}${mm}${ss}${ms}Z.md`
-}
-
-function formatDatePath(d: Date): string {
-  const yyyy = d.getUTCFullYear()
-  const mm   = String(d.getUTCMonth() + 1).padStart(2, '0')
-  const dd   = String(d.getUTCDate()).padStart(2, '0')
-  return `${yyyy}/${mm}/${dd}`
-}
+// Filename + datePath helpers extracted to src/filenames.ts in v0.7.x
+// scaffolding pass — see `messageFilename` / `messageDatePath` import.
 
 interface MessageInputs {
   from:      string

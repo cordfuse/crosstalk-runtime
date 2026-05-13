@@ -2,6 +2,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import { spawn } from 'child_process';
+import { messageFilename, messageDatePath } from './filenames.js';
 
 const ACTOR_CLONES_DIR = join(homedir(), '.crosstalk', 'actor-clones');
 
@@ -151,9 +152,8 @@ export async function writeResponseMessage(
   model?: string,
 ): Promise<void> {
   const now = new Date();
-  const p = (n: number, l = 2) => String(n).padStart(l, '0');
-  const datePath = `${now.getUTCFullYear()}/${p(now.getUTCMonth() + 1)}/${p(now.getUTCDate())}`;
-  const filename = `${p(now.getUTCHours())}${p(now.getUTCMinutes())}${p(now.getUTCSeconds())}${p(now.getUTCMilliseconds(), 3)}Z.md`;
+  const datePath = messageDatePath(now);
+  const filename = messageFilename(now);
   const dir = join(repoPath, 'channels', channelGuid, datePath);
   await mkdir(dir, { recursive: true });
 

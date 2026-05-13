@@ -4,13 +4,14 @@ import { join } from 'path';
 import { parseFrontmatter } from './frontmatter.js';
 import { dispatch, isDuplicate } from './dispatch.js';
 import { readCursor, listMessages, messagesAfterCursor } from './cursor.js';
+import { MESSAGE_PATH_RE } from './filenames.js';
 import type { Registry } from './registry.js';
 import {
   ALWAYS_PASS_TYPES, CACHE_INVALIDATING_TYPES, type BootstrapStateCache,
 } from './bootstrap.js';
 
-// Matches: YYYY/MM/DD/HHMMSSsssZ.md
-const MESSAGE_RE = /^\d{4}\/\d{2}\/\d{2}\/\d{9}Z\.md$/;
+// Matches: YYYY/MM/DD/HHMMSSsssZ.md (legacy) or YYYY/MM/DD/HHMMSSsssZ-<hex8>.md (v0.7.x+)
+const MESSAGE_RE = MESSAGE_PATH_RE;
 
 export function startWatcher(
   transportRoot: string,

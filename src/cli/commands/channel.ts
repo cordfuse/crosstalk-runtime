@@ -17,6 +17,7 @@ import { spawnSync } from 'node:child_process'
 import type { Command } from 'commander'
 
 import { loadConfig } from '../../config.js'
+import { messageDatePath, messageFilename } from '../../filenames.js'
 import { parseFrontmatter } from '../../frontmatter.js'
 import { listChannels, resolveChannel, formatRelativeTime, readChannelMessages, printMessage } from '../lib/channel.js'
 import { registerChannelJoin } from './channel-join.js'
@@ -102,8 +103,8 @@ async function runChannelNew(topic: string, opts: ChannelNewOptions): Promise<vo
   // Optional first message
   let firstMessageRel: string | null = null
   if (opts.firstMessage) {
-    const filename  = formatTimestampFilename(now)
-    const datePath  = formatDatePath(now)
+    const filename  = messageFilename(now)
+    const datePath  = messageDatePath(now)
     const targetDir = join(channelDir, datePath)
     mkdirSync(targetDir, { recursive: true })
     const targetFile = join(targetDir, filename)
@@ -310,20 +311,8 @@ function globMatch(name: string, pattern: string): boolean {
   return re.test(name)
 }
 
-function formatTimestampFilename(d: Date): string {
-  const hh = String(d.getUTCHours()).padStart(2, '0')
-  const mm = String(d.getUTCMinutes()).padStart(2, '0')
-  const ss = String(d.getUTCSeconds()).padStart(2, '0')
-  const ms = String(d.getUTCMilliseconds()).padStart(3, '0')
-  return `${hh}${mm}${ss}${ms}Z.md`
-}
-
-function formatDatePath(d: Date): string {
-  const yyyy = d.getUTCFullYear()
-  const mm   = String(d.getUTCMonth() + 1).padStart(2, '0')
-  const dd   = String(d.getUTCDate()).padStart(2, '0')
-  return `${yyyy}/${mm}/${dd}`
-}
+// Filename + datePath helpers extracted to src/filenames.ts in v0.7.x
+// scaffolding pass — see `messageFilename` / `messageDatePath` import.
 
 function composeMessage(m: { from: string; to: string; timestamp: string; type: string; body: string }): string {
   return [
