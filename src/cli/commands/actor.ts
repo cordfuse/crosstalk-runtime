@@ -30,10 +30,11 @@ import { scanActorLayer, scanAllLayers, type ActorEntry, type ActorLayer } from 
 export function registerActorCommand(program: Command): void {
   const actor = program
     .command('actor')
-    .description('inspect and validate actor profiles (subcommands: list, validate)')
+    .description('inspect and validate actor profiles + manage age keypairs (subcommands: list, validate, key)')
 
   registerActorList(actor)
   registerActorValidate(actor)
+  registerActorKey(actor)
 }
 
 // ── actor list ──────────────────────────────────────────────────────────
@@ -291,6 +292,100 @@ function validateActor(e: ActorEntry, registry: Map<string, ActorEntry>): Valida
   }
 
   return out
+}
+
+// ── actor key (v0.8.0-alpha.3+) ─────────────────────────────────────────
+
+interface ActorKeyGenerateOptions {
+  rotate?: boolean
+  print?:  boolean
+}
+
+function registerActorKey(parent: Command): void {
+  const key = parent
+    .command('key')
+    .description('manage per-actor age keypairs (subcommands: generate)')
+
+  key
+    .command('generate [name]')
+    .description('generate a new age keypair for an actor; writes ~/.crosstalk/keys/<name>.{key,pub}')
+    .option('--rotate', 'archive existing private key before generating new one (required if keypair already exists)')
+    .option('--print',  'print the new public key to stdout after generating (so operators can copy it to the transport)')
+    .action(async (name: string | undefined, opts: ActorKeyGenerateOptions) => {
+      await runActorKeyGenerate(name, opts)
+    })
+}
+
+async function runActorKeyGenerate(name: string | undefined, opts: ActorKeyGenerateOptions): Promise<void> {
+  // Resolve actor name: arg > config.defaultHumanActor > error
+  const { loadConfig } = await import('../../config.js')
+  const config = await loadConfig()
+  const actorName = name ?? config.defaultHumanActor
+  if (!actorName) {
+    console.error('✗ No actor name provided and no `default-human-actor` set in ~/.crosstalk/config.toml')
+    console.error('  Usage: crosstalk actor key generate <name> [--rotate] [--print]')
+    process.exit(1)
+  }
+  if (!/^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.test(actorName)) {
+    console.error(`✗ Actor name '${actorName}' is not kebab-case (must match /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/)`)
+    process.exit(1)
+  }
+
+  const { homedir } = await import('os')
+  const { join } = await import('path')
+  const { existsSync, mkdirSync, writeFileSync, renameSync, readFileSync, chmodSync } = await import('fs')
+
+  const keysDir    = join(homedir(), '.crosstalk', 'keys')
+  const archiveDir = join(keysDir, 'archive')
+  const privPath   = join(keysDir, `${actorName}.key`)
+  const pubPath    = join(keysDir, `${actorName}.pub`)
+
+  // Existing keypair guard
+  const privExists = existsSync(privPath)
+  const pubExists  = existsSync(pubPath)
+  if ((privExists || pubExists) && !opts.rotate) {
+    console.error(`✗ Keypair already exists for '${actorName}':`)
+    if (privExists) console.error(`    ${privPath}`)
+    if (pubExists)  console.error(`    ${pubPath}`)
+    console.error(`  Pass --rotate to archive the existing private key + generate a fresh keypair.`)
+    process.exit(1)
+  }
+
+  // Rotate path: archive existing private key (NOT the public — pubkey rotates publicly via transport git history)
+  if (opts.rotate && privExists) {
+    mkdirSync(archiveDir, { recursive: true })
+    chmodSync(archiveDir, 0o700)
+    const iso = new Date().toISOString().replace(/[:.]/g, '-')
+    const archivedPath = join(archiveDir, `${actorName}-${iso}.key`)
+    renameSync(privPath, archivedPath)
+    chmodSync(archivedPath, 0o600)
+    console.log(`✓ Archived old private key → ${archivedPath}`)
+  }
+
+  // Generate fresh keypair
+  const { generateKeypair } = await import('../../crypto.js')
+  const { recipient, identity } = await generateKeypair()
+
+  // Write new keypair
+  mkdirSync(keysDir, { recursive: true })
+  chmodSync(keysDir, 0o700)
+  writeFileSync(privPath, identity + '\n', { mode: 0o600 })
+  chmodSync(privPath, 0o600)  // belt-and-suspenders; some umasks override mode arg
+  writeFileSync(pubPath, recipient + '\n', { mode: 0o644 })
+
+  console.log(`✓ Generated keypair for '${actorName}':`)
+  console.log(`    private: ${privPath}`)
+  console.log(`    public:  ${pubPath}`)
+  console.log(``)
+  console.log(`Next step: copy the public key into the transport so other actors can encrypt to you.`)
+  console.log(`  cp ${pubPath} <transport>/manifest/custom/keys/${actorName}.pub`)
+  console.log(`  cd <transport> && git add manifest/custom/keys/${actorName}.pub && git commit -m 'keys: add ${actorName} pubkey' && git push`)
+
+  if (opts.print) {
+    console.log(``)
+    console.log(`Public key (for copy-paste):`)
+    console.log(readFileSync(pubPath, 'utf-8').trim())
+  }
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────
