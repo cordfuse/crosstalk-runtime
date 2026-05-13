@@ -4,6 +4,7 @@ import { hostname } from 'os';
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { commitWatcherMessage } from './git.js';
+import { messageDatePath, messageFilename } from './filenames.js';
 
 // Per-boot UUID — used in announcements to identify this specific startup
 export const SESSION_ID = randomUUID();
@@ -16,10 +17,9 @@ const MACHINE_HASH = MACHINE_ID.slice(0, 8);
 
 function nowParts() {
   const d = new Date();
-  const p = (n: number, l = 2) => String(n).padStart(l, '0');
   return {
-    date: `${d.getUTCFullYear()}/${p(d.getUTCMonth() + 1)}/${p(d.getUTCDate())}`,
-    file: `${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}${p(d.getUTCMilliseconds(), 3)}Z.md`,
+    date: messageDatePath(d),
+    file: messageFilename(d),
     iso: d.toISOString(),
   };
 }

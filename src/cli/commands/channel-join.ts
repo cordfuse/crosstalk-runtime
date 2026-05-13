@@ -47,6 +47,7 @@ import type { Command } from 'commander'
 
 import { loadConfig } from '../../config.js'
 import { pushWithRetry } from '../../git.js'
+import { messageDatePath, messageFilename } from '../../filenames.js'
 import { scanAllLayers } from '../lib/actors.js'
 import { resolveChannel, readChannelMessages, printMessage } from '../lib/channel.js'
 
@@ -438,8 +439,8 @@ interface PostSystemArgs {
  * (probably alpha.5 when watcher integration shares the same path). */
 async function postSystemMessage(args: PostSystemArgs): Promise<boolean> {
   const now       = new Date()
-  const filename  = formatTimestampFilename(now)
-  const datePath  = formatDatePath(now)
+  const filename  = messageFilename(now)
+  const datePath  = messageDatePath(now)
   const targetDir = join(args.transport, 'channels', args.channelGuid, datePath)
   const targetFile = join(targetDir, filename)
 
@@ -483,20 +484,10 @@ async function postSystemMessage(args: PostSystemArgs): Promise<boolean> {
   return true
 }
 
-function formatTimestampFilename(d: Date): string {
-  const hh = String(d.getUTCHours()).padStart(2, '0')
-  const mm = String(d.getUTCMinutes()).padStart(2, '0')
-  const ss = String(d.getUTCSeconds()).padStart(2, '0')
-  const ms = String(d.getUTCMilliseconds()).padStart(3, '0')
-  return `${hh}${mm}${ss}${ms}Z.md`
-}
-
-function formatDatePath(d: Date): string {
-  const yyyy = d.getUTCFullYear()
-  const mm   = String(d.getUTCMonth() + 1).padStart(2, '0')
-  const dd   = String(d.getUTCDate()).padStart(2, '0')
-  return `${yyyy}/${mm}/${dd}`
-}
+// Filename + datePath helpers extracted to src/filenames.ts in v0.7.x
+// scaffolding pass (PLAN.md "Message files" section adds the per-message
+// UUID tag for collision resistance). Import via `messageFilename` and
+// `messageDatePath` from there.
 
 function gitCmd(cwd: string, args: string[]): boolean {
   const result = spawnSync('git', args, { cwd, stdio: 'inherit' })

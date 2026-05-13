@@ -11,9 +11,11 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseFrontmatter } from '../../frontmatter.js'
+import { MESSAGE_FILE_RE } from '../../filenames.js'
 
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const MESSAGE_FILE = /^\d{9}Z\.md$/   // HHMMSSsssZ.md
+// Accepts both legacy HHMMSSsssZ.md and v0.7.x+ tagged HHMMSSsssZ-<hex8>.md
+const MESSAGE_FILE = MESSAGE_FILE_RE
 const DATE_DIR     = /^\d{2}$/        // MM or DD
 const YEAR_DIR     = /^\d{4}$/
 
@@ -179,7 +181,8 @@ export function readChannelMessages(channelDir: string): RenderedMessage[] {
   const out: RenderedMessage[] = []
   const YEAR = /^\d{4}$/
   const DD   = /^\d{2}$/
-  const MSG  = /^\d{9}Z\.md$/
+  // Accepts both legacy HHMMSSsssZ.md and v0.7.x+ tagged HHMMSSsssZ-<hex8>.md
+  const MSG  = MESSAGE_FILE_RE
 
   let years: string[] = []
   try { years = readdirSync(channelDir).filter(e => YEAR.test(e)).sort() } catch { return out }

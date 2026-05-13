@@ -66,6 +66,7 @@ import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { parseFrontmatter } from './frontmatter.js'
 import { hasRemote, pushWithRetry } from './git.js'
+import { MESSAGE_FILE_RE, messageDatePath, messageFilename } from './filenames.js'
 import type { Registry } from './registry.js'
 import { MACHINE_ID } from './system.js'
 
@@ -73,7 +74,8 @@ const execFileP = promisify(execFile)
 
 const YEAR_RE = /^\d{4}$/
 const DD_RE = /^\d{2}$/
-const MSG_RE = /^\d{9}Z\.md$/
+// Accepts both legacy HHMMSSsssZ.md + v0.7.x+ tagged HHMMSSsssZ-<hex8>.md
+const MSG_RE = MESSAGE_FILE_RE
 
 // ── State + types ─────────────────────────────────────────────────────────
 
@@ -460,9 +462,8 @@ export async function postSessionOpen(
   actorEmailSuffix: string,
 ): Promise<void> {
   const d = new Date()
-  const p = (n: number, l = 2) => String(n).padStart(l, '0')
-  const datePath = `${d.getUTCFullYear()}/${p(d.getUTCMonth() + 1)}/${p(d.getUTCDate())}`
-  const fileName = `${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}${p(d.getUTCMilliseconds(), 3)}Z.md`
+  const datePath = messageDatePath(d)
+  const fileName = messageFilename(d)
   const iso = d.toISOString()
 
   const sessionId = `${MACHINE_ID}-${iso}`
