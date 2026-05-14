@@ -318,26 +318,42 @@ async function decryptForDisplay(m: import('../lib/channel.js').RenderedMessage,
 
 // ── channel tail ────────────────────────────────────────────────────────
 
+interface ChannelTailOptions {
+  backfill?: string
+  as?:   string  // v0.8.1+ — actor identity to use for decryption
+  /** v0.8.1+ — commander inverts --no-decrypt to decrypt: false.
+   * Default true (decryption attempted with --as identity). */
+  decrypt?: boolean
+}
+
 function registerChannelTail(parent: Command): void {
   parent
     .command('tail <name-or-guid>')
-    .description('follow a channel in real time — prints new messages as they arrive')
+    .description('follow a channel in real time — prints new messages as they arrive (v0.8.1+: encrypted bodies decrypted with --as identity)')
     .option('--backfill <n>', 'print last N messages before tailing (default 10)')
-    .action(async (query: string, opts: { backfill?: string }) => {
+    .option('--as <actor>',   'identity to attempt decryption with (defaults to default-human-actor in config; v0.8.1+)')
+    .option('--no-decrypt',   'show encrypted bodies as opaque ciphertext (default: attempt decrypt with --as identity; v0.8.1+)')
+    .action(async (query: string, opts: ChannelTailOptions) => {
       await runChannelTail(query, opts)
     })
 }
 
-async function runChannelTail(query: string, opts: { backfill?: string }): Promise<void> {
+async function runChannelTail(query: string, opts: ChannelTailOptions): Promise<void> {
   const config = await loadConfig()
   const guid = resolveChannel(config.transport, query)
   const channelDir = join(config.transport, 'channels', guid)
+
+  // v0.8.1+ decrypt-on-read setup. opts.decrypt defaults to true; --no-decrypt sets it to false.
+  const shouldDecrypt = opts.decrypt !== false
+  const asActor = shouldDecrypt ? (opts.as ?? config.defaultHumanActor ?? '') : ''
+  const maybeDecrypt = async (m: import('../lib/channel.js').RenderedMessage) =>
+    shouldDecrypt ? await decryptForDisplay(m, asActor) : m
 
   // Backfill
   const backfillN = opts.backfill ? parseInt(opts.backfill, 10) : 10
   const existing = readChannelMessages(channelDir)
   const backfill = backfillN > 0 ? existing.slice(-backfillN) : []
-  for (const m of backfill) printMessage(m)
+  for (const m of backfill) printMessage(await maybeDecrypt(m))
   if (backfill.length > 0) console.log(`── tailing channel (${backfill.length} backfilled, Ctrl-C to stop) ──\n`)
   else                     console.log(`── tailing channel (no messages yet, Ctrl-C to stop) ──\n`)
 
@@ -356,7 +372,7 @@ async function runChannelTail(query: string, opts: { backfill?: string }): Promi
     for (const m of current) {
       if (seen.has(m.path)) continue
       seen.add(m.path)
-      printMessage(m)
+      printMessage(await maybeDecrypt(m))
     }
   }
 }
