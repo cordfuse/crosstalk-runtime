@@ -32,7 +32,7 @@ Bundled into v0.9.0-alpha.1. Used `--as <actor>` flag (which channel-join alread
 - [x] PTY-mode decrypt-on-read for channel-join — **shipped v0.9.0-alpha.1**
 - [x] post --to <human> registry filter fix — **shipped v0.9.0-alpha.1**
 - [x] relay mode = "disabled" — **shipped v0.9.0-alpha.1**
-- [ ] `crosstalk init` integrates `service install` (offers to install + activate the unit at end of init flow)
+- [x] `crosstalk init` integrates `service install` + relay disabled mode in init wizard — **shipped v0.9.0-alpha.2**
 - [ ] Optional Docker deploy path: `crosstalk init` offers bare metal or Docker, generates systemd unit or `docker-compose.yml` accordingly — **gated on framework TODO Gate 2a**
 - [ ] Multi-user isolation documented and tested — **gated on framework TODO Gate 2b**
 - [ ] Protocol versioning fully wired — `manifest/protocol/VERSION` in transport, startup check per transport against runtime's `supports-protocol` range
@@ -51,6 +51,7 @@ Bundled into v0.9.0-alpha.1. Used `--as <actor>` flag (which channel-join alread
 
 ## Shipped (recent)
 
+- v0.9.0-alpha.2 — `init` ↔ `service install` integration; relay disabled mode discoverable in init wizard
 - v0.9.0-alpha.1 — first v1.0 prep alpha; templates + service command + PTY decrypt + post-human fix + relay disabled mode + CI dist-tag auto-detect
 - v0.8.2 — `channel tail` decrypt-on-read + dispatch outbound encryption (response-in-kind) + dispatch.ts stdout-consumption bug fix (closes both v0.8.x deferrals)
 - v0.8.0 → v0.8.1 — Privacy minor end-to-end (7-alpha autonomous run + CI test bump)
