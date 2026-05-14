@@ -81,9 +81,21 @@ jobs:
           files: |
             cordfuse-crosstalk-runtime-*.tgz
 
+      - name: Determine npm dist-tag
+        id: npmtag
+        # Pre-releases (anything with `-` after the patch number, e.g. 0.9.0-alpha.1)
+        # publish under the `next` tag so default `npm install -g <pkg>` keeps
+        # resolving to the most recent stable. Stable releases publish under `latest`.
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            echo "tag=next" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to npm
         if: ${{ env.NPM_TOKEN != '' }}
-        run: npm publish --access public
+        run: npm publish --access public --tag ${{ steps.npmtag.outputs.tag }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
