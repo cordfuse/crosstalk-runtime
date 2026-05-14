@@ -48,7 +48,7 @@ import { join } from 'node:path';
  * privacy additions (encryption: age, encrypted-to:, type: ephemeral et al)
  * get a deliberate protocol-version review pass.
  */
-export const SUPPORTS_PROTOCOL_MAJOR_MINOR = '0.3';
+export const SUPPORTS_PROTOCOL_MAJOR_MINOR = '0.4';
 
 export type VerdictKind =
   | 'match'              // transport version matches runtime support — silent
