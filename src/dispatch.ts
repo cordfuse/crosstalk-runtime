@@ -206,6 +206,26 @@ export async function dispatch(
     return;
   }
 
+  // v0.8.1+ — capture the inbound's privacy state BEFORE decrypting, so the
+  // outbound response can encrypt back to the same recipient set ("respond
+  // in kind"). For plaintext inbound, both fields stay null and the response
+  // goes plaintext. For encrypted inbound, response gets encrypted to the
+  // ORIGINAL recipient set (preserves group conversation visibility per the
+  // PRIVACY.md `to:` is routing, `encrypted-to:` is privacy distinction).
+  let inboundFrom: string | null = null;
+  let inboundEncryptedTo: string[] | null = null;
+  try {
+    const { parseFrontmatter } = await import('./frontmatter.js');
+    const { data } = parseFrontmatter(messageContent);
+    inboundFrom = typeof data.from === 'string' ? data.from : null;
+    if (String(data.encryption ?? '') === 'age') {
+      const et = String(data['encrypted-to'] ?? '');
+      inboundEncryptedTo = et ? et.split(',').map(s => s.trim()).filter(Boolean) : [];
+    }
+  } catch {
+    // Malformed frontmatter — fall through; downstream decrypt-or-skip catches.
+  }
+
   // v0.8.0-alpha.4+ inbound decryption: if the message is encrypted with age,
   // decrypt the body using this actor's private key before passing to the
   // agent. If decryption fails (no key, wrong key, malformed ciphertext),
@@ -244,6 +264,15 @@ export async function dispatch(
     proc.on('error', () => resolve(null));
   });
 
+  // v0.8.1+ — start the stdout consumer IMMEDIATELY (before awaiting exit).
+  // Required for fast writers: if a process writes a small payload and exits
+  // before any stream consumer is attached, node loses the output (the data
+  // sits in the OS pipe, the writer side closes on exit, and the read-side
+  // stream emits 'end' with nothing buffered to JS). Real LLM agents take
+  // seconds and write KB+ of output, so they don't hit this — but custom-
+  // command actors with quick responses (or test harnesses) do.
+  const stdoutP: Promise<string> = proc.stdout ? text(proc.stdout) : Promise.resolve('');
+
   const timeoutMs = (actor.heartbeatInterval ?? defaultHeartbeatInterval ?? 30) * 1000;
   const timer = setTimeout(async () => {
     proc.kill();
@@ -262,15 +291,57 @@ export async function dispatch(
     }
 
     try {
-      const raw = proc.stdout ? await text(proc.stdout) : '';
+      const raw = await stdoutP;
       const stdout = actor.agent === 'opencode' ? extractOpenCodeText(raw) : raw;
       console.log(`[dispatch] ${actor.name} stdout length=${stdout.length}`);
       const gitEmail = actor.gitEmail ?? machineGitEmail(actor.name, actorEmailSuffix);
 
       if (stdout.trim()) {
+        // v0.8.1+ — if inbound was encrypted, encrypt the response back to the
+        // same recipient set ("respond in kind"). Preserves group visibility:
+        // if alice posted encrypted to [bob, carol], bob's response goes
+        // encrypted to [alice, bob, carol] (alice added so the original sender
+        // can read the reply; bob added for self-readability). Routing
+        // `to: <inbound from>` since the response is addressed to the asker.
+        let body = stdout.trim();
+        let toOverride: string | undefined;
+        let extraFrontmatter: Record<string, string> | undefined;
+
+        if (inboundEncryptedTo !== null) {
+          const recipientSet = new Set<string>(inboundEncryptedTo);
+          if (inboundFrom) recipientSet.add(inboundFrom);
+          recipientSet.add(actor.name);
+          const recipientNames = [...recipientSet];
+
+          try {
+            const { loadActorRecipients } = await import('./keys.js');
+            const recipientMap = loadActorRecipients(transportRoot, recipientNames);
+            const missing = recipientNames.filter(n => !recipientMap.has(n));
+
+            if (recipientMap.size === 0) {
+              console.warn(`[dispatch] ${actor.name} response-in-kind: NO recipients have pubkeys on this machine — falling back to PLAINTEXT response (privacy regression). Missing: ${missing.join(', ')}`);
+            } else {
+              if (missing.length > 0) {
+                console.warn(`[dispatch] ${actor.name} response-in-kind: ${missing.length} recipient(s) without pubkey will see opaque ciphertext: ${missing.join(', ')}`);
+              }
+              const recipients = [...recipientMap.values()];
+              const encryptedToNames = [...recipientMap.keys()];
+              const { encrypt, wrapForMessageBody } = await import('./crypto.js');
+              const armored = await encrypt(stdout.trim(), recipients);
+              body = wrapForMessageBody(armored).trimEnd();
+              extraFrontmatter = { encryption: 'age', 'encrypted-to': encryptedToNames.join(', ') };
+              if (inboundFrom) toOverride = inboundFrom;
+              console.log(`[dispatch] ${actor.name} response encrypted to ${recipientMap.size} recipient(s): ${encryptedToNames.join(', ')}`);
+            }
+          } catch (err) {
+            console.error(`[dispatch] ${actor.name} response-in-kind encryption failed: ${err} — falling back to PLAINTEXT response (privacy regression)`);
+          }
+        }
+
         await writeResponseMessage(
           actorTransport, channelGuid, actor.name, gitEmail,
-          stdout.trim(), actor.agent, actor.model,
+          body, actor.agent, actor.model,
+          toOverride, extraFrontmatter,
         );
         console.log(`[dispatch] ${actor.name} response written`);
       } else {

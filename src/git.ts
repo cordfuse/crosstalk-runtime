@@ -150,6 +150,13 @@ export async function writeResponseMessage(
   body: string,
   agent?: string,
   model?: string,
+  /** v0.8.1+ — override the default `to: all`. Used for encrypted responses
+   * that route back to the original sender per the response-in-kind semantic. */
+  toOverride?: string,
+  /** v0.8.1+ — extra frontmatter fields appended after the canonical four
+   * (e.g. `encryption: age`, `encrypted-to: alice, bob`). When present,
+   * `body` should already be the wrapped age block string. */
+  extraFrontmatter?: Record<string, string>,
 ): Promise<void> {
   const now = new Date();
   const datePath = messageDatePath(now);
@@ -157,9 +164,13 @@ export async function writeResponseMessage(
   const dir = join(repoPath, 'channels', channelGuid, datePath);
   await mkdir(dir, { recursive: true });
 
+  const toField = toOverride ?? 'all';
   const agentLine = agent ? `agent: ${agent}\n` : '';
   const modelLine = model ? `model: ${model}\n` : '';
-  const content = `---\nfrom: ${actorName}\nto: all\ntimestamp: ${now.toISOString()}\ntype: text\n${agentLine}${modelLine}---\n\n${body}\n`;
+  const extraLines = extraFrontmatter
+    ? Object.entries(extraFrontmatter).map(([k, v]) => `${k}: ${v}\n`).join('')
+    : '';
+  const content = `---\nfrom: ${actorName}\nto: ${toField}\ntimestamp: ${now.toISOString()}\ntype: text\n${agentLine}${modelLine}${extraLines}---\n\n${body}\n`;
 
   await writeFile(join(dir, filename), content, 'utf8');
   await commitActorMessage(repoPath, channelGuid, actorName, gitEmail);
