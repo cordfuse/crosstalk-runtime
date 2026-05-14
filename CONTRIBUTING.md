@@ -133,21 +133,22 @@ Fields prefixed `x-` are operator-owned and ignored by the runtime entirely.
 
 Crosstalk's runtime ships as a Node npm package starting with `v0.6.0-alpha.4`. There is no longer a `bun --compile` single-file binary — the embedding of native PTY modules into a bun-compiled binary was a fight not worth picking when every Crosstalk user already has Node installed (`claude`, `gemini`, `qwen`, `opencode` are all Node CLIs themselves).
 
-Install globally from the GitHub release tarball while the npm scope `@cordfuse` is pending administrative correction:
-
-```sh
-npm install -g https://github.com/cordfuse/crosstalk-runtime/releases/download/v0.6.0-alpha.4/crosstalk-runtime-0.6.0-alpha.4.tgz
-```
-
-The tarball ships pre-built `dist/` (compiled in CI before `npm pack`), so `npm install` doesn't have to run `tsc` on the user's machine. `@homebridge/node-pty-prebuilt-multiarch`'s install script does build its native PTY module locally for the user's platform.
-
-**Why not `npm install -g cordfuse/crosstalk-runtime#tag` (git URL form)?** npm runs the package's `prepare` lifecycle on git-URL installs BEFORE installing devDependencies in the temp clone — so `tsc` isn't on PATH when prepare fires and the build fails. Stick to the tarball URL; it Just Works.
-
-Once the npm `@cordfuse` scope is live, the install instruction flips to:
+Install globally from npm:
 
 ```sh
 npm install -g @cordfuse/crosstalk-runtime
 ```
+
+**Pinned-version fallback** (also useful behind firewalls that block npm but allow GitHub):
+
+```sh
+# Replace v0.8.0 with the desired tag from the releases page
+npm install -g https://github.com/cordfuse/crosstalk-runtime/releases/download/v0.8.0/cordfuse-crosstalk-runtime-0.8.0.tgz
+```
+
+The tarball ships pre-built `dist/` (compiled in CI before `npm pack`), so `npm install` doesn't have to run `tsc` on the user's machine. `@homebridge/node-pty-prebuilt-multiarch`'s install script does build its native PTY module locally for the user's platform.
+
+**Why not `npm install -g cordfuse/crosstalk-runtime#tag` (git URL form)?** npm runs the package's `prepare` lifecycle on git-URL installs BEFORE installing devDependencies in the temp clone — so `tsc` isn't on PATH when prepare fires and the build fails. Stick to the npm or tarball install above; both Just Work.
 
 Either way, the user ends up with `crosstalk` and `ct` on PATH.
 

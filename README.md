@@ -113,16 +113,20 @@ For source builds of `@homebridge/node-pty-prebuilt-multiarch` on platforms with
 
 ## Install
 
-End users install the published npm tarball — see [cordfuse/crosstalk README Quickstart](https://github.com/cordfuse/crosstalk#3-install-the-runtime). The short version:
+End users install from npm — see [cordfuse/crosstalk README Quickstart](https://github.com/cordfuse/crosstalk#3-install-the-runtime). The short version:
 
 ```sh
-# Replace v0.7.0-alpha.1 with the latest tag from the releases page
-npm install -g https://github.com/cordfuse/crosstalk-runtime/releases/download/v0.7.0-alpha.1/crosstalk-runtime-0.7.0-alpha.1.tgz
+npm install -g @cordfuse/crosstalk-runtime
 ```
 
 Puts `crosstalk` and the alias `ct` on PATH.
 
-(Future: `npm install -g @cordfuse/crosstalk-runtime` once the npm `@cordfuse` scope is live.)
+**Pinned-version fallback** (also useful behind firewalls that block npm but allow GitHub):
+
+```sh
+# Replace v0.8.0 with the desired tag from the releases page
+npm install -g https://github.com/cordfuse/crosstalk-runtime/releases/download/v0.8.0/cordfuse-crosstalk-runtime-0.8.0.tgz
+```
 
 ---
 
