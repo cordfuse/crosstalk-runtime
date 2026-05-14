@@ -122,7 +122,7 @@ function substituteTemplate(template: string): string {
     .replaceAll('__HOME__', homedir())
 }
 
-function runInstall(): void {
+export function runInstall(): void {
   const cfg = getPlatformConfig(detectPlatform())
   const tmpl = loadTemplate(cfg.templateRel)
   const filled = substituteTemplate(tmpl)

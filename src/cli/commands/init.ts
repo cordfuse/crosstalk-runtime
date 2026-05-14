@@ -20,7 +20,7 @@
 import { input, select, confirm, password } from '@inquirer/prompts'
 import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
+import { homedir, platform } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import type { Command } from 'commander'
 
@@ -40,7 +40,8 @@ interface InitOptions {
 
 interface ResolvedConfig {
   transport:           string
-  relayUrl:            string
+  relayMode:           'client' | 'disabled'  // v0.9.0-alpha.2+ — server mode is daemon-internal, not an init-time choice
+  relayUrl:            string  // ignored when relayMode === 'disabled'
   relaySecret?:        string
   actorEmailSuffix:    string
   heartbeatInterval:   number
@@ -76,12 +77,23 @@ async function runInit(options: InitOptions): Promise<void> {
     ? await runInteractive()
     : runNonInteractive(options)
 
-  if (!options.skipSmoke) {
+  // v0.9.0-alpha.2+: skip relay smoke when relay is disabled — there's
+  // nothing to ping, and a network call would mislead operators who
+  // explicitly chose offline mode.
+  if (!options.skipSmoke && config.relayMode !== 'disabled') {
     await smokeRelay(config.relayUrl)
   }
 
   writeConfigAtomic(config)
   printNextSteps(config)
+
+  // v0.9.0-alpha.2+: offer to install the user-level service unit (systemd
+  // user / launchd LaunchAgent) so the daemon starts at login. Interactive
+  // only — non-interactive runs (CI, scripted setup) skip this since they
+  // can call `crosstalk service install` themselves explicitly.
+  if (interactive) {
+    await maybeOfferServiceInstall()
+  }
 }
 
 // ── Interactive wizard ──────────────────────────────────────────────────────
@@ -90,11 +102,11 @@ async function runInteractive(): Promise<ResolvedConfig> {
   console.log('Welcome to Crosstalk. Let\'s get you set up.\n')
 
   const transport          = await pickTransport()
-  const { relayUrl, relaySecret } = await pickRelay()
+  const { relayMode, relayUrl, relaySecret } = await pickRelay()
   const actorEmailSuffix   = await pickActorEmailSuffix()
   const heartbeatInterval  = await pickHeartbeatInterval()
 
-  return { transport, relayUrl, relaySecret, actorEmailSuffix, heartbeatInterval }
+  return { transport, relayMode, relayUrl, relaySecret, actorEmailSuffix, heartbeatInterval }
 }
 
 async function pickTransport(): Promise<string> {
@@ -154,17 +166,22 @@ async function pickTransport(): Promise<string> {
   return target
 }
 
-async function pickRelay(): Promise<{ relayUrl: string; relaySecret?: string }> {
+async function pickRelay(): Promise<{ relayMode: 'client' | 'disabled'; relayUrl: string; relaySecret?: string }> {
   const choice = await select({
     message: 'Which relay should runtimes connect to?',
     choices: [
       { name: `Cordfuse public — ${PUBLIC_RELAY} (free, no auth required)`,  value: 'public' },
       { name: 'Self-hosted (you provide URL + optional secret)',              value: 'self' },
+      { name: 'Disabled — offline mode (you sync the transport via git/rsync/NAS yourself; no real-time dispatch)', value: 'disabled' },
     ],
   })
 
+  if (choice === 'disabled') {
+    return { relayMode: 'disabled', relayUrl: PUBLIC_RELAY }  // url is recorded but unused at runtime
+  }
+
   if (choice === 'public') {
-    return { relayUrl: PUBLIC_RELAY }
+    return { relayMode: 'client', relayUrl: PUBLIC_RELAY }
   }
 
   const relayUrl = await input({
@@ -173,10 +190,10 @@ async function pickRelay(): Promise<{ relayUrl: string; relaySecret?: string }> 
   })
   const wantsAuth = await confirm({ message: 'Does this relay require authentication?', default: false })
   if (!wantsAuth) {
-    return { relayUrl }
+    return { relayMode: 'client', relayUrl }
   }
   const relaySecret = await password({ message: 'Relay secret (will not echo):' })
-  return { relayUrl, relaySecret }
+  return { relayMode: 'client', relayUrl, relaySecret }
 }
 
 async function pickActorEmailSuffix(): Promise<string> {
@@ -210,6 +227,7 @@ function runNonInteractive(options: InitOptions): ResolvedConfig {
   }
   return {
     transport,
+    relayMode:          'client',  // non-interactive defaults to client; explicit --relay-mode flag would override (not yet wired)
     relayUrl:           options.relayUrl ?? PUBLIC_RELAY,
     relaySecret:        options.relaySecret,
     actorEmailSuffix:   options.actorEmailSuffix ?? guessEmailSuffixFromGitConfig(),
@@ -252,14 +270,20 @@ function writeConfigAtomic(config: ResolvedConfig): void {
     `default-heartbeat-interval = ${config.heartbeatInterval}`,
     ``,
     `[relay]`,
-    `mode = "client"`,
-    `url = "${config.relayUrl}"`,
+    `mode = "${config.relayMode}"`,
   ]
-  if (config.relaySecret) {
-    lines.push(`secret = "${config.relaySecret}"`)
+  if (config.relayMode === 'disabled') {
+    lines.push(`# Offline mode — daemon does not connect to a relay.`)
+    lines.push(`# You're responsible for transport sync (git pull, rsync, NAS, etc.).`)
+    lines.push(`# To re-enable real-time dispatch later, change mode to "client" + set url.`)
   } else {
-    lines.push(`# Public Cordfuse relay is open mode — no secret required.`)
-    lines.push(`# Set this only if pointing at a self-hosted relay with RELAY_SECRET configured.`)
+    lines.push(`url = "${config.relayUrl}"`)
+    if (config.relaySecret) {
+      lines.push(`secret = "${config.relaySecret}"`)
+    } else {
+      lines.push(`# Public Cordfuse relay is open mode — no secret required.`)
+      lines.push(`# Set this only if pointing at a self-hosted relay with RELAY_SECRET configured.`)
+    }
   }
   const content = lines.join('\n') + '\n'
 
@@ -275,16 +299,21 @@ function writeConfigAtomic(config: ResolvedConfig): void {
 }
 
 function printNextSteps(config: ResolvedConfig): void {
-  const webhookUrl = config.relayUrl.replace(/^ws/, 'http') + '/webhook'
   console.log(`\n✓ Wrote ${CONFIG_PATH}`)
   console.log('')
   console.log('Next steps:')
-  console.log(`  • Configure your transport repo's GitHub webhook:`)
-  console.log(`      URL:          ${webhookUrl}`)
-  console.log(`      Content type: application/json`)
-  console.log(`      Events:       Just the push event`)
-  console.log(`      Secret:       ${config.relaySecret ? '(use the same secret you configured here)' : '(leave blank — open-mode relay accepts unsigned)'}`)
-  console.log(`  • Run \`crosstalk\` to start the daemon`)
+  if (config.relayMode === 'client') {
+    const webhookUrl = config.relayUrl.replace(/^ws/, 'http') + '/webhook'
+    console.log(`  • Configure your transport repo's GitHub webhook:`)
+    console.log(`      URL:          ${webhookUrl}`)
+    console.log(`      Content type: application/json`)
+    console.log(`      Events:       Just the push event`)
+    console.log(`      Secret:       ${config.relaySecret ? '(use the same secret you configured here)' : '(leave blank — open-mode relay accepts unsigned)'}`)
+  } else {
+    console.log(`  • Sync the transport yourself — \`git pull\` on a cron, rsync, NAS sync, etc.`)
+    console.log(`    The daemon's fs watcher will pick up changes once they land in the transport dir.`)
+  }
+  console.log(`  • Run \`crosstalk\` to start the daemon (or accept the next prompt to install it as a user-level service)`)
   console.log('')
   console.log('Full setup walkthrough: https://github.com/cordfuse/crosstalk#quickstart')
 }
@@ -309,5 +338,41 @@ function runOrExit(cmd: string[], description: string): void {
   if (result.status !== 0) {
     console.error(`✗ Command failed: ${cmd.join(' ')}`)
     process.exit(1)
+  }
+}
+
+// ── v0.9.0-alpha.2+: post-init service install offer ────────────────────────
+
+/** After the config write, offer to install a user-level service unit so the
+ * daemon starts at login. Skipped on unsupported platforms (anything other
+ * than linux/darwin) so non-blocking. Failures during install print an
+ * actionable error but don't fail init overall — the config is already
+ * written, the operator can re-run `crosstalk service install` later. */
+async function maybeOfferServiceInstall(): Promise<void> {
+  const p = platform()
+  if (p !== 'linux' && p !== 'darwin') {
+    // Windows / unsupported — skip silently. The init flow finished successfully;
+    // service-install is purely additive and not available on this platform anyway.
+    return
+  }
+
+  const platformLabel = p === 'linux' ? 'systemd user unit' : 'launchd LaunchAgent'
+  const wantsInstall = await confirm({
+    message: `Install ${platformLabel} now so the daemon starts at login?`,
+    default: false,
+  })
+  if (!wantsInstall) {
+    console.log(`  (skipped — run \`crosstalk service install\` later if you change your mind)`)
+    return
+  }
+
+  // Defer-import so the service module isn't loaded on non-interactive init or
+  // when the operator declines (avoids paying the import cost on the cold path).
+  try {
+    const { runInstall } = await import('./service.js')
+    runInstall()
+  } catch (err) {
+    console.error(`✗ service install failed: ${err instanceof Error ? err.message : String(err)}`)
+    console.error(`  Init succeeded; you can re-run \`crosstalk service install\` to retry.`)
   }
 }
