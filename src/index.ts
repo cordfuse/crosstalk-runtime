@@ -44,6 +44,27 @@ if (config.relay.mode === 'server') {
   console.log(`[crosstalk] transport: ${config.transport}`);
   console.log(`[crosstalk] actor-email-suffix: ${config.actorEmailSuffix}`);
 
+  // v0.9.0-alpha.3+ — protocol version handshake. Read transport's
+  // CROSSTALK-VERSION, compare against the runtime's declared support.
+  // Major mismatch → refuse to start (wire format incompatible). Minor
+  // mismatch / missing / malformed → WARN + proceed.
+  const { validateTransportProtocol } = await import('./protocol-version.js');
+  const verdict = validateTransportProtocol(config.transport);
+  switch (verdict.kind) {
+    case 'major-mismatch':
+      console.error(`[crosstalk] [protocol] ERROR: ${verdict.message}`);
+      process.exit(2);
+    case 'minor-mismatch':
+    case 'transport-missing':
+    case 'transport-malformed':
+      console.warn(`[crosstalk] [protocol] WARN: ${verdict.message}`);
+      break;
+    case 'match':
+    case 'patch-mismatch':
+      console.log(`[crosstalk] [protocol] ${verdict.message}`);
+      break;
+  }
+
   // One-shot cursor migration: if this is the first run after upgrading past
   // the SESSION_ID → MACHINE_ID cursor-key change, migrate forward the
   // most-advanced cursor per channel from legacy session dirs. No-op for

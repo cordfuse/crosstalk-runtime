@@ -11,6 +11,7 @@ import type { Command } from 'commander'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import pkg from '../../../package.json' with { type: 'json' }
+import { SUPPORTS_PROTOCOL_MAJOR_MINOR } from '../../protocol-version.js'
 
 export function registerVersionCommand(program: Command): void {
   program
@@ -18,6 +19,7 @@ export function registerVersionCommand(program: Command): void {
     .description('print runtime + framework + protocol versions')
     .action(async () => {
       console.log(`crosstalk runtime  v${pkg.version}`)
+      console.log(`supports protocol  v${SUPPORTS_PROTOCOL_MAJOR_MINOR}.x`)
 
       // Framework + protocol versions: read from the configured transport
       // if loadConfig() succeeds. Don't fail otherwise — version should
