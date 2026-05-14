@@ -35,6 +35,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies (runs prepare → tsc)
         run: npm install
@@ -79,3 +80,10 @@ jobs:
             See [WHATSNEW.md](https://github.com/cordfuse/crosstalk/blob/main/WHATSNEW.md) for changes — runtime changelog lives in the operator-facing repo.
           files: |
             cordfuse-crosstalk-runtime-*.tgz
+
+      - name: Publish to npm
+        if: ${{ env.NPM_TOKEN != '' }}
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
