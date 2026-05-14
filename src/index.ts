@@ -58,7 +58,11 @@ if (config.relay.mode === 'server') {
     console.log(`[crosstalk] registry reloaded: ${[...registry.keys()].join(', ') || 'none'}`);
   });
 
-  startRelayClient(config.relay, config.transport);
+  if (config.relay.mode === 'disabled') {
+    console.log('[crosstalk] relay: disabled (offline mode — no real-time dispatch; transport sync is your responsibility)');
+  } else {
+    startRelayClient(config.relay, config.transport);
+  }
 
   // Bootstrap Coordinator (v0.7.0-alpha.2+). Cache is shared across the
   // startup-scan loop AND the live watcher so both gating paths read the

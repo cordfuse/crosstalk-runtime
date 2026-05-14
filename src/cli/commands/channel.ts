@@ -273,7 +273,7 @@ async function runChannelShow(query: string, opts: ChannelShowOptions): Promise<
  * Pure: doesn't mutate the input. Returns a new RenderedMessage with
  * cleaned-up frontmatter (encryption fields stripped on success) so
  * downstream renderers can show plaintext naturally. */
-async function decryptForDisplay(m: import('../lib/channel.js').RenderedMessage, asActor: string): Promise<import('../lib/channel.js').RenderedMessage> {
+export async function decryptForDisplay(m: import('../lib/channel.js').RenderedMessage, asActor: string): Promise<import('../lib/channel.js').RenderedMessage> {
   const enc = String(m.data.encryption ?? '')
   if (enc !== 'age') return m  // not encrypted, pass through
 

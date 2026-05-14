@@ -50,6 +50,7 @@ import { pushWithRetry } from '../../git.js'
 import { messageDatePath, messageFilename } from '../../filenames.js'
 import { scanAllLayers } from '../lib/actors.js'
 import { resolveChannel, readChannelMessages, printMessage } from '../lib/channel.js'
+import { decryptForDisplay } from './channel.js'
 
 interface JoinOptions {
   agent:      string
@@ -207,7 +208,12 @@ async function runJoin(channelArg: string, opts: JoinOptions): Promise<void> {
     const tail = allExisting.slice(-backfillN)
     if (tail.length > 0) {
       console.log(`  ── last ${tail.length} message${tail.length === 1 ? '' : 's'} (backfill) ──\n`)
-      for (const m of tail) printMessage(m)
+      // v0.9.0+ — decrypt backfill via the joining actor's identity, same
+      // helper that channel show uses. Closes the v0.8.x PTY-mode decrypt
+      // gap (Mac UAT finding 2026-05-14: channel-join printed ciphertext
+      // because it called printMessage on raw RenderedMessage).
+      const decrypted = await Promise.all(tail.map(m => decryptForDisplay(m, fromActor)))
+      for (const m of decrypted) printMessage(m)
     } else {
       console.log(`  (channel has no prior messages)`)
     }
@@ -369,15 +375,26 @@ async function runAgentInPty(spawnCmd: string[], inject: InjectCtx): Promise<num
     // need a second interval. Latency-to-flush is bounded by the 500ms
     // poll cadence (good enough — operators won't notice).
     const queue: Array<{ from: string; timestamp: string; body: string }> = []
-    const pollInterval = setInterval(() => {
-      // Stage 1: scan for new messages, filter, enqueue
+    const pollInterval = setInterval(async () => {
+      // Stage 1: scan for new messages, filter, decrypt, enqueue.
+      // v0.9.0+ — decrypt before pushing to PTY queue. Closes the v0.8.x
+      // PTY-mode decrypt gap for live injection (Mac UAT finding
+      // 2026-05-14: encrypted bodies were going straight to the agent's
+      // stdin as opaque ciphertext). decryptForDisplay returns a placeholder
+      // string for failure cases (no identity / not a recipient / etc.) —
+      // those render to the agent as informative text, not silent failures.
       const current = readChannelMessages(inject.channelDir)
+      const enqueueWork: Array<typeof current[0]> = []
       for (const m of current) {
         if (inject.seen.has(m.path)) continue
         inject.seen.add(m.path)
         if (m.from === inject.fromActor) continue       // skip own messages — no echo
         if (!inject.injectAll && !isMessageForSelf(m.to, inject.fromActor)) continue   // skip not-for-me unless --inject-all
-        queue.push({ from: m.from, timestamp: m.timestamp, body: m.body })
+        enqueueWork.push(m)
+      }
+      if (enqueueWork.length > 0) {
+        const decrypted = await Promise.all(enqueueWork.map(m => decryptForDisplay(m, inject.fromActor)))
+        for (const dm of decrypted) queue.push({ from: dm.from, timestamp: dm.timestamp, body: dm.body })
       }
 
       // Stage 2: flush queue if agent stdout has been quiet long enough

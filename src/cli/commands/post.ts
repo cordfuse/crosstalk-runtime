@@ -36,8 +36,8 @@ import type { Command } from 'commander'
 
 import { loadConfig } from '../../config.js'
 import { messageDatePath, messageFilename } from '../../filenames.js'
-import { loadRegistry } from '../../registry.js'
 import { resolveChannel } from '../lib/channel.js'
+import { scanAllLayers } from '../lib/actors.js'
 
 interface PostOptions {
   channel:               string
@@ -79,17 +79,25 @@ async function runPost(opts: PostOptions): Promise<void> {
   // Resolve channel name → GUID
   const channelGuid = resolveChannel(config.transport, opts.channel)
 
-  // Load registry, validate targets
-  const registry = await loadRegistry(config.transport)
+  // Validate targets against the FULL actor profile set, not the dispatch
+  // registry. v0.9.0+ fix: previously used loadRegistry() which filters to
+  // dispatchable actors (agent or command set). Humans are spec-forbidden from
+  // carrying those fields — so loadRegistry never sees them, and `post --to
+  // <human>` would be rejected with "Unknown actor target(s)" even though
+  // `crosstalk actor list` shows the human fine. Same root cause + fix as the
+  // channel-join PR #11 patch. See src/cli/commands/channel-join.ts:117-125
+  // for the parallel comment.
+  const profiles = scanAllLayers(config.transport)
+  const knownNames = new Set(profiles.map(p => p.name))
   const targetsRaw = opts.to.trim()
   const targets: 'all' | string[] = targetsRaw === 'all'
     ? 'all'
     : targetsRaw.split(',').map(t => t.trim()).filter(Boolean)
 
   if (targets !== 'all' && !opts.allowUnknownTargets) {
-    const unknown = (targets as string[]).filter(t => !registry.has(t))
+    const unknown = (targets as string[]).filter(t => !knownNames.has(t))
     if (unknown.length > 0) {
-      const known = [...registry.keys()].sort().join(', ')
+      const known = profiles.map(p => `${p.name} (${p.data.type ?? '?'})`).sort().join(', ')
       console.error(`✗ Unknown actor target(s): ${unknown.join(', ')}`)
       console.error(`  Known actors: ${known || '(none)'}`)
       console.error(`  Use --allow-unknown-targets to bypass this check.`)

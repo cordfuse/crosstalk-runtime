@@ -1,6 +1,6 @@
 {
   "name": "@cordfuse/crosstalk-runtime",
-  "version": "0.8.2",
+  "version": "0.9.0-alpha.1",
   "description": "Crosstalk runtime — watches a transport for new messages and dispatches to registered actor processes",
   "type": "module",
   "main": "dist/index.js",

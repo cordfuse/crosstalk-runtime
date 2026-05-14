@@ -6,7 +6,13 @@ import { parse } from 'smol-toml';
 const CONFIG_PATH = join(homedir(), '.crosstalk', 'config.toml');
 
 export interface RelayConfig {
-  mode: 'client' | 'server';
+  // 'client'   — connect outbound to a relay (default; URL = wss://relay.crosstalk.sh unless overridden)
+  // 'server'   — host the relay; accept inbound from runtimes + GitHub webhook
+  // 'disabled' — no relay involvement; runtime polls/git-pulls only. v0.9.0+
+  //              for fully-offline operators OR transports synced via non-git
+  //              mechanisms (rsync, NAS). Skip this if you want real-time
+  //              webhook-driven dispatch.
+  mode: 'client' | 'server' | 'disabled';
   url: string;
   secret: string;
   webhookSecret?: string;  // server mode only — GitHub → relay HMAC
@@ -136,7 +142,9 @@ export async function loadConfig(): Promise<Config> {
   const relayData = (data.relay ?? {}) as Record<string, unknown>;
 
   const relay: RelayConfig = {
-    mode: relayData.mode === 'server' ? 'server' : 'client',
+    mode: relayData.mode === 'server' ? 'server'
+        : relayData.mode === 'disabled' ? 'disabled'
+        : 'client',
     url: typeof relayData.url === 'string' ? relayData.url : DEFAULTS.relay.url,
     secret: typeof relayData.secret === 'string' ? relayData.secret : DEFAULTS.relay.secret,
     port: envInt('PORT') ?? (typeof relayData.port === 'number' ? relayData.port as number : DEFAULTS.relay.port),
