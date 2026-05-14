@@ -4,40 +4,31 @@ This is the runtime-specific backlog. The protocol-level design backlog (ROE spe
 
 ---
 
-## Needs Steve's input
+## Runtime gates — all resolved at v1.0.0
 
-These are gates I cannot resolve autonomously. Each shows what's in flight, what I recommend, and what specifically needs your call.
-
-### ~~Gate A — versioning for v1.0-prep work~~ ✓ resolved 2026-05-14
-
-Bundled into v0.9.0-alpha.1 along with the Mac UAT v0.8.2 follow-up fixes. Cut + shipped to npm + GitHub. Pre-release published under `next` dist-tag (manual fix this round; CI auto-handles future alphas).
-
-### ~~Gate B — was "respond-in-kind" the right default~~ ⏸ implicitly accepted
-
-No flip requested. v0.8.2's response-in-kind semantic stays.
-
-### ~~Gate C — v0.8.3 patch: PTY-mode decrypt-on-read~~ ✓ resolved 2026-05-14
-
-Bundled into v0.9.0-alpha.1. Used `--as <actor>` flag (which channel-join already had). Both backfill and live-injection paths now route through `decryptForDisplay()`. Mac will validate the live behavior in a follow-up UAT.
+All previously-open runtime gates closed by v1.0.0 (2026-05-14). Active v1.x gates live entirely in [framework TODO.md](https://github.com/cordfuse/crosstalk/blob/main/TODO.md) since they're architectural / cross-cutting.
 
 ---
 
-(All previously-open runtime gates are now closed. The active gates moved entirely to the framework TODO since they're architectural.)
+## v0.9.x — v1.0 Prep (cumulatively shipped, never cut as v0.9.0 stable)
 
----
+All v0.9.x alphas promoted directly into v1.0.0 — v0.9.0 stable was skipped to avoid wasteful churn.
 
-## v0.9.x — v1.0 Prep (in flight)
+- [x] systemd user unit (Linux) + launchd plist (macOS) templates — shipped v0.9.0-alpha.1
+- [x] PTY-mode decrypt-on-read for channel-join — shipped v0.9.0-alpha.1
+- [x] post --to <human> registry filter fix — shipped v0.9.0-alpha.1
+- [x] relay mode = "disabled" — shipped v0.9.0-alpha.1
+- [x] `crosstalk init` integrates `service install` + relay disabled mode in init wizard — shipped v0.9.0-alpha.2
+- [x] Protocol versioning wired — startup handshake reads `<transport>/CROSSTALK-VERSION` — shipped v0.9.0-alpha.3
+- [x] CROSSTALK-VERSION bumped 0.3 → 0.4 to reflect v0.7 governance + v0.8 privacy wire-format additions — shipped v1.0.0
 
-- [x] systemd user unit (Linux) + launchd plist (macOS) templates — **shipped v0.9.0-alpha.1**
-- [x] PTY-mode decrypt-on-read for channel-join — **shipped v0.9.0-alpha.1**
-- [x] post --to <human> registry filter fix — **shipped v0.9.0-alpha.1**
-- [x] relay mode = "disabled" — **shipped v0.9.0-alpha.1**
-- [x] `crosstalk init` integrates `service install` + relay disabled mode in init wizard — **shipped v0.9.0-alpha.2**
-- [x] Protocol versioning wired — startup handshake reads `<transport>/CROSSTALK-VERSION` and compares against `SUPPORTS_PROTOCOL_MAJOR_MINOR = "0.3"` — **shipped v0.9.0-alpha.3**
-- [ ] Optional Docker deploy path: `crosstalk init` offers bare metal or Docker, generates systemd unit or `docker-compose.yml` accordingly — **gated on framework TODO Gate 2a**
-- [ ] Multi-user isolation documented and tested — **gated on framework TODO Gate 2b**
-- [ ] Bump CROSSTALK-VERSION to 0.4 to reflect v0.7 governance + v0.8 privacy spec additions — **gated on framework TODO Gate 8**
-- [ ] Field validation: multi-machine swarm proven in operator hands
+## v1.x candidates (post-v1.0)
+
+- [ ] Multi-operator collaboration — design pass for actor ownership / identity / key rotation propagation across operators sharing a transport. The biggest v1.x deliverable.
+- [ ] Optional Docker deploy path: `crosstalk init` offers bare metal or Docker, generates systemd unit or `docker-compose.yml` accordingly — re-evaluate on operator demand
+- [ ] Native Windows support (currently WSL-only) — gated on macOS + Linux being stable in operator hands first
+- [ ] Field validation: multi-machine swarm proven in operator hands beyond Steve's setup
+- [ ] `crosstalk init` integrates Docker deploy path (when Docker landed)
 
 ---
 
@@ -52,6 +43,7 @@ Bundled into v0.9.0-alpha.1. Used `--as <actor>` flag (which channel-join alread
 
 ## Shipped (recent)
 
+- **v1.0.0 — Production Ready** (2026-05-14) — protocol bumped 0.3 → 0.4; cumulative v0.7 + v0.8 + v0.9.x surface; honest scope statement (single-operator supported)
 - v0.9.0-alpha.3 — protocol version handshake at daemon startup; CROSSTALK-VERSION added to framework template
 - v0.9.0-alpha.2 — `init` ↔ `service install` integration; relay disabled mode discoverable in init wizard
 - v0.9.0-alpha.1 — first v1.0 prep alpha; templates + service command + PTY decrypt + post-human fix + relay disabled mode + CI dist-tag auto-detect
