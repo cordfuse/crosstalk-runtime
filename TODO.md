@@ -33,9 +33,10 @@ Bundled into v0.9.0-alpha.1. Used `--as <actor>` flag (which channel-join alread
 - [x] post --to <human> registry filter fix — **shipped v0.9.0-alpha.1**
 - [x] relay mode = "disabled" — **shipped v0.9.0-alpha.1**
 - [x] `crosstalk init` integrates `service install` + relay disabled mode in init wizard — **shipped v0.9.0-alpha.2**
+- [x] Protocol versioning wired — startup handshake reads `<transport>/CROSSTALK-VERSION` and compares against `SUPPORTS_PROTOCOL_MAJOR_MINOR = "0.3"` — **shipped v0.9.0-alpha.3**
 - [ ] Optional Docker deploy path: `crosstalk init` offers bare metal or Docker, generates systemd unit or `docker-compose.yml` accordingly — **gated on framework TODO Gate 2a**
 - [ ] Multi-user isolation documented and tested — **gated on framework TODO Gate 2b**
-- [ ] Protocol versioning fully wired — `manifest/protocol/VERSION` in transport, startup check per transport against runtime's `supports-protocol` range
+- [ ] Bump CROSSTALK-VERSION to 0.4 to reflect v0.7 governance + v0.8 privacy spec additions — **gated on framework TODO Gate 8**
 - [ ] Field validation: multi-machine swarm proven in operator hands
 
 ---
@@ -51,6 +52,7 @@ Bundled into v0.9.0-alpha.1. Used `--as <actor>` flag (which channel-join alread
 
 ## Shipped (recent)
 
+- v0.9.0-alpha.3 — protocol version handshake at daemon startup; CROSSTALK-VERSION added to framework template
 - v0.9.0-alpha.2 — `init` ↔ `service install` integration; relay disabled mode discoverable in init wizard
 - v0.9.0-alpha.1 — first v1.0 prep alpha; templates + service command + PTY decrypt + post-human fix + relay disabled mode + CI dist-tag auto-detect
 - v0.8.2 — `channel tail` decrypt-on-read + dispatch outbound encryption (response-in-kind) + dispatch.ts stdout-consumption bug fix (closes both v0.8.x deferrals)
