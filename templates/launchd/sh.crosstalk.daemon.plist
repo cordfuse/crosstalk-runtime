@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Crosstalk runtime daemon — file-based protocol over git for AI/human
+  swarm coordination. https://github.com/cordfuse/crosstalk
+
+  This is a LaunchAgent (per-user, runs in the user session). Install via:
+    crosstalk service install
+  which writes this to ~/Library/LaunchAgents/sh.crosstalk.daemon.plist
+  with __PLACEHOLDERS__ substituted for absolute paths.
+
+  Manual control after install:
+    launchctl load   ~/Library/LaunchAgents/sh.crosstalk.daemon.plist
+    launchctl unload ~/Library/LaunchAgents/sh.crosstalk.daemon.plist
+    tail -f ~/Library/Logs/crosstalk.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>sh.crosstalk.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__CROSSTALK_BIN__</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__USER_PATH__</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/crosstalk.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/crosstalk.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

@@ -1,0 +1,28 @@
+[Unit]
+Description=Crosstalk runtime daemon — file-based protocol over git for AI/human swarm coordination
+Documentation=https://github.com/cordfuse/crosstalk
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=__CROSSTALK_BIN__
+Restart=on-failure
+RestartSec=5s
+
+# Environment — augment PATH for npm-global / homebrew / nix bin dirs
+# (where node, gh, git, and AI agent CLIs typically live)
+Environment="PATH=__USER_PATH__"
+
+# Logging — let journald collect stdout/stderr; view via:
+#   journalctl --user -u crosstalk -f
+StandardOutput=journal
+StandardError=journal
+
+# Resource hygiene
+TimeoutStopSec=10s
+KillSignal=SIGINT
+KillMode=mixed
+
+[Install]
+WantedBy=default.target
