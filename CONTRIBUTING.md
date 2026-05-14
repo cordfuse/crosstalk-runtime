@@ -184,6 +184,46 @@ Bun-flavored dev still works if a contributor prefers it (`bun --watch run src/i
 
 ---
 
+## Releases
+
+The release pipeline is **fully automated from a git tag**. Pushing `v*` triggers `.github/workflows/release-runtime.yml` which produces both a GitHub Release tarball and an `@cordfuse/crosstalk-runtime` npm publish in one job (~30 seconds end-to-end). No manual OTP, no manual `npm publish`.
+
+### Cutting a release
+
+```sh
+# bump version in package.json + package-lock.json (e.g. 0.8.1 → 0.8.2)
+git commit -am "chore(release): cut vX.Y.Z — <one-line summary>"
+git push origin main
+
+git tag -a vX.Y.Z -m "vX.Y.Z — <one-line summary>"
+git push origin vX.Y.Z          # triggers the release workflow
+
+gh run watch                    # optional — watch CI live
+```
+
+After the workflow completes, both artifacts are live:
+
+- **GitHub Release:** `https://github.com/cordfuse/crosstalk-runtime/releases/tag/vX.Y.Z` with `cordfuse-crosstalk-runtime-X.Y.Z.tgz` attached
+- **npm:** `npm install -g @cordfuse/crosstalk-runtime@X.Y.Z` resolves immediately (CDN propagates within ~30 seconds)
+
+### Required infrastructure (one-time, already configured)
+
+- **GitHub repository secret `NPM_TOKEN`** — granular access token scoped to `@cordfuse` with "Bypass 2FA" enabled. Configured 2026-05-13. Expires annually — rotate by generating a fresh token at [npmjs.com/settings/cordfuse/tokens](https://www.npmjs.com/settings/cordfuse/tokens) and overwriting the secret with `gh secret set NPM_TOKEN --repo cordfuse/crosstalk-runtime --body "<new>"`.
+- **`actions/setup-node@v4` with `registry-url: https://registry.npmjs.org`** — required for `NODE_AUTH_TOKEN` to be honored on publish.
+- **First-publish flag `--access public`** — kept explicit in CI to prevent accidental private publishes; required on the first publish of any new scoped package.
+
+### Why not publish manually?
+
+- `cordfuse` npm account uses a security key for 2FA, which can't generate `--otp=` codes for the CLI.
+- The `NPM_TOKEN` granular token bypasses 2FA exclusively for publish operations from CI.
+- Manual `npm publish` from a developer machine still works (cachy has the token in `~/.npmrc`), but it's a fallback for when CI is down — the canonical path is tag-push.
+
+### Tarball naming
+
+`npm pack` flattens `@cordfuse/crosstalk-runtime` to `cordfuse-crosstalk-runtime-X.Y.Z.tgz`. The workflow `files:` glob and release-notes URL templates already account for this — don't change to the unscoped `crosstalk-runtime-*.tgz` form.
+
+---
+
 ## Development Rules
 
 - **Protocol spec lives in `cordfuse/crosstalk`** — if it's a protocol question, it goes there
