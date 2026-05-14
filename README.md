@@ -121,11 +121,17 @@ npm install -g @cordfuse/crosstalk-runtime
 
 Puts `crosstalk` and the alias `ct` on PATH.
 
+**Pre-release channel** for early-access alphas (`@next` dist-tag):
+
+```sh
+npm install -g @cordfuse/crosstalk-runtime@next
+```
+
 **Pinned-version fallback** (also useful behind firewalls that block npm but allow GitHub):
 
 ```sh
-# Replace v0.8.0 with the desired tag from the releases page
-npm install -g https://github.com/cordfuse/crosstalk-runtime/releases/download/v0.8.0/cordfuse-crosstalk-runtime-0.8.0.tgz
+# Replace v1.0.0 with the desired tag from the releases page
+npm install -g https://github.com/cordfuse/crosstalk-runtime/releases/download/v1.0.0/cordfuse-crosstalk-runtime-1.0.0.tgz
 ```
 
 ---
@@ -148,21 +154,26 @@ npm run dev
 
 ## Current release
 
-**v0.7.0-alpha.1** — first runtime alpha of the v0.7 Governance minor. Adds `crosstalk roe audit` and `crosstalk roe validate` operator subcommands enforcing the AMENDMENT.md spec from framework v0.7.0.
+**v1.0.0 — Production Ready** (npm: `@cordfuse/crosstalk-runtime`, dist-tag `latest`; protocol: `SUPPORTS_PROTOCOL_MAJOR_MINOR = "0.4"`).
 
-The full release history (and the framework changelog this runtime tracks) lives in [cordfuse/crosstalk WHATSNEW.md](https://github.com/cordfuse/crosstalk/blob/main/WHATSNEW.md) — single source of truth for both repos.
+The full release history lives in [cordfuse/crosstalk WHATSNEW.md](https://github.com/cordfuse/crosstalk/blob/main/WHATSNEW.md) — single source of truth for both repos.
 
-Highlights from earlier minors:
-- **v0.6.0 (Interactive Client)** — `crosstalk channel join` with PTY plumbing, three-mode runtime (daemon / server / interactive), config-driven `[agents.X]` registry, live message injection with `to:`-targeting filter and prompt-ready clustering. Distribution pivoted from bun-compile per-platform binaries to a Node npm tarball mid-series (v0.6.0-alpha.4).
-- **v0.5.0 (Operator UX)** — full operator CLI surface: `init`, `post`, `channel new/list/show/tail`, `actor list/validate`, `ls`, `config show`, `version`, `watch start/stop/status/logs`. Plus framework PROFILES.md actor profile spec + AGENTS.md operator-AI guide.
-- **v0.4.0 (Infrastructure)** — repo split from monorepo, relay-based real-time dispatch (`relay.crosstalk.sh` live), `~/.crosstalk/config.md` (legacy YAML) replaced with `~/.crosstalk/config.toml`.
+What v1.0 ships across the cumulative minors:
+
+- **v1.0.0 (Production Ready)** — protocol bumped 0.3 → 0.4; CROSSTALK-VERSION file shipped in framework template; honest scope statement (single-operator supported; multi-operator + Docker + native Windows + standalone-binary all post-v1.0). See [framework ROADMAP.md](https://github.com/cordfuse/crosstalk/blob/main/ROADMAP.md) v1.0 section.
+- **v0.9.x (v1.0 prep — alphas only, never cut as v0.9.0 stable)** — daemon installation templates (systemd + launchd) + `crosstalk service install/uninstall/template` CLI; `init` ↔ service integration; `[relay] mode = "disabled"` for offline operators; PTY-mode decrypt-on-read for `channel join`; protocol version handshake at startup.
+- **v0.8.0 (Privacy)** — `age`-based per-actor encryption, ROE encryption modes (none/optional/required), CLI `--encrypt`, transparent dispatch in/outbound encryption (response-in-kind), decrypt-on-read in `channel show/tail`, ephemeral whisper messages with auto-tombstoning.
+- **v0.7.0 (Governance)** — five ROE templates with per-template semantic enforcement (Parliamentary member-only voting, Scrum role-change PO+SM consent, etc.), time-decay deadlock automation, vote-tally auto-fire on window expiry.
+- **v0.6.0 (Interactive Client)** — `crosstalk channel join` with PTY plumbing, three-mode runtime (daemon / server / interactive), config-driven `[agents.X]` registry, live message injection.
+- **v0.5.0 (Operator UX)** — full operator CLI surface: `init`, `post`, `channel new/list/show/tail`, `actor list/validate`, `ls`, `config show`, `version`, `watch start/stop/status/logs`.
+- **v0.4.0 (Infrastructure)** — repo split from monorepo, relay-based real-time dispatch (`relay.crosstalk.sh` live), `~/.crosstalk/config.toml`.
 - **v0.3.0 (Multi-Provider)** — native dispatch for Claude / Gemini / Qwen / OpenCode (Ollama), custom `command`/`args` adapter, cursor-based startup catch-up.
 
 ---
 
 ## Versioning
 
-Tagged as `vX.Y.Z`. Each tag push triggers `.github/workflows/release-runtime.yml`, which runs `npm install` + `npm run build` + `npm pack` and publishes the tarball as a GitHub Release asset. `package.json` is the version-of-record (the historical `VERSION` file from the bun-compile era was deleted in v0.7.0-alpha.1).
+Tagged as `vX.Y.Z` (or `vX.Y.Z-alpha.N` / `vX.Y.Z-rc.N` for pre-releases). Each tag push triggers `.github/workflows/release-runtime.yml`, which runs `npm install` + `npm run build` + `npm pack`, publishes the tarball as a GitHub Release asset, AND publishes to npm — pre-releases (semver tag with `-` after the patch number) auto-publish under the `next` dist-tag, stable releases under `latest`. `package.json` is the version-of-record.
 
 ---
 

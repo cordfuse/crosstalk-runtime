@@ -17,9 +17,12 @@ Tracking framework versions; runtime ships its own alpha series within each shar
 - **v0.5.0** ✓ — full operator CLI: `init`, `post`, `channel new/list/show/tail`, `ls`, `actor list/validate`, `config show`, `version`, `watch start/stop/status/logs`. Plus framework PROFILES.md spec + AGENTS.md operator-AI guide
 - **v0.5.1** ✓ — human-actor profile spec; framework `system` actor type
 - **v0.6.0** ✓ — interactive client: `crosstalk channel join` with PTY plumbing (`@homebridge/node-pty-prebuilt-multiarch`), `--backfill N`, config-driven `[agents.X]` registry, live message injection (`to:`-targeting filter + prompt-ready clustering). Distribution pivoted to Node npm tarball at alpha.4
-- **v0.7.0-alpha.1** ✓ ← current — `crosstalk roe audit` + `crosstalk roe validate` operator subcommands. Begins runtime enforcement of the framework v0.7.0 governance specs (AMENDMENT.md / DEADLOCK.md / BOOTSTRAP.md)
+- **v0.7.0** ✓ — Governance minor: 5 ROE templates (Parliamentary / Scrum / Casual / Monarchy / Conductor-Orchestra) with per-template semantic enforcement, time-decay deadlock automation, vote-tally auto-fire on window expiry, AMENDMENT.md + BOOTSTRAP.md spec, cursor migration SESSION_ID → MACHINE_ID
+- **v0.8.0** ✓ — Privacy minor: `age`-based per-actor encryption, ROE encryption modes (none/optional/required), `crosstalk post --encrypt`, transparent dispatch in/outbound encryption (response-in-kind), decrypt-on-read in `channel show/tail`, ephemeral whisper messages with auto-tombstoning
+- **v0.9.0-alpha.1 … alpha.3** ✓ — v1.0 prep alphas (never cut as v0.9.0 stable; promoted directly to v1.0.0). Daemon installation templates (systemd + launchd) + `crosstalk service install/uninstall/template`; `init` ↔ service integration; `[relay] mode = "disabled"`; PTY-mode decrypt-on-read for `channel join`; protocol version handshake at daemon startup
+- **v1.0.0** ✓ ← current — Production Ready. Protocol bumped 0.3 → 0.4 to capture v0.7 + v0.8 wire-format additions. Honest scope: single-operator supported; multi-operator + Docker + native Windows + standalone-binary all post-v1.0. npm `@cordfuse/crosstalk-runtime`, `latest` dist-tag
 
-The full per-alpha changelog (covering both repos) is at [cordfuse/crosstalk WHATSNEW.md](https://github.com/cordfuse/crosstalk/blob/main/WHATSNEW.md).
+The full per-version changelog (covering both repos) is at [cordfuse/crosstalk WHATSNEW.md](https://github.com/cordfuse/crosstalk/blob/main/WHATSNEW.md).
 
 ---
 
@@ -45,24 +48,13 @@ The full per-alpha changelog (covering both repos) is at [cordfuse/crosstalk WHA
 
 ---
 
-## v0.7.x runtime roadmap (in progress)
+## v1.x roadmap (post-v1.0)
 
-Runtime enforcement of the framework v0.7.0 governance specs lands incrementally:
+v1.0 ships the v0.7 governance + v0.8 privacy + v0.9.x v1.0-prep work fully validated. Open items targeted for v1.x or post-v1.0:
 
-- **alpha.1** ✓ — `crosstalk roe audit` + `crosstalk roe validate`. Operator tools that read channel history, identify governance messages (the `roe-*` family + `session-open` / `bootstrap-conflict`), render the amendment trail per anchor id, and apply AMENDMENT.md syntactic validation (proposal-id uniqueness, vote-on references live proposal, vote.vote ∈ {yes,no,abstain}, vote-window honoured, from in registry, second.seconds references live proposal). Self-testable on a synthetic transport; no Mac UAT blocker.
-- **alpha.2** — watcher integration: `type: session-open` detection per BOOTSTRAP.md + per-actor work-message gating. Riskier (touches dispatch path); needs cross-machine UAT to prove the multi-actor startup race-condition fix actually works.
-- **alpha.3** — time-decay automation per DEADLOCK.md: when active ROE specifies time-decay pattern + decay timer elapses with no resolution, runtime auto-posts `roe-deadlock-resolution` message.
-- **alpha.4** — bootstrap-conflict surface routing per BOOTSTRAP.md edge cases: when bootstrap pass detects inconsistent state (two `roe-vote-result` disagreeing on same proposal, `roe-ratified` referencing nonexistent commit SHA, etc.), runtime posts `type: bootstrap-conflict` and degrades the session pending human resolution.
-- **alpha.5+** — per-template semantic enforcement (Parliamentary member-only voting, Scrum role-change PO+SM consent, Conductor/Orchestra no-vote, etc.). Requires runtime to parse and interpret the active ROE file. Bigger scope; potentially multiple alphas. Can stay deferred indefinitely if syntactic validation + bootstrap infrastructure prove sufficient.
-- **v0.7.0 runtime final** when stable.
-
-After v0.7.x stabilises: **v0.8 = Privacy** (`age`-based per-actor keypair encryption, ephemeral messages, ROE encryption modes) per the framework ROADMAP.
-
----
-
-## Open items (runtime-side, beyond v0.7.x)
-
-- **Standalone single-file binary distribution** — deferred to post-v1.0 once the PTY layer is rewritten as `bun:ffi` (eliminating the native-module bundling complexity that drove the bun-compile → npm pivot in v0.6.0-alpha.4)
-- **Daemon installer** — systemd user unit (Linux) + launchd plist (macOS) templates. Targeted at v1.0 hardening.
-- **Optional Docker deploy** — `crosstalk init` offers bare metal or Docker, generates systemd unit or `docker-compose.yml` accordingly. Solves multi-runtime-version isolation on a single machine. Targeted at v1.0.
-- **Native Windows support** — currently WSL only; native Windows replaces systemd with Windows Service / NSSM, resolves path-separator assumptions, tests `fs.watch` behaviour under Windows. Targeted at v1.x.
+- **Multi-operator collaboration** — multiple humans sharing one transport with proper coordination. v1.0 supports single-operator only (one human, possibly across their own multiple machines via per-machine cursors). Multi-operator design questions are unresolved: actor ownership across machines (which daemon picks up alice when alice is registered on two operators' machines?), identity attribution (no protocol-level rule preventing two humans from both writing `from: steve`), key rotation propagation (when alice rotates on her machine, bob's machine still has the old pubkey until pull+commit), bootstrap coordinator collisions. Targeted at v1.x once the design pass lands.
+- **Optional Docker deploy** — `crosstalk init` offers bare metal or Docker, generates systemd unit or `docker-compose.yml` accordingly. Solves multi-runtime-version isolation on a single machine. Deferred from v1.0 — npm-only covers everyone using Crosstalk today; Docker adds maintenance surface. Re-evaluate when operator demand surfaces.
+- **Native Windows support** — currently WSL only; native Windows replaces systemd with Windows Service / NSSM, resolves path-separator assumptions, tests `fs.watch` behaviour under Windows. Targeted at v1.x once macOS + Linux are stable in the field.
+- **Standalone single-file binary distribution** — deferred to post-v1.0 once the PTY layer is rewritten as `bun:ffi` (eliminating the native-module bundling complexity that drove the bun-compile → npm pivot in v0.6.0-alpha.4).
+- **Actor swarms** — N parallel workers per actor profile (fan-out + work-queue flavors). Today single-instance-per-actor. Post-v1.0 design pass; see [framework TODO #33](https://github.com/cordfuse/crosstalk/blob/main/TODO.md).
+- **Politik bindings** — actual integration code once Politik exists (currently PLAN phase per `STRATEGY.md`). v1.0 ships only the spec seam in `manifest/framework/protocol/POLITIK.md`.

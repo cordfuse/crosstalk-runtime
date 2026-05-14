@@ -142,8 +142,8 @@ npm install -g @cordfuse/crosstalk-runtime
 **Pinned-version fallback** (also useful behind firewalls that block npm but allow GitHub):
 
 ```sh
-# Replace v0.8.0 with the desired tag from the releases page
-npm install -g https://github.com/cordfuse/crosstalk-runtime/releases/download/v0.8.0/cordfuse-crosstalk-runtime-0.8.0.tgz
+# Replace v1.0.0 with the desired tag from the releases page
+npm install -g https://github.com/cordfuse/crosstalk-runtime/releases/download/v1.0.0/cordfuse-crosstalk-runtime-1.0.0.tgz
 ```
 
 The tarball ships pre-built `dist/` (compiled in CI before `npm pack`), so `npm install` doesn't have to run `tsc` on the user's machine. `@homebridge/node-pty-prebuilt-multiarch`'s install script does build its native PTY module locally for the user's platform.
