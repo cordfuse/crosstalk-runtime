@@ -24,11 +24,14 @@ All v0.9.x alphas promoted directly into v1.0.0 — v0.9.0 stable was skipped to
 
 ## v1.x candidates (post-v1.0)
 
+- [ ] **BUG (v1.0.x candidate) — push contention at N>10 concurrent dispatch.** Surfaced by Monte Carlo π dogfood test (2026-05-16, 20-actor fan-out on opencode+OpenRouter, channel `monte-carlo-pi`). All 20 dispatches succeeded LLM-side + wrote responses locally, but only 9 of 20 reached the shared transport — 11 failed with `[git] push failed after max retries`. Per-actor clones each ran `pushWithRetry(maxAttempts=5)` (`src/git.ts:63`) against the same shared transport on github.com simultaneously; 5 retries weren't enough at 20-way contention. **Fix shapes (pick one):** (a) bump `maxAttempts` to 15-20 (cheap, doesn't address root cause), (b) per-transport push queue in the daemon (serialize pushes to a given remote, eliminates contention), (c) coordinator-pattern batching (single committer rolls up multiple actor outputs into one push). My pick: (b) — proper fix, modest code, no semantic change for operators. **Operator-visible symptom: silent message drop on heavy fan-out.** This is a quality issue for the swarm dogfooding use case. File against `src/git.ts` `pushWithRetry`.
 - [ ] Multi-operator collaboration — design pass for actor ownership / identity / key rotation propagation across operators sharing a transport. The biggest v1.x deliverable.
 - [ ] Optional Docker deploy path: `crosstalk init` offers bare metal or Docker, generates systemd unit or `docker-compose.yml` accordingly — re-evaluate on operator demand
 - [ ] Native Windows support (currently WSL-only) — gated on macOS + Linux being stable in operator hands first
 - [ ] Field validation: multi-machine swarm proven in operator hands beyond Steve's setup
 - [ ] `crosstalk init` integrates Docker deploy path (when Docker landed)
+- [ ] `--config` / `CROSSTALK_CONFIG` env override (Mac flagged in v1.0.0 signoff) — unlocks ergonomic multi-transport without HOME juggling; daemon stays single-transport per the architecture
+- [ ] `spawnCodex` (Mac flagged) — codex is wired for `channel join` but falls to `spawnCustom` for daemon dispatch. Mirror `spawnGemini`/`spawnQwen`. Optional quality tier; not the fallback answer (that's opencode+OpenRouter).
 
 ---
 
