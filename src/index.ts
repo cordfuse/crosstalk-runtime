@@ -13,6 +13,7 @@ import {
 import { join } from 'path';
 import { readFile } from 'fs/promises';
 import { parseFrontmatter } from './frontmatter.js';
+import { acquireSingleInstanceLock } from './single-instance.js';
 
 // CLI dispatch — if a subcommand is passed, route to the CLI module and exit.
 // No-args invocation (and `RELAY_MODE=server`) falls through to the daemon
@@ -23,6 +24,12 @@ if (process.argv.length > 2 && process.env.RELAY_MODE !== 'server') {
   await runCLI(process.argv);
   process.exit(0);
 }
+
+// Single-instance enforcement (v1.0.4+). One daemon per OS user. Refuses
+// to start if another live daemon is already running. Stale PID files
+// (SIGKILL'd daemons, crashes) are auto-cleaned. Lock is per-user via
+// ~/.crosstalk/ being in homedir.
+acquireSingleInstanceLock();
 
 console.log('[crosstalk] starting');
 
