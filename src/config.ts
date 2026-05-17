@@ -18,15 +18,23 @@ function resolveConfigPath(): string {
 export interface RelayConfig {
   // 'client'   — connect outbound to a relay (default; URL = wss://relay.crosstalk.sh unless overridden)
   // 'server'   — host the relay; accept inbound from runtimes + GitHub webhook
-  // 'disabled' — no relay involvement; runtime polls/git-pulls only. v0.9.0+
-  //              for fully-offline operators OR transports synced via non-git
-  //              mechanisms (rsync, NAS). Skip this if you want real-time
-  //              webhook-driven dispatch.
+  // 'disabled' — no relay involvement; runtime polls the transport (v1.2.0+,
+  //              see `pollIntervalSeconds`). Suitable for fully-offline
+  //              operators, transports synced via non-git mechanisms
+  //              (rsync, NAS), or anyone who wants no third-party in the
+  //              webhook path.
   mode: 'client' | 'server' | 'disabled';
   url: string;
   secret: string;
   webhookSecret?: string;  // server mode only — GitHub → relay HMAC
   port: number;            // server mode only
+  /** v1.2.0+ — polling interval when `mode = "disabled"`. Daemon calls
+   * `transport.sync()` every N seconds to pick up commits from other
+   * machines / PR merges / external pushes. Default 30s (cheap, fine for
+   * batch workloads). Lower (5–10s) for interactive multi-actor use;
+   * higher (60–300s) for daily-async coordination. Ignored when `mode`
+   * is `"client"` or `"server"` (real-time notifications cover sync). */
+  pollIntervalSeconds: number;
 }
 
 export interface AgentSpawn {
@@ -83,6 +91,7 @@ const DEFAULTS = {
     url: 'wss://relay.crosstalk.sh',
     secret: '',
     port: 3003,
+    pollIntervalSeconds: 30,  // v1.2.0+ — used only when mode === 'disabled'
   },
   bootstrap: {
     timeoutMs: 300_000,         // 5 min per BOOTSTRAP.md
@@ -110,6 +119,7 @@ export async function loadConfig(): Promise<Config> {
         url: '',
         secret: process.env.RELAY_SECRET ?? '',
         port: envInt('PORT') ?? DEFAULTS.relay.port,
+        pollIntervalSeconds: DEFAULTS.relay.pollIntervalSeconds,
         ...(process.env.WEBHOOK_SECRET ? { webhookSecret: process.env.WEBHOOK_SECRET } : {}),
       },
       agents: {},
@@ -159,6 +169,9 @@ export async function loadConfig(): Promise<Config> {
     url: typeof relayData.url === 'string' ? relayData.url : DEFAULTS.relay.url,
     secret: typeof relayData.secret === 'string' ? relayData.secret : DEFAULTS.relay.secret,
     port: envInt('PORT') ?? (typeof relayData.port === 'number' ? relayData.port as number : DEFAULTS.relay.port),
+    pollIntervalSeconds: typeof relayData['poll-interval-seconds'] === 'number'
+      ? relayData['poll-interval-seconds'] as number
+      : DEFAULTS.relay.pollIntervalSeconds,
     ...(typeof relayData['webhook-secret'] === 'string'
       ? { webhookSecret: relayData['webhook-secret'] as string }
       : {}),

@@ -118,8 +118,22 @@ if (config.relay.mode === 'server') {
     console.log(`[crosstalk] registry reloaded: ${[...registry.keys()].join(', ') || 'none'}`);
   });
 
+  // v1.2.0+ — polling fallback when no relay. Calls transport.sync() on a
+  // timer so commits from other machines / PR merges / external pushes get
+  // picked up without operator intervention. Default 30s; configurable via
+  // [relay].poll-interval-seconds. The relay client (mode=client/server)
+  // gets sub-second sync via webhook; polling fills the gap when relay is
+  // off entirely. NOT a backup-when-relay-disconnected — relay client
+  // handles its own reconnects.
+  let pollTimer: NodeJS.Timeout | null = null;
   if (config.relay.mode === 'disabled') {
-    console.log('[crosstalk] relay: disabled (offline mode — no real-time dispatch; transport sync is your responsibility)');
+    const intervalMs = Math.max(1, config.relay.pollIntervalSeconds) * 1000;
+    console.log(`[crosstalk] relay: disabled — polling transport every ${config.relay.pollIntervalSeconds}s`);
+    // Immediate initial sync so we don't wait the full interval to catch up.
+    transport.sync().catch(err => console.error(`[crosstalk] initial sync failed: ${err}`));
+    pollTimer = setInterval(() => {
+      transport.sync().catch(err => console.error(`[crosstalk] poll sync failed: ${err}`));
+    }, intervalMs);
   } else {
     startRelayClient(config.relay, transport);
   }
@@ -268,6 +282,7 @@ if (config.relay.mode === 'server') {
     decayChecker.stop();
     autoTallyChecker.stop();
     ephemeralExpirationChecker.stop();
+    if (pollTimer) clearInterval(pollTimer);
     await announceOffline(transport);
     await transport.close();
     process.exit(0);
