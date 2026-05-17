@@ -61,16 +61,11 @@
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
-import { mkdir, writeFile } from 'fs/promises'
-import { execFile } from 'child_process'
-import { promisify } from 'util'
 import { parseFrontmatter } from './frontmatter.js'
-import { hasRemote, pushWithRetry } from './git.js'
-import { MESSAGE_FILE_RE, messageDatePath, messageFilename } from './filenames.js'
+import type { Transport, ActorIdentity } from './transport.js'
+import { MESSAGE_FILE_RE } from './filenames.js'
 import type { Registry } from './registry.js'
 import { MACHINE_ID } from './system.js'
-
-const execFileP = promisify(execFile)
 
 const YEAR_RE = /^\d{4}$/
 const DD_RE = /^\d{2}$/
@@ -449,8 +444,12 @@ export interface BootstrapSummary {
  * v0.7.0-alpha.5+ adds per-channel pending-amendment surfacing — pass
  * `channelDir` to include it. Without it, falls back to the alpha.2 MVP
  * shape (actors + ROE version only).
+ *
+ * v1.1.0+ — ROE version now sourced via `Transport.manifestFileVersion`
+ * instead of direct `git log` execution.
  */
 export async function buildBootstrapSummary(
+  transport: Transport,
   transportRoot: string,
   _registry: Registry,  // accepted for backward compat; uses all-actors set internally
   channelDir?: string,
@@ -467,7 +466,7 @@ export async function buildBootstrapSummary(
   const flaggedOffline: Array<{ name: string; lastSeen: string | null }> = []
 
   const roe = locateActiveROE(transportRoot)
-  const roeVersion = roe ? await gitFileSha(transportRoot, roe.relativePath) : 'unknown'
+  const roeVersion = roe ? await transport.manifestFileVersion(roe.relativePath) : 'unknown'
 
   // alpha.5+: surface pending amendments per channel
   let pendingAmendments: BootstrapSummary['pendingAmendments'] | undefined
@@ -509,32 +508,17 @@ function locateActiveROE(transportRoot: string): { relativePath: string; layer: 
   return null
 }
 
-async function gitFileSha(transportRoot: string, relativePath: string): Promise<string> {
-  try {
-    const { stdout } = await execFileP('git', ['log', '-1', '--format=%H', '--', relativePath], {
-      cwd: transportRoot,
-    })
-    return stdout.trim() || 'uncommitted'
-  } catch {
-    return 'unknown'
-  }
-}
-
-/** Atomic write + commit + push of a `type: session-open` message to the
- * specified channel. Uses the existing `pushWithRetry` (alpha.6 fix) so push
- * survives remote contention via rebase-and-retry. */
+/** Post a `type: session-open` message via Transport.postMessage. The
+ * transport handles the file write + commit + push (with all the v1.0.x
+ * concurrency fixes wrapped inside). Bootstrap just builds the content. */
 export async function postSessionOpen(
-  transportRoot: string,
+  transport: Transport,
   channelGuid: string,
   coordinatorActor: string,
   summary: BootstrapSummary,
   actorEmailSuffix: string,
 ): Promise<void> {
-  const d = new Date()
-  const datePath = messageDatePath(d)
-  const fileName = messageFilename(d)
-  const iso = d.toISOString()
-
+  const iso = new Date().toISOString()
   const sessionId = `${MACHINE_ID}-${iso}`
 
   const offlineSection = summary.flaggedOffline.length === 0
@@ -567,27 +551,15 @@ export async function postSessionOpen(
     `## Pending amendments\n\n` +
     `${pendingSection}\n`
 
-  const channelDir = join(transportRoot, 'channels', channelGuid, datePath)
-  await mkdir(channelDir, { recursive: true })
-  const fullPath = join(channelDir, fileName)
-  await writeFile(fullPath, body)
+  const identity: ActorIdentity = {
+    name: coordinatorActor,
+    email: `${coordinatorActor}@${actorEmailSuffix}`,
+  }
 
-  // Commit + push under the coordinator's git identity (matches the from:
-  // field). Use the existing per-actor commit path to keep author attribution
-  // correct — but session-open is governance, not an actor response, so we
-  // commit at the runtime level and let pushWithRetry handle remote contention.
-  const relPath = `channels/${channelGuid}/${datePath}/${fileName}`
-  const gitEmail = `${coordinatorActor}@${actorEmailSuffix}`
   try {
-    await execFileP('git', ['-c', `user.name=${coordinatorActor}`, '-c', `user.email=${gitEmail}`,
-      'add', relPath], { cwd: transportRoot })
-    await execFileP('git', ['-c', `user.name=${coordinatorActor}`, '-c', `user.email=${gitEmail}`,
-      'commit', '-m', `session-open: ${coordinatorActor} on ${channelGuid.slice(0, 8)}`], { cwd: transportRoot })
-    if (await hasRemote(transportRoot)) {
-      await pushWithRetry(transportRoot)
-    }
+    await transport.postMessage(channelGuid, identity, body)
   } catch (err) {
-    console.error(`[bootstrap] failed to commit/push session-open: ${err}`)
+    console.error(`[bootstrap] failed to post session-open: ${err}`)
     throw err
   }
 }

@@ -40,6 +40,9 @@ All v0.9.x alphas promoted directly into v1.0.0 — v0.9.0 stable was skipped to
 - [ ] Field validation: multi-machine swarm proven in operator hands beyond Steve's setup
 - [ ] `crosstalk init` integrates Docker deploy path (when Docker landed)
 - [ ] `spawnCodex` (Mac flagged) — codex is wired for `channel join` but falls to `spawnCustom` for daemon dispatch. Mirror `spawnGemini`/`spawnQwen`. Optional quality tier; not the fallback answer (that's opencode+OpenRouter).
+- [ ] **v1.2.0 — CLI subcommand migration to Transport.** Daemon-core moved to the `Transport` interface in v1.1.0; CLI subcommands still call `git.ts`'s legacy `pushWithRetry` shim. Migrate `post`, `channel`, `channel-join`, `actor`, `watch`, `init` to consume `Transport` directly, then delete `src/git.ts` entirely. Same refactor pattern as v1.1.0 — well-bounded, all-internal, no operator-visible change.
+- [ ] **v1.x — FilesystemTransport.** ~150 LOC. Implements the same `Transport` interface for plain local FS, NFS/SMB mounts, sshfs, etc. Unblocks "local AI swarm on one machine with no git, no GitHub account, no relay" — a clear operator win.
+- [ ] **v1.x — SftpTransport.** ~250 LOC. For multi-machine without a kernel mount. Polling-based `watchMessages` (no native push from SFTP).
 
 ---
 
@@ -54,6 +57,7 @@ All v0.9.x alphas promoted directly into v1.0.0 — v0.9.0 stable was skipped to
 
 ## Shipped (recent)
 
+- **v1.1.0 — Transport interface** (2026-05-17) — internal refactor: `src/transport.ts` defines a 12-method `Transport` interface; `src/transports/git.ts` is the first implementation (`GitTransport`); all daemon-core consumers (index, watcher, dispatch, bootstrap, system, relay, governance) refactored to use Transport methods instead of direct git calls. ~46% of the runtime that previously existed to manage git semantics is now concentrated behind one bounded interface. Same operator-visible behavior; same v1.0.x bug fixes preserved. CLI subcommands still use the legacy `git.ts` shim (one `pushWithRetry` re-export remaining) — v1.2.0 migrates them.
 - **v1.0.5** (2026-05-17) — per-transport PID lock (replaces v1.0.4's per-user); `--config` / `CROSSTALK_CONFIG` env override; v1.0.4-migration safety check
 - **v1.0.4** (2026-05-17) — single-daemon-per-OS-user PID lock (`~/.crosstalk/daemon.pid`); stale-PID auto-recovery (superseded by v1.0.5's per-transport scheme)
 - **v1.0.3** (2026-05-17) — pre-pull-rebase inside push queue critical section; retry rate 150% → 1.7%

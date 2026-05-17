@@ -1,5 +1,5 @@
 import type { RelayConfig } from './config.js';
-import { pullTransport } from './git.js';
+import type { Transport } from './transport.js';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createServer, type IncomingMessage, type ServerResponse } from 'http';
 import { createHmac, timingSafeEqual } from 'crypto';
@@ -222,7 +222,7 @@ export function startRelayServer(config: RelayConfig): void {
 const RECONNECT_BASE_MS = 2_000;
 const RECONNECT_MAX_MS = 60_000;
 
-export function startRelayClient(config: RelayConfig, transportRoot: string): void {
+export function startRelayClient(config: RelayConfig, transport: Transport): void {
   const { url, secret } = config;
 
   let attempt = 0;
@@ -260,11 +260,11 @@ export function startRelayClient(config: RelayConfig, transportRoot: string): vo
       }
 
       if (msg.type === 'notify') {
-        console.log(`[relay] notify repo=${msg.repo} sha=${msg.sha.slice(0, 7)} — pulling transport`);
+        console.log(`[relay] notify repo=${msg.repo} sha=${msg.sha.slice(0, 7)} — syncing transport`);
         try {
-          await pullTransport(transportRoot);
+          await transport.sync();
         } catch (err) {
-          console.error(`[relay] pull failed: ${err}`);
+          console.error(`[relay] sync failed: ${err}`);
         }
       }
     });

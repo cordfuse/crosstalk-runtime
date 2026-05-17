@@ -1,10 +1,19 @@
+/**
+ * System messages (presence + watcher events). Builds the frontmatter +
+ * body for online/offline/timeout events; delegates persistence to the
+ * injected {@link Transport}.
+ *
+ * v1.1.0 — refactored to use Transport.postMessage instead of the legacy
+ * writeFile + commitWatcherMessage pair. Frontmatter / body construction
+ * stays here (protocol concern); file paths + commits + pushes move into
+ * `GitTransport`.
+ */
 import { join } from 'path';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { hostname } from 'os';
-import { mkdir, readFile, writeFile } from 'fs/promises';
-import { randomUUID } from 'crypto';
-import { commitWatcherMessage } from './git.js';
-import { messageDatePath, messageFilename } from './filenames.js';
+import { readFile } from 'fs/promises';
+import type { Transport } from './transport.js';
+import { SYSTEM_CHANNEL } from './transport.js';
 
 // Per-boot UUID — used in announcements to identify this specific startup
 export const SESSION_ID = randomUUID();
@@ -15,14 +24,7 @@ export const MACHINE_ID = createHash('sha256').update(hostname()).digest('hex').
 
 const MACHINE_HASH = MACHINE_ID.slice(0, 8);
 
-function nowParts() {
-  const d = new Date();
-  return {
-    date: messageDatePath(d),
-    file: messageFilename(d),
-    iso: d.toISOString(),
-  };
-}
+const WATCHER_IDENTITY = { name: 'watcher', email: 'watcher@crosstalk.noreply' };
 
 async function readProtocolVersion(transportRoot: string): Promise<string> {
   try {
@@ -32,26 +34,18 @@ async function readProtocolVersion(transportRoot: string): Promise<string> {
   }
 }
 
-async function writeSystemMessage(
-  transportRoot: string,
+function buildSystemMessage(
   reason: string,
   extra: Record<string, string>,
   body: string,
-): Promise<string> {
-  const { date, file, iso } = nowParts();
-  const dir = join(transportRoot, '_system', date);
-  await mkdir(dir, { recursive: true });
-
+): string {
+  const iso = new Date().toISOString();
   const extraLines = Object.entries(extra).map(([k, v]) => `${k}: ${v}`).join('\n');
-  const content =
-    `---\nfrom: watcher\nto: all\ntimestamp: ${iso}\ntype: system\nreason: ${reason}\nsession-id: ${SESSION_ID}\nmachine: ${MACHINE_HASH}\n${extraLines}\n---\n\n${body}\n`;
-
-  const relPath = `${date}/${file}`;
-  await writeFile(join(transportRoot, '_system', relPath), content);
-  return relPath;
+  return `---\nfrom: watcher\nto: all\ntimestamp: ${iso}\ntype: system\nreason: ${reason}\nsession-id: ${SESSION_ID}\nmachine: ${MACHINE_HASH}\n${extraLines}\n---\n\n${body}\n`;
 }
 
 export async function announceOnline(
+  transport: Transport,
   transportRoot: string,
   actorNames: string[],
 ): Promise<void> {
@@ -62,30 +56,24 @@ export async function announceOnline(
     `protocol-version: ${version}\n` +
     `actors:\n${actorNames.map(a => `  - ${a}`).join('\n')}`;
 
-  const relPath = await writeSystemMessage(transportRoot, 'online', {}, body);
-  await commitWatcherMessage(transportRoot, relPath, 'online');
+  const content = buildSystemMessage('online', {}, body);
+  await transport.postMessage(SYSTEM_CHANNEL, WATCHER_IDENTITY, content);
 }
 
-export async function announceOffline(transportRoot: string): Promise<void> {
-  const relPath = await writeSystemMessage(
-    transportRoot,
-    'offline',
-    {},
-    'watcher offline — graceful shutdown',
-  );
-  await commitWatcherMessage(transportRoot, relPath, 'offline');
+export async function announceOffline(transport: Transport): Promise<void> {
+  const content = buildSystemMessage('offline', {}, 'watcher offline — graceful shutdown');
+  await transport.postMessage(SYSTEM_CHANNEL, WATCHER_IDENTITY, content);
 }
 
 export async function announceTimeout(
-  transportRoot: string,
+  transport: Transport,
   actorName: string,
   channelGuid: string,
 ): Promise<void> {
-  const relPath = await writeSystemMessage(
-    transportRoot,
+  const content = buildSystemMessage(
     'timeout',
     { actor: actorName, channel: channelGuid },
     `actor timeout — ${actorName} did not respond in time\n\nchannel: ${channelGuid}`,
   );
-  await commitWatcherMessage(transportRoot, relPath, `timeout:${actorName}`);
+  await transport.postMessage(SYSTEM_CHANNEL, WATCHER_IDENTITY, content);
 }

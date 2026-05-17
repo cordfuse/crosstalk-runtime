@@ -27,14 +27,9 @@
  */
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { mkdir, writeFile } from 'fs/promises'
-import { execFile } from 'child_process'
-import { promisify } from 'util'
 import { parseFrontmatter } from './frontmatter.js'
-import { hasRemote, pushWithRetry } from './git.js'
-import { messageFilename, messageDatePath, MESSAGE_FILE_RE } from './filenames.js'
-
-const execFileP = promisify(execFile)
+import type { Transport, ActorIdentity } from './transport.js'
+import { MESSAGE_FILE_RE } from './filenames.js'
 
 const YEAR_RE = /^\d{4}$/
 const DD_RE   = /^\d{2}$/
@@ -486,9 +481,15 @@ function matchKeyValue(content: string, key: string): string | null {
   return m ? m[1] : null
 }
 
-/** Atomic write + commit + push of a `type: roe-deadlock-resolution` message. */
+/** Helper — build the canonical actor identity used to attribute
+ * governance messages. */
+function govIdentity(fromActor: string, actorEmailSuffix: string): ActorIdentity {
+  return { name: fromActor, email: `${fromActor}@${actorEmailSuffix}` }
+}
+
+/** Post a `type: roe-deadlock-resolution` message via Transport. */
 export async function postDeadlockResolution(
-  transportRoot: string,
+  transport: Transport,
   channelGuid: string,
   fromActor: string,
   anchorId: string,
@@ -497,11 +498,7 @@ export async function postDeadlockResolution(
   rationale: string,
   actorEmailSuffix: string,
 ): Promise<void> {
-  const d = new Date()
-  const datePath = messageDatePath(d)
-  const fileName = messageFilename(d)
-  const iso = d.toISOString()
-
+  const iso = new Date().toISOString()
   const body =
     `---\n` +
     `from: ${fromActor}\n` +
@@ -513,43 +510,26 @@ export async function postDeadlockResolution(
     `basis: ${basis}\n` +
     `---\n\n` +
     `${rationale}\n`
-
-  const channelDir = join(transportRoot, 'channels', channelGuid, datePath)
-  await mkdir(channelDir, { recursive: true })
-  const fullPath = join(channelDir, fileName)
-  await writeFile(fullPath, body)
-
-  const relPath = `channels/${channelGuid}/${datePath}/${fileName}`
-  const gitEmail = `${fromActor}@${actorEmailSuffix}`
   try {
-    await execFileP('git', ['-c', `user.name=${fromActor}`, '-c', `user.email=${gitEmail}`,
-      'add', relPath], { cwd: transportRoot })
-    await execFileP('git', ['-c', `user.name=${fromActor}`, '-c', `user.email=${gitEmail}`,
-      'commit', '-m', `roe-deadlock-resolution: ${anchorId} → ${resolution} (${basis})`], { cwd: transportRoot })
-    if (await hasRemote(transportRoot)) await pushWithRetry(transportRoot)
+    await transport.postMessage(channelGuid, govIdentity(fromActor, actorEmailSuffix), body)
   } catch (err) {
-    console.error(`[governance] failed to commit/push roe-deadlock-resolution: ${err}`)
+    console.error(`[governance] failed to post roe-deadlock-resolution: ${err}`)
     throw err
   }
 }
 
-/** Atomic write + commit + push of a `type: bootstrap-conflict` message. */
+/** Post a `type: bootstrap-conflict` message via Transport. */
 export async function postBootstrapConflict(
-  transportRoot: string,
+  transport: Transport,
   channelGuid: string,
   fromActor: string,
   inconsistencies: Inconsistency[],
   actorEmailSuffix: string,
 ): Promise<void> {
-  const d = new Date()
-  const datePath = messageDatePath(d)
-  const fileName = messageFilename(d)
-  const iso = d.toISOString()
-
+  const iso = new Date().toISOString()
   const detailsList = inconsistencies.map(i =>
     `- **${i.kind}** on \`${i.anchorId}\`: ${i.details}\n  paths:\n${i.paths.map(p => `    - \`${p}\``).join('\n')}`
   ).join('\n')
-
   const body =
     `---\n` +
     `from: ${fromActor}\n` +
@@ -561,22 +541,10 @@ export async function postBootstrapConflict(
     `## Bootstrap detected inconsistent governance state\n\n` +
     `${detailsList}\n\n` +
     `_The swarm is in a degraded state per BOOTSTRAP.md "bootstrap finds inconsistent state". Work messages continue to dispatch normally; \`roe-*\` governance messages are gated until a human resolves manually (typically by amending or removing the conflicting messages, then posting a new \`session-open\`)._\n`
-
-  const channelDir = join(transportRoot, 'channels', channelGuid, datePath)
-  await mkdir(channelDir, { recursive: true })
-  const fullPath = join(channelDir, fileName)
-  await writeFile(fullPath, body)
-
-  const relPath = `channels/${channelGuid}/${datePath}/${fileName}`
-  const gitEmail = `${fromActor}@${actorEmailSuffix}`
   try {
-    await execFileP('git', ['-c', `user.name=${fromActor}`, '-c', `user.email=${gitEmail}`,
-      'add', relPath], { cwd: transportRoot })
-    await execFileP('git', ['-c', `user.name=${fromActor}`, '-c', `user.email=${gitEmail}`,
-      'commit', '-m', `bootstrap-conflict: ${inconsistencies.length} inconsistency(ies) on ${channelGuid.slice(0, 8)}`], { cwd: transportRoot })
-    if (await hasRemote(transportRoot)) await pushWithRetry(transportRoot)
+    await transport.postMessage(channelGuid, govIdentity(fromActor, actorEmailSuffix), body)
   } catch (err) {
-    console.error(`[governance] failed to commit/push bootstrap-conflict: ${err}`)
+    console.error(`[governance] failed to post bootstrap-conflict: ${err}`)
     throw err
   }
 }
@@ -600,6 +568,7 @@ export interface DecayCheckerHandle {
  * host the coordinator, we skip — the other machine handles it.
  */
 export function startDecayChecker(
+  transport: Transport,
   transportRoot: string,
   intervalMs: number,
   getCoordinator: () => string | null,
@@ -645,7 +614,7 @@ export function startDecayChecker(
             `- Tally at decay: yes=${p.votes.yes}, no=${p.votes.no}, abstain=${p.votes.abstain} (insufficient for quorum-based resolution)\n`
 
           try {
-            await postDeadlockResolution(transportRoot, guid, coordinator, p.anchorId, outcome as 'passed' | 'failed', 'time-decay', rationale, actorEmailSuffix)
+            await postDeadlockResolution(transport, guid, coordinator, p.anchorId, outcome as 'passed' | 'failed', 'time-decay', rationale, actorEmailSuffix)
             console.log(`[governance] time-decay auto-resolved ${guid.slice(0, 8)}/${p.anchorId} → ${outcome}`)
           } catch (err) {
             console.error(`[governance] failed to auto-resolve ${guid.slice(0, 8)}/${p.anchorId}: ${err}`)
@@ -673,22 +642,18 @@ function isRoleChangeTarget(target: string): boolean {
   return /role|member|team|product[- ]?owner|scrum[- ]?master|\bpo\b|\bsm\b/.test(t)
 }
 
-/** Atomic write + commit + push of a `type: roe-vote-result` message. Used
- * by the auto-tally path when a vote-window expires without a Speaker/SM
+/** Post a `type: roe-vote-result` message via Transport. Used by the
+ * auto-tally path when a vote-window expires without a Speaker/SM
  * posting the result. */
 export async function postVoteResult(
-  transportRoot: string,
+  transport: Transport,
   channelGuid: string,
   fromActor: string,
   anchorId: string,
   tally: VoteTally,
   actorEmailSuffix: string,
 ): Promise<void> {
-  const d = new Date()
-  const datePath = messageDatePath(d)
-  const fileName = messageFilename(d)
-  const iso = d.toISOString()
-
+  const iso = new Date().toISOString()
   const body =
     `---\n` +
     `from: ${fromActor}\n` +
@@ -708,21 +673,10 @@ export async function postVoteResult(
     `${tally.ineligibleVotes > 0 ? `- ${tally.ineligibleVotes} ineligible vote(s) excluded\n` : ''}` +
     `${tally.expiredVotes > 0 ? `- ${tally.expiredVotes} expired vote(s) excluded\n` : ''}` +
     `\n_Auto-posted by runtime when vote-window elapsed and no role-holder posted the result. This message is the formal outcome._\n`
-
-  const channelDir = join(transportRoot, 'channels', channelGuid, datePath)
-  await mkdir(channelDir, { recursive: true })
-  await writeFile(join(channelDir, fileName), body)
-
-  const relPath = `channels/${channelGuid}/${datePath}/${fileName}`
-  const gitEmail = `${fromActor}@${actorEmailSuffix}`
   try {
-    await execFileP('git', ['-c', `user.name=${fromActor}`, '-c', `user.email=${gitEmail}`,
-      'add', relPath], { cwd: transportRoot })
-    await execFileP('git', ['-c', `user.name=${fromActor}`, '-c', `user.email=${gitEmail}`,
-      'commit', '-m', `roe-vote-result (auto-tally): ${anchorId} → ${tally.ratified}`], { cwd: transportRoot })
-    if (await hasRemote(transportRoot)) await pushWithRetry(transportRoot)
+    await transport.postMessage(channelGuid, govIdentity(fromActor, actorEmailSuffix), body)
   } catch (err) {
-    console.error(`[governance] failed to commit/push roe-vote-result: ${err}`)
+    console.error(`[governance] failed to post roe-vote-result: ${err}`)
     throw err
   }
 }
@@ -742,6 +696,7 @@ export async function postVoteResult(
  * (and Scrum's PO+SM consent).
  */
 export function startAutoTallyChecker(
+  transport: Transport,
   transportRoot: string,
   intervalMs: number,
   getCoordinator: () => string | null,
@@ -782,7 +737,7 @@ export function startAutoTallyChecker(
 
           const tally = computeTally(p.anchorId, messages, templateConfig, isAmendment, now)
           try {
-            await postVoteResult(transportRoot, guid, coordinator, p.anchorId, tally, actorEmailSuffix)
+            await postVoteResult(transport, guid, coordinator, p.anchorId, tally, actorEmailSuffix)
             console.log(`[governance] auto-tally posted ${guid.slice(0, 8)}/${p.anchorId} → ${tally.ratified} (${tally.reason})`)
           } catch (err) {
             console.error(`[governance] failed to auto-tally ${guid.slice(0, 8)}/${p.anchorId}: ${err}`)
@@ -799,20 +754,16 @@ export function startAutoTallyChecker(
 
 // ── Ephemeral auto-expiration (v0.8.0-alpha.1+ per EPHEMERAL.md) ─────────
 
-/** Atomic write + commit + push of a `type: ephemeral-expired` tombstone. */
+/** Post a `type: ephemeral-expired` tombstone via Transport. */
 export async function postEphemeralExpired(
-  transportRoot: string,
+  transport: Transport,
   channelGuid: string,
   fromActor: string,
   ephemeralId: string,
   expiresAt: string,
   actorEmailSuffix: string,
 ): Promise<void> {
-  const d = new Date()
-  const datePath = messageDatePath(d)
-  const fileName = messageFilename(d)
-  const iso = d.toISOString()
-
+  const iso = new Date().toISOString()
   const body =
     `---\n` +
     `from: ${fromActor}\n` +
@@ -823,21 +774,10 @@ export async function postEphemeralExpired(
     `expires-at-was: ${expiresAt}\n` +
     `---\n\n` +
     `Ephemeral expired without recipient acknowledgement. Auto-posted by runtime per EPHEMERAL.md auto-expiration semantics.\n`
-
-  const channelDir = join(transportRoot, 'channels', channelGuid, datePath)
-  await mkdir(channelDir, { recursive: true })
-  await writeFile(join(channelDir, fileName), body)
-
-  const relPath = `channels/${channelGuid}/${datePath}/${fileName}`
-  const gitEmail = `${fromActor}@${actorEmailSuffix}`
   try {
-    await execFileP('git', ['-c', `user.name=${fromActor}`, '-c', `user.email=${gitEmail}`,
-      'add', relPath], { cwd: transportRoot })
-    await execFileP('git', ['-c', `user.name=${fromActor}`, '-c', `user.email=${gitEmail}`,
-      'commit', '-m', `ephemeral-expired: ${ephemeralId} (auto-tombstone)`], { cwd: transportRoot })
-    if (await hasRemote(transportRoot)) await pushWithRetry(transportRoot)
+    await transport.postMessage(channelGuid, govIdentity(fromActor, actorEmailSuffix), body)
   } catch (err) {
-    console.error(`[governance] failed to commit/push ephemeral-expired: ${err}`)
+    console.error(`[governance] failed to post ephemeral-expired: ${err}`)
     throw err
   }
 }
@@ -853,6 +793,7 @@ export async function postEphemeralExpired(
  * Ephemeral expiration is a separate semantic from time-decay deadlock
  * resolution or vote-window-expiry tally — fires regardless of those. */
 export function startEphemeralExpirationChecker(
+  transport: Transport,
   transportRoot: string,
   intervalMs: number,
   getCoordinator: () => string | null,
@@ -904,7 +845,7 @@ export function startEphemeralExpirationChecker(
           if (now < expiresAtMs) continue  // not yet expired
 
           try {
-            await postEphemeralExpired(transportRoot, guid, coordinator, id, expiresAt, actorEmailSuffix)
+            await postEphemeralExpired(transport, guid, coordinator, id, expiresAt, actorEmailSuffix)
             console.log(`[governance] ephemeral-expired auto-posted ${guid.slice(0, 8)}/${id} (expires-at was ${expiresAt})`)
           } catch (err) {
             console.error(`[governance] failed to auto-expire ephemeral ${guid.slice(0, 8)}/${id}: ${err}`)

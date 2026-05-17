@@ -1,5 +1,6 @@
 import type { ActorConfig } from './registry.js';
-import { commitActorMessage, ensureActorClone, machineGitEmail, writeResponseMessage } from './git.js';
+import type { Transport, ActorIdentity } from './transport.js';
+import { machineGitEmail } from './transports/git.js';
 import { announceTimeout } from './system.js';
 import { writeCursor } from './cursor.js';
 import { homedir } from 'os';
@@ -14,6 +15,32 @@ const augmentedPath = [...EXTRA_PATH, process.env.PATH ?? ''].join(':');
 
 const DEDUP_WINDOW_MS = 2000;
 const recentlyDispatched = new Map<string, number>();
+
+/** Build a complete message file (frontmatter + body) for an actor's
+ * response. Moved into dispatch.ts (from the legacy `writeResponseMessage`
+ * in git.ts) because this is protocol formatting, not transport storage.
+ *
+ * `toOverride` and `extraFrontmatter` exist for v0.8.1+ response-in-kind
+ * encryption: when the inbound was encrypted, the response routes back
+ * to the original sender (`to: <inbound from>`) with `encryption: age` +
+ * `encrypted-to:` recipient list as extra frontmatter. */
+function buildResponseFile(
+  actorName: string,
+  body: string,
+  agent?: string,
+  model?: string,
+  toOverride?: string,
+  extraFrontmatter?: Record<string, string>,
+): string {
+  const now = new Date();
+  const toField = toOverride ?? 'all';
+  const agentLine = agent ? `agent: ${agent}\n` : '';
+  const modelLine = model ? `model: ${model}\n` : '';
+  const extraLines = extraFrontmatter
+    ? Object.entries(extraFrontmatter).map(([k, v]) => `${k}: ${v}\n`).join('')
+    : '';
+  return `---\nfrom: ${actorName}\nto: ${toField}\ntimestamp: ${now.toISOString()}\ntype: text\n${agentLine}${modelLine}${extraLines}---\n\n${body}\n`;
+}
 
 export function isDuplicate(key: string): boolean {
   const now = Date.now();
@@ -188,6 +215,7 @@ async function maybeDecryptInbound(messageContent: string, actorName: string): P
 
 export async function dispatch(
   actor: ActorConfig,
+  transport: Transport,
   transportRoot: string,
   channelGuid: string,
   messagePath: string,
@@ -195,10 +223,8 @@ export async function dispatch(
   sessionId = 'default',
   defaultHeartbeatInterval?: number,
 ): Promise<void> {
-  const actorTransport = await ensureActorClone(transportRoot, actor.name);
-
   const vars: Record<string, string> = {
-    transport_root: actorTransport,
+    transport_root: transportRoot,  // shared root for custom commands' info
     channel: channelGuid,
     message_path: messagePath,
     session_id: sessionId,
@@ -304,7 +330,7 @@ export async function dispatch(
         }
       }, 3000);
     }
-    await announceTimeout(transportRoot, actor.name, channelGuid);
+    await announceTimeout(transport, actor.name, channelGuid);
   }, timeoutMs);
 
   exited.then(async code => {
@@ -365,15 +391,15 @@ export async function dispatch(
           }
         }
 
-        await writeResponseMessage(
-          actorTransport, channelGuid, actor.name, gitEmail,
-          body, actor.agent, actor.model,
-          toOverride, extraFrontmatter,
+        const responseContent = buildResponseFile(
+          actor.name, body, actor.agent, actor.model, toOverride, extraFrontmatter,
         );
+        const identity: ActorIdentity = { name: actor.name, email: gitEmail };
+        await transport.postMessage(channelGuid, identity, responseContent);
         console.log(`[dispatch] ${actor.name} response written`);
-      } else {
-        await commitActorMessage(actorTransport, channelGuid, actor.name, gitEmail);
       }
+      // Empty-stdout case: no message to post. The old code committed an
+      // empty change (no-op for git, harmless); we just skip here.
 
       await writeCursor(sessionId, channelGuid, messagePath);
     } catch (err) {

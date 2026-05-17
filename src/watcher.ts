@@ -1,19 +1,25 @@
-import { watch, mkdirSync } from 'fs';
-import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { parseFrontmatter } from './frontmatter.js';
 import { dispatch, isDuplicate } from './dispatch.js';
 import { readCursor, listMessages, messagesAfterCursor } from './cursor.js';
-import { MESSAGE_PATH_RE } from './filenames.js';
+import type { Transport, MessageEvent } from './transport.js';
 import type { Registry } from './registry.js';
 import {
   ALWAYS_PASS_TYPES, CACHE_INVALIDATING_TYPES, type BootstrapStateCache,
 } from './bootstrap.js';
+import { readFile } from 'fs/promises';
 
-// Matches: YYYY/MM/DD/HHMMSSsssZ.md (legacy) or YYYY/MM/DD/HHMMSSsssZ-<hex8>.md (v0.7.x+)
-const MESSAGE_RE = MESSAGE_PATH_RE;
-
+/**
+ * Subscribes to transport events and dispatches messages to actors per
+ * the protocol (registry-based routing, anti-self-loop, bootstrap gating).
+ *
+ * v1.1.0+ — was previously a thin wrapper around `fs.watch` plus the
+ * routing logic. Now consumes `Transport.watchMessages` so the same
+ * routing works against any transport in the file-tree family. The
+ * filesystem-walk parts of replay are still local-FS reads because all
+ * file-tree transports share that layout. */
 export function startWatcher(
+  transport: Transport,
   transportRoot: string,
   getRegistry: () => Registry,
   actorEmailSuffix: string,
@@ -25,42 +31,19 @@ export function startWatcher(
    * unaffected). False = the safe default for transports without governance. */
   _deferOnNoCoordinator: boolean,
 ): void {
-  const channelsDir = join(transportRoot, 'channels');
+  console.log(`[watcher] subscribing to transport events`);
 
-  // First-time setup: transport may exist with no channels/ yet. Without this,
-  // watch() throws ENOENT and crashes the daemon before the first message lands.
-  mkdirSync(channelsDir, { recursive: true });
-
-  console.log(`[watcher] watching ${channelsDir}`);
-
-  watch(channelsDir, { recursive: true }, async (event, filename) => {
-    if (!filename || !filename.endsWith('.md')) return;
-
-    // Expected shape: <guid>/YYYY/MM/DD/HHMMSSsssZ.md  (5 segments)
-    const parts = filename.split('/');
-    if (parts.length !== 5) return;
-
-    const [guid, year, month, day, file] = parts;
-    const relPath = `${year}/${month}/${day}/${file}`;
-
-    if (!MESSAGE_RE.test(relPath)) return;
+  transport.watchMessages(async (event: MessageEvent) => {
+    const { channel: guid, relPath, content } = event;
 
     const dedupKey = `${guid}/${relPath}`;
     if (isDuplicate(dedupKey)) return;
 
-    // Skip messages at or before the cursor — git rebase during push-retry can
-    // rewrite existing working-tree files and re-fire inotify events for them
+    // Skip messages at or before the cursor — re-fires can happen when a
+    // git pull rebase rewrites working-tree files, or just from inotify
+    // event coalescing.
     const cursor = await readCursor(sessionId, guid);
     if (cursor && relPath <= cursor) return;
-
-    const fullPath = join(channelsDir, filename);
-
-    let content: string;
-    try {
-      content = await readFile(fullPath, 'utf-8');
-    } catch {
-      return;
-    }
 
     const { data } = parseFrontmatter(content);
     const from = String(data.from ?? '');
@@ -93,8 +76,7 @@ export function startWatcher(
       bootstrapCache.invalidate(guid);
       const newState = bootstrapCache.get(guid);
       if (wasDeferred && newState === 'open') {
-        // Replay deferred messages — runs out-of-band, doesn't block this handler.
-        replayDeferredMessages(transportRoot, guid, getRegistry, actorEmailSuffix, sessionId, defaultHeartbeatInterval, bootstrapCache).catch(err => {
+        replayDeferredMessages(transport, transportRoot, guid, getRegistry, actorEmailSuffix, sessionId, defaultHeartbeatInterval, bootstrapCache).catch(err => {
           console.error(`[watcher] replay failed for ${guid.slice(0, 8)}: ${err}`);
         });
       }
@@ -104,17 +86,9 @@ export function startWatcher(
       const state = bootstrapCache.get(guid);
       if (state === 'deferred') {
         console.log(`[watcher] defer (bootstrap pending) ${guid.slice(0, 8)}/${relPath} (type=${type})`);
-        // Critical: do NOT advance cursor. The message stays pending until
-        // session-open lands; it'll be picked up on the next watcher event
-        // for this channel or on the next startup scan.
         return;
       }
       if (state === 'conflict' && type.startsWith('roe-')) {
-        // 'conflict' state per BOOTSTRAP.md: "actors can post ordinary messages
-        // (work continues) but no governance operations." Work messages pass;
-        // only roe-* governance messages defer until a human posts a new
-        // session-open (which clears the conflict). Same cursor-non-advance
-        // semantics as deferred.
         console.log(`[watcher] defer (bootstrap-conflict, governance only) ${guid.slice(0, 8)}/${relPath} (type=${type})`);
         return;
       }
@@ -130,16 +104,17 @@ export function startWatcher(
     if (targets.length === 0) return;
 
     for (const actor of targets) {
-      await dispatch(actor, transportRoot, guid, relPath, actorEmailSuffix, sessionId, defaultHeartbeatInterval);
+      await dispatch(actor, transport, transportRoot, guid, relPath, actorEmailSuffix, sessionId, defaultHeartbeatInterval);
     }
   });
 }
 
 /** Fired when a channel transitions from 'deferred' → 'open' via session-open
  * (or bootstrap-conflict). Walks the channel's messages past the current
- * cursor and dispatches anything that's been waiting. fs.watch alone doesn't
- * re-fire for files that already existed when first deferred. */
+ * cursor and dispatches anything that's been waiting. The watch alone
+ * doesn't re-fire for files that already existed when first deferred. */
 async function replayDeferredMessages(
+  transport: Transport,
   transportRoot: string,
   channelGuid: string,
   getRegistry: () => Registry,
@@ -168,8 +143,6 @@ async function replayDeferredMessages(
 
     if (registry.has(from)) continue;
 
-    // Re-check bootstrap state per-message — it could have flipped back to
-    // 'deferred' if a fresh boundary lands mid-replay. Cheap (cached).
     if (!ALWAYS_PASS_TYPES.has(type)) {
       const state = bootstrapCache.get(channelGuid);
       if (state === 'deferred') {
@@ -183,7 +156,7 @@ async function replayDeferredMessages(
       : to.split(',').map(t => t.trim()).filter(t => registry.has(t)).map(t => registry.get(t)!);
 
     for (const actor of targets) {
-      await dispatch(actor, transportRoot, channelGuid, relPath, actorEmailSuffix, sessionId, defaultHeartbeatInterval);
+      await dispatch(actor, transport, transportRoot, channelGuid, relPath, actorEmailSuffix, sessionId, defaultHeartbeatInterval);
     }
   }
 }

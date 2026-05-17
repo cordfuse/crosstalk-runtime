@@ -14,6 +14,7 @@ import { join } from 'path';
 import { readFile } from 'fs/promises';
 import { parseFrontmatter } from './frontmatter.js';
 import { acquireSingleInstanceLock } from './single-instance.js';
+import { GitTransport } from './transports/git.js';
 
 // v1.0.5+ — extract `--config <path>` / `-c <path>` from argv. Works for
 // both daemon mode AND CLI subcommands (so e.g. `crosstalk --config foo`
@@ -96,6 +97,13 @@ if (config.relay.mode === 'server') {
       break;
   }
 
+  // v1.1.0+ — instantiate the Transport before any other transport-touching
+  // work. GitTransport encapsulates all the v1.0.x git-management fixes
+  // (push queue, pre-pull-rebase, retry budget, actor clone routing, etc.)
+  // behind a clean interface.
+  const transport = new GitTransport({ root: config.transport });
+  await transport.init();
+
   // One-shot cursor migration: if this is the first run after upgrading past
   // the SESSION_ID → MACHINE_ID cursor-key change, migrate forward the
   // most-advanced cursor per channel from legacy session dirs. No-op for
@@ -113,7 +121,7 @@ if (config.relay.mode === 'server') {
   if (config.relay.mode === 'disabled') {
     console.log('[crosstalk] relay: disabled (offline mode — no real-time dispatch; transport sync is your responsibility)');
   } else {
-    startRelayClient(config.relay, config.transport);
+    startRelayClient(config.relay, transport);
   }
 
   // Bootstrap Coordinator (v0.7.0-alpha.2+). Cache is shared across the
@@ -127,7 +135,7 @@ if (config.relay.mode === 'server') {
 
   // MACHINE_ID is stable across restarts — cursors persist so messages are not re-dispatched
   // SESSION_ID is per-boot — used only in announcements
-  startWatcher(config.transport, () => registry, config.actorEmailSuffix, MACHINE_ID, config.defaultHeartbeatInterval, bootstrapCache, config.bootstrap.deferOnNoCoordinator);
+  startWatcher(transport, config.transport, () => registry, config.actorEmailSuffix, MACHINE_ID, config.defaultHeartbeatInterval, bootstrapCache, config.bootstrap.deferOnNoCoordinator);
 
   // Bootstrap pass — if we host the coordinator, run the opening governance
   // pass: walk each channel for inconsistencies, post `bootstrap-conflict` if
@@ -151,15 +159,15 @@ if (config.relay.mode === 'server') {
         const inconsistencies = findInconsistencies(govMessages);
         if (inconsistencies.length > 0) {
           console.log(`[bootstrap] channel ${guid.slice(0, 8)} has ${inconsistencies.length} inconsistency(ies) — posting bootstrap-conflict`);
-          await postBootstrapConflict(config.transport, guid, decision.coordinatorActor, inconsistencies, config.actorEmailSuffix);
+          await postBootstrapConflict(transport, guid, decision.coordinatorActor, inconsistencies, config.actorEmailSuffix);
           bootstrapCache.invalidate(guid);
           continue;  // don't post session-open over a conflict
         }
         const state = bootstrapCache.get(guid);
         if (state === 'deferred') {
           console.log(`[bootstrap] posting session-open for ${guid.slice(0, 8)} (coordinator: ${decision.coordinatorActor})`);
-          const summary = await buildBootstrapSummary(config.transport, registry, channelDir);
-          await postSessionOpen(config.transport, guid, decision.coordinatorActor, summary, config.actorEmailSuffix);
+          const summary = await buildBootstrapSummary(transport, config.transport, registry, channelDir);
+          await postSessionOpen(transport, guid, decision.coordinatorActor, summary, config.actorEmailSuffix);
           bootstrapCache.invalidate(guid);
         }
       }
@@ -175,12 +183,14 @@ if (config.relay.mode === 'server') {
   // without a role-holder posting roe-vote-result.
   const { startDecayChecker, startAutoTallyChecker, startEphemeralExpirationChecker } = await import('./governance.js');
   const decayChecker = startDecayChecker(
+    transport,
     config.transport,
     config.bootstrap.decayCheckIntervalMs,
     () => decision.should ? (decision.coordinatorActor ?? null) : null,
     config.actorEmailSuffix,
   );
   const autoTallyChecker = startAutoTallyChecker(
+    transport,
     config.transport,
     config.bootstrap.decayCheckIntervalMs,
     () => decision.should ? (decision.coordinatorActor ?? null) : null,
@@ -190,6 +200,7 @@ if (config.relay.mode === 'server') {
   // EPHEMERAL.md). Independent of decay/auto-tally; ephemeral expiration
   // is a separate semantic.
   const ephemeralExpirationChecker = startEphemeralExpirationChecker(
+    transport,
     config.transport,
     config.bootstrap.decayCheckIntervalMs,
     () => decision.should ? (decision.coordinatorActor ?? null) : null,
@@ -242,7 +253,7 @@ if (config.relay.mode === 'server') {
           ? [...registry.values()]
           : to.split(',').map(t => t.trim()).filter(t => registry.has(t)).map(t => registry.get(t)!);
         for (const actor of targets) {
-          await dispatch(actor, config.transport, guid, relPath, config.actorEmailSuffix, MACHINE_ID, config.defaultHeartbeatInterval);
+          await dispatch(actor, transport, config.transport, guid, relPath, config.actorEmailSuffix, MACHINE_ID, config.defaultHeartbeatInterval);
         }
       }
     }
@@ -250,14 +261,15 @@ if (config.relay.mode === 'server') {
     // channels dir may not exist yet
   }
 
-  await announceOnline(config.transport, [...registry.keys()]);
+  await announceOnline(transport, config.transport, [...registry.keys()]);
 
   const shutdown = async () => {
     console.log('[crosstalk] shutting down');
     decayChecker.stop();
     autoTallyChecker.stop();
     ephemeralExpirationChecker.stop();
-    await announceOffline(config.transport);
+    await announceOffline(transport);
+    await transport.close();
     process.exit(0);
   };
   process.on('SIGINT', shutdown);
