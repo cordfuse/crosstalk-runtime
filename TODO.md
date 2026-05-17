@@ -22,6 +22,52 @@ All v0.9.x alphas promoted directly into v1.0.0 — v0.9.0 stable was skipped to
 - [x] Protocol versioning wired — startup handshake reads `<transport>/CROSSTALK-VERSION` — shipped v0.9.0-alpha.3
 - [x] CROSSTALK-VERSION bumped 0.3 → 0.4 to reflect v0.7 governance + v0.8 privacy wire-format additions — shipped v1.0.0
 
+## Public-announcement readiness
+
+Crosstalk-runtime is at v1.2.0 and labeled "Production Ready" since v1.0.0
+(2026-05-14). Technically launchable. Two open questions for an actual
+announcement push:
+
+### Solo-launch (crosstalk alone, technical audience: HN, dev-tools twitter)
+
+- [ ] **Honest scope statement** in README — "single-operator supported"
+      gap should be explicit on the front page so first-comment readers
+      don't have to dig. Spell out: works for one operator running daemons
+      across N machines; multi-operator (multiple humans collaborating on
+      one transport) needs the actor-identity work below.
+- [ ] **Dependabot pass** across runtime + framework repos.
+- [ ] **FilesystemTransport** (v1.x candidate below) — would dramatically
+      widen the audience to "I just want a local AI swarm on one box, no
+      git, no GitHub" which is the largest segment of dev-tool users.
+      Without it, every operator needs GitHub-as-transport setup to try
+      it, which is a non-trivial onboarding step.
+- [ ] **At least one external operator** has run the setup end-to-end
+      successfully. Field-validation gate per TODO line below — the
+      multi-machine swarm has only been proven on Steve's setup.
+
+### Joint-launch (crosstalk + vyzr together, broader "Cordfuse OSS" push)
+
+- [ ] All ship gates from
+      [vyzr ROADMAP — v1.0 section](https://github.com/cordfuse/vyzr/blob/main/ROADMAP.md)
+- [ ] All announce gates from same — joint narrative ("Cordfuse OSS:
+      desktop GUI + multi-machine coordination") makes a tighter pitch
+      than either alone
+
+### Explicitly gated separately
+
+- **Politik** — STRATEGY.md mandates "announce both [Crosstalk + Politik]
+  together," but Politik is still markdown-only (21 commits, no runnable
+  code). Politik's announce is gated on Politik having a reference
+  implementation, NOT on crosstalk's readiness. Treat as a separate,
+  later push.
+- **MTX, kluvr** — pre-alpha, no announcement context applies.
+
+Target window for solo or joint launch: **late June 2026** (conservative
+— assumes 2-3 focused weeks from v1.2.0 / vyzr v0.9.1). See vyzr ROADMAP
+for the shared timeline.
+
+---
+
 ## v1.x candidates (post-v1.0)
 
 - [x] **Push contention at N>10 concurrent dispatch.** Three-stage fix landed 2026-05-17:
