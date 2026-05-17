@@ -59,8 +59,16 @@ export async function hasRemote(repoPath: string): Promise<boolean> {
  * Returns true on successful push (or no-remote no-op), false if all
  * retries exhausted. Caller branches on the result for whatever recovery
  * semantics make sense. Existing await-and-ignore callers stay correct
- * (the boolean just becomes discarded). */
-export async function pushWithRetry(repoPath: string, maxAttempts = 5): Promise<boolean> {
+ * (the boolean just becomes discarded).
+ *
+ * v1.0.1: default maxAttempts bumped 5 → 20 after Monte Carlo π dogfood
+ * test (2026-05-16) showed 11 of 20 concurrent fan-out dispatches hitting
+ * "push failed after max retries" under thundering-herd contention against
+ * a shared GitHub remote. 5 retries with exponential-jitter wait wasn't
+ * enough at N=20 concurrent writers; 20 retries gives ~4× headroom (now
+ * comfortable up to ~50 concurrent dispatchers, beyond which a per-
+ * transport push queue is the proper fix — slated for v1.x). */
+export async function pushWithRetry(repoPath: string, maxAttempts = 20): Promise<boolean> {
   if (!await hasRemote(repoPath)) return true;
   for (let i = 0; i < maxAttempts; i++) {
     const code = await runGit(repoPath, ['push']);
