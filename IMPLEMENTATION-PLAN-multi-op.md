@@ -149,11 +149,16 @@ multi-operator setup. Single-operator users see no behavioral change
 (several files); on runtime: WHATSNEW.md, TODO.md item update.
 **Estimated effort:** 1-2 days.
 
-### Phase 7 — End-to-end test (Steve as virtual second operator)
+### Phase 7 — End-to-end test (Steve as virtual second operator, on a throwaway transport)
 
-**Scope.** Set up two operator identities on the `cordfuse-demo` transport
-(Steve runs both — one is the existing setup, second is a temporary alt
-identity for testing). Verify:
+**Scope.** Create a fresh **throwaway** test transport (instantiated from
+`cordfuse/crosstalk` template via `gh repo create steve-krisjanovs/crosstalk-multi-op-test --template cordfuse/crosstalk --private`).
+Do NOT test against Steve's personal `steve-krisjanovs/cortex` or
+`cordfuse-demo` — risk of polluting real state. Tear down the throwaway repo
+when done.
+
+Set up two operator identities on the throwaway transport (both running on
+cachy, using separate config files via the v1.0.5 `--config` flag). Verify:
 
 1. Address `alice@bob` and `alice@steve` routes to distinct registries
 2. Cross-operator open-channel message: `bob` posts `to: alice@steve`, Steve's alice responds

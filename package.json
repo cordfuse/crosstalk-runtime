@@ -15,7 +15,8 @@
     "build": "tsc -p tsconfig.build.json",
     "prepare": "npm run build",
     "start": "node dist/index.js",
-    "dev": "node --watch --experimental-strip-types src/index.ts"
+    "dev": "node --watch --experimental-strip-types src/index.ts",
+    "test": "bun test src/*.test.ts"
   },
   "files": [
     "dist",
