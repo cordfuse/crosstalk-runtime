@@ -48,6 +48,12 @@ function spawnClaude(actor: ActorConfig, messageContent: string): ChildProcess {
   ], {
     stdio: [...AGENT_STDIO],
     env: { ...process.env, PATH: augmentedPath },
+    // v1.0.2+ — child runs as its own process-group leader so on timeout
+    // we can signal the WHOLE group via process.kill(-pid, ...), reaching
+    // the agent's own subprocesses (e.g. opencode's LLM-client subprocess
+    // hung on a stuck OpenRouter response). Without detached, SIGTERM
+    // only hits the agent CLI wrapper and its children survive.
+    detached: true,
   });
 }
 
@@ -60,6 +66,7 @@ function spawnGemini(actor: ActorConfig, messageContent: string): ChildProcess {
   return spawn('gemini', ['-m', model, '-p', prompt, '-y', '--output-format', 'text'], {
     stdio: [...AGENT_STDIO],
     env: { ...process.env, PATH: augmentedPath },
+    detached: true,  // see spawnClaude comment — process-group leader for kill-on-timeout
   });
 }
 
@@ -78,6 +85,7 @@ function spawnQwen(actor: ActorConfig, messageContent: string): ChildProcess {
   ], {
     stdio: [...AGENT_STDIO],
     env: { ...process.env, PATH: augmentedPath },
+    detached: true,  // see spawnClaude comment — process-group leader for kill-on-timeout
   });
 }
 
@@ -90,6 +98,7 @@ function spawnOpenCode(actor: ActorConfig, messageContent: string): ChildProcess
   return spawn('opencode', ['run', prompt, '-m', model, '--dangerously-skip-permissions', '--format', 'json'], {
     stdio: [...AGENT_STDIO],
     env: { ...process.env, PATH: augmentedPath },
+    detached: true,  // critical for opencode — its LLM-client subprocess survives SIGTERM otherwise (see spawnClaude comment)
   });
 }
 
@@ -113,6 +122,7 @@ function spawnCustom(actor: ActorConfig, vars: Record<string, string>): ChildPro
   return spawn(actor.command, args, {
     stdio: [...AGENT_STDIO],
     env: { ...process.env, PATH: augmentedPath },
+    detached: true,  // see spawnClaude comment — process-group leader for kill-on-timeout
   });
 }
 
@@ -275,8 +285,25 @@ export async function dispatch(
 
   const timeoutMs = (actor.heartbeatInterval ?? defaultHeartbeatInterval ?? 30) * 1000;
   const timer = setTimeout(async () => {
-    proc.kill();
-    console.error(`[dispatch] ${actor.name} timed out after ${timeoutMs / 1000}s`);
+    console.error(`[dispatch] ${actor.name} timed out after ${timeoutMs / 1000}s — SIGTERM process group`);
+    // v1.0.2+ — kill the WHOLE process group, not just the agent CLI wrapper.
+    // Spawned with detached: true so proc is its own group leader; signaling
+    // -proc.pid reaches the agent + all its subprocesses (e.g. opencode's
+    // LLM-client subprocess that previously survived SIGTERM and left a
+    // 56-minute orphan during the Monte Carlo π dogfood test on 2026-05-17).
+    if (proc.pid !== undefined) {
+      try { process.kill(-proc.pid, 'SIGTERM'); } catch { /* already exited; harmless */ }
+      // Escalate to SIGKILL after a 3s grace window — covers hung subprocesses
+      // that ignore SIGTERM (stuck in uninterruptible I/O, deadlocked event loop).
+      setTimeout(() => {
+        if (proc.pid !== undefined) {
+          try {
+            process.kill(-proc.pid, 'SIGKILL');
+            console.error(`[dispatch] ${actor.name} escalated to SIGKILL (process group)`);
+          } catch { /* exited during grace window; expected */ }
+        }
+      }, 3000);
+    }
     await announceTimeout(transportRoot, actor.name, channelGuid);
   }, timeoutMs);
 
