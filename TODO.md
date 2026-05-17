@@ -29,14 +29,16 @@ All v0.9.x alphas promoted directly into v1.0.0 — v0.9.0 stable was skipped to
   - v1.0.2 — structural fix: per-remote push queue in `src/git.ts`, serializes same-daemon pushes by remote URL. 20/20, 0 failures, but ~1.5 retries/actor (each clone rebases reactively after rejection).
   - v1.0.3 — finished the fix: pre-pull-rebase **inside** the queue critical section before the first push. Retry rate dropped from 150% → 1.7% across a 60-dispatch re-validation (1 retry total). Same-daemon contention structurally solved; cross-daemon contention still uses the retry budget (much rarer in practice).
 - [x] **Heartbeat-interval timeout doesn't kill opencode subprocesses.** Shipped v1.0.1: `detached: true` on every spawn + `process.kill(-pid, 'SIGTERM')` to signal the entire process group (3s grace → SIGKILL escalation). The fix is mechanically correct but **not yet field-validated against a real slow-task** — all v1.0.x Monte Carlo dispatches completed in 10-15s, well under the 60s heartbeat. Re-run the 56-min hung-dispatch case to confirm.
-- [x] **Single-daemon-per-OS-user enforcement** (v1.0.4). PID lock at `~/.crosstalk/daemon.pid`. Second daemon refuses with clear `kill <pid>` instruction + exit 1. Stale-PID detection auto-recovers from SIGKILL'd or crashed daemons; Linux `/proc/<pid>/comm` guard rejects PID-recycled-to-non-node-process. Eliminates the bug class that caused yesterday-daemon + today-daemon to both dispatch the same fan-out during v1.0.2 testing.
+- [x] **Single-daemon-per-transport enforcement** (v1.0.4 → v1.0.5):
+  - v1.0.4 — initial PID lock at `~/.crosstalk/daemon.pid`, per-user. Closed the bug class that caused yesterday-daemon + today-daemon to both dispatch the same fan-out during v1.0.2 testing. But too broad — also blocked the legitimate multi-transport-per-user case (one operator running one daemon per workspace).
+  - v1.0.5 — per-transport lock at `~/.crosstalk/locks/<sha256-of-realpath>.pid`. Refusal scoped to "same transport as an existing daemon" instead of "any daemon for this user". Different transports = different lock files = coexist. Includes v1.0.4-migration check that refuses startup if a live v1.0.4 daemon still holds the legacy lock.
+- [x] **`--config` / `CROSSTALK_CONFIG` env override** (v1.0.5). Shipped as a pair with the per-transport lock — multi-transport-per-user is only useful if you can point each daemon at its own config file. `--config <path>` flag extracted from argv before CLI dispatch (works for daemon + all subcommands); `CROSSTALK_CONFIG` env honored when flag absent. Defaults to `~/.crosstalk/config.toml`. Unblocks "one daemon per workspace" without HOME-juggling.
 - [ ] **Doc note — local transport can briefly lag GitHub after concurrent push burst.** Observed in 20-way test: daemon's local transport showed 9 responses immediately after dispatch completion, then 18 after explicit `git pull`. The daemon DOES pull on relay notifications, but there's a small window between push-completion at GitHub and the daemon's pull-on-notify catching up. Tools that read the channels/ dir directly (CLI, scripts, operators) can see stale state for a few seconds. **Mitigation:** document in SETUP-GUIDE that aggregation/audit tools should `git pull` first. No code change needed — operator awareness is sufficient. Could also add a `crosstalk channel show --refresh` flag that pulls before reading.
 - [ ] Multi-operator collaboration — design pass for actor ownership / identity / key rotation propagation across operators sharing a transport. The biggest v1.x deliverable.
 - [ ] Optional Docker deploy path: `crosstalk init` offers bare metal or Docker, generates systemd unit or `docker-compose.yml` accordingly — re-evaluate on operator demand
 - [ ] Native Windows support (currently WSL-only) — gated on macOS + Linux being stable in operator hands first
 - [ ] Field validation: multi-machine swarm proven in operator hands beyond Steve's setup
 - [ ] `crosstalk init` integrates Docker deploy path (when Docker landed)
-- [ ] `--config` / `CROSSTALK_CONFIG` env override (Mac flagged in v1.0.0 signoff) — unlocks ergonomic multi-transport without HOME juggling; daemon stays single-transport per the architecture
 - [ ] `spawnCodex` (Mac flagged) — codex is wired for `channel join` but falls to `spawnCustom` for daemon dispatch. Mirror `spawnGemini`/`spawnQwen`. Optional quality tier; not the fallback answer (that's opencode+OpenRouter).
 
 ---
@@ -52,7 +54,8 @@ All v0.9.x alphas promoted directly into v1.0.0 — v0.9.0 stable was skipped to
 
 ## Shipped (recent)
 
-- **v1.0.4** (2026-05-17) — single-daemon-per-OS-user PID lock (`~/.crosstalk/daemon.pid`); stale-PID auto-recovery
+- **v1.0.5** (2026-05-17) — per-transport PID lock (replaces v1.0.4's per-user); `--config` / `CROSSTALK_CONFIG` env override; v1.0.4-migration safety check
+- **v1.0.4** (2026-05-17) — single-daemon-per-OS-user PID lock (`~/.crosstalk/daemon.pid`); stale-PID auto-recovery (superseded by v1.0.5's per-transport scheme)
 - **v1.0.3** (2026-05-17) — pre-pull-rebase inside push queue critical section; retry rate 150% → 1.7%
 - **v1.0.2** (2026-05-17) — per-remote push queue serializes same-daemon pushes
 - **v1.0.1** (2026-05-17) — pushWithRetry budget 5 → 20; heartbeat-timeout kills process group via `detached: true` + `kill(-pid, 'SIGTERM')`

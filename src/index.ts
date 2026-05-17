@@ -15,6 +15,27 @@ import { readFile } from 'fs/promises';
 import { parseFrontmatter } from './frontmatter.js';
 import { acquireSingleInstanceLock } from './single-instance.js';
 
+// v1.0.5+ — extract `--config <path>` / `-c <path>` from argv. Works for
+// both daemon mode AND CLI subcommands (so e.g. `crosstalk --config foo`
+// runs the daemon against foo, and `crosstalk -c foo channel show ...`
+// runs the CLI against foo). Forwarded to loadConfig() via env var so
+// nested code paths pick it up without plumbing. CROSSTALK_CONFIG env
+// (set externally) is also honored if --config isn't passed.
+{
+  const args = process.argv;
+  for (let i = 2; i < args.length; i++) {
+    if (args[i] === '--config' || args[i] === '-c') {
+      if (i + 1 >= args.length) {
+        console.error('[crosstalk] --config requires a path argument');
+        process.exit(1);
+      }
+      process.env.CROSSTALK_CONFIG = args[i + 1];
+      args.splice(i, 2);
+      i--;
+    }
+  }
+}
+
 // CLI dispatch — if a subcommand is passed, route to the CLI module and exit.
 // No-args invocation (and `RELAY_MODE=server`) falls through to the daemon
 // path below, preserving back-compat for everyone scripting `crosstalk`
@@ -25,15 +46,18 @@ if (process.argv.length > 2 && process.env.RELAY_MODE !== 'server') {
   process.exit(0);
 }
 
-// Single-instance enforcement (v1.0.4+). One daemon per OS user. Refuses
-// to start if another live daemon is already running. Stale PID files
-// (SIGKILL'd daemons, crashes) are auto-cleaned. Lock is per-user via
-// ~/.crosstalk/ being in homedir.
-acquireSingleInstanceLock();
-
 console.log('[crosstalk] starting');
 
 const config = await loadConfig();
+
+// Single-instance enforcement (v1.0.4+, made per-transport in v1.0.5).
+// Refuses to start if another live daemon is already watching the SAME
+// transport. Different transports → different lock files → coexist fine,
+// which unblocks multi-workspace operation for a single user. Relay-server
+// mode is skipped — kernel port-bind enforces single-instance there.
+if (config.relay.mode !== 'server') {
+  acquireSingleInstanceLock(config.transport);
+}
 
 // Server mode: relay only. No transport, no actors, no watcher. Same image
 // runs locally (docker-compose) and on Render — `RELAY_MODE=server` is the

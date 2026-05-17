@@ -3,7 +3,17 @@ import { homedir } from 'os';
 import { readFile } from 'fs/promises';
 import { parse } from 'smol-toml';
 
-const CONFIG_PATH = join(homedir(), '.crosstalk', 'config.toml');
+/** Resolve the config file path. Honors `CROSSTALK_CONFIG` env var (set
+ * directly OR forwarded from the `--config` / `-c` CLI flag); falls back to
+ * `~/.crosstalk/config.toml`. Lazy so env changes mid-process are observable
+ * (useful for tests).
+ *
+ * v1.0.5+ — env override added to unblock multi-transport-per-user
+ * operation (one daemon per transport, each pointed at its own config).
+ * Replaces the previous hardcoded path. */
+function resolveConfigPath(): string {
+  return process.env.CROSSTALK_CONFIG ?? join(homedir(), '.crosstalk', 'config.toml');
+}
 
 export interface RelayConfig {
   // 'client'   — connect outbound to a relay (default; URL = wss://relay.crosstalk.sh unless overridden)
@@ -107,12 +117,13 @@ export async function loadConfig(): Promise<Config> {
     };
   }
 
+  const configPath = resolveConfigPath();
   let raw: string;
   try {
-    raw = await readFile(CONFIG_PATH, 'utf-8');
+    raw = await readFile(configPath, 'utf-8');
   } catch {
     throw new Error(
-      `~/.crosstalk/config.toml not found. Create it with:\n\n` +
+      `${configPath} not found. Create it with:\n\n` +
       `transport = "/path/to/transport"\n\n` +
       `[relay]\nmode = "client"\nurl = "wss://relay.crosstalk.sh"\nsecret = "your-relay-secret"`
     );
@@ -122,11 +133,11 @@ export async function loadConfig(): Promise<Config> {
   try {
     data = parse(raw) as Record<string, unknown>;
   } catch (err) {
-    throw new Error(`~/.crosstalk/config.toml parse error: ${err}`);
+    throw new Error(`${configPath} parse error: ${err}`);
   }
 
   if (!data.transport || typeof data.transport !== 'string') {
-    throw new Error(`~/.crosstalk/config.toml is missing the 'transport' field`);
+    throw new Error(`${configPath} is missing the 'transport' field`);
   }
 
   const transport = (data.transport as string).replace(/^~/, homedir());
