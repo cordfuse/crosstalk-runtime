@@ -8,6 +8,7 @@ import {
   ALWAYS_PASS_TYPES, CACHE_INVALIDATING_TYPES, type BootstrapStateCache,
 } from './bootstrap.js';
 import { readFile } from 'fs/promises';
+import { verifyMessage } from './signing.js';
 
 /**
  * Subscribes to transport events and dispatches messages to actors per
@@ -49,6 +50,20 @@ export function startWatcher(
     const from = String(data.from ?? '');
     const to = String(data.to ?? '');
     const type = String(data.type ?? 'text');
+
+    // v1.3.0-alpha.2+ — signature verification. Permissive mode in alpha:
+    // unsigned messages pass through (back-compat); cryptographically
+    // tampered messages are REJECTED at dispatch (don't honor a tampered
+    // from: claim). Missing public key also passes (the from: actor hasn't
+    // published their .pub yet — treated like an unsigned message).
+    if (from) {
+      const verdict = verifyMessage(content, from, transportRoot);
+      if (!verdict.valid && verdict.reason === 'signature-mismatch') {
+        console.error(`[watcher] REJECT ${relPath} — signature mismatch on from: ${from}. Tampered message or wrong key.`);
+        return;
+      }
+      // no-signature + no-public-key both pass through (permissive)
+    }
 
     const registry = getRegistry();
 
