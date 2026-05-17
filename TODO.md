@@ -60,7 +60,6 @@ announcement push:
   code). Politik's announce is gated on Politik having a reference
   implementation, NOT on crosstalk's readiness. Treat as a separate,
   later push.
-- **MTX, kluvr** — pre-alpha, no announcement context applies.
 
 Target window for solo or joint launch: **late June 2026** (conservative
 — assumes 2-3 focused weeks from v1.2.0 / vyzr v0.9.1). See vyzr ROADMAP
