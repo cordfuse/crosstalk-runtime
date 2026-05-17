@@ -47,29 +47,28 @@ export async function hasRemote(repoPath: string): Promise<boolean> {
   return (await getRemoteUrl(repoPath)) !== null;
 }
 
-/** Push with rebase-and-retry on rejection.
+/** Per-remote push serialization queue.
  *
- * Standard pattern for any commit landing in a transport that may have
- * concurrent activity. One-shot push reliably bricks under contention;
- * this retries up to maxAttempts, rebasing locally on each rejection
- * before retrying. Exported so non-dispatch code paths (channel-join's
- * join/leave system messages, future operator-side commits) can use the
- * same retry logic instead of one-shot push + bail.
+ * v1.0.2+ — structural fix for the push contention bug surfaced by Monte
+ * Carlo π dogfood (2026-05-16). All actor clones for a given transport
+ * push to the SAME remote (e.g. `git@github.com:cordfuse/crosstalk-demo`);
+ * concurrent pushes to one remote contend on git's HEAD-advance semantics.
+ * v1.0.1 papered over the symptom by bumping retry count 5 → 20; this
+ * queue eliminates same-daemon contention entirely by serializing pushes
+ * per remote URL inside the daemon.
  *
- * Returns true on successful push (or no-remote no-op), false if all
- * retries exhausted. Caller branches on the result for whatever recovery
- * semantics make sense. Existing await-and-ignore callers stay correct
- * (the boolean just becomes discarded).
+ * Cross-daemon contention (multiple machines pushing to one remote) still
+ * exists but is much rarer in practice — the retry budget still covers it.
  *
- * v1.0.1: default maxAttempts bumped 5 → 20 after Monte Carlo π dogfood
- * test (2026-05-16) showed 11 of 20 concurrent fan-out dispatches hitting
- * "push failed after max retries" under thundering-herd contention against
- * a shared GitHub remote. 5 retries with exponential-jitter wait wasn't
- * enough at N=20 concurrent writers; 20 retries gives ~4× headroom (now
- * comfortable up to ~50 concurrent dispatchers, beyond which a per-
- * transport push queue is the proper fix — slated for v1.x). */
-export async function pushWithRetry(repoPath: string, maxAttempts = 20): Promise<boolean> {
-  if (!await hasRemote(repoPath)) return true;
+ * Map keyed by remote URL (NOT repoPath), since all actor clones share
+ * one remote and that's where the contention lives. Value is the
+ * tail-of-queue promise — new pushes chain onto it via .then(). */
+const transportPushQueues = new Map<string, Promise<void>>();
+
+/** Inner push-with-retry (the actual git interaction). Kept as a separate
+ * function so the queued public {@link pushWithRetry} can wrap it without
+ * mixing serialization concerns into the retry loop. */
+async function pushWithRetryRaw(repoPath: string, maxAttempts: number): Promise<boolean> {
   for (let i = 0; i < maxAttempts; i++) {
     const code = await runGit(repoPath, ['push']);
     if (code === 0) return true;
@@ -79,6 +78,53 @@ export async function pushWithRetry(repoPath: string, maxAttempts = 20): Promise
   }
   console.error('[git] push failed after max retries');
   return false;
+}
+
+/** Push with rebase-and-retry on rejection, serialized per-remote-URL.
+ *
+ * Standard pattern for any commit landing in a transport that may have
+ * concurrent activity. Exported so non-dispatch code paths (channel-join's
+ * join/leave system messages, operator-side commits) can use the same
+ * serialization + retry logic instead of one-shot push + bail.
+ *
+ * Returns true on successful push (or no-remote no-op), false if all
+ * retries exhausted. Caller branches on the result for whatever recovery
+ * semantics make sense. Existing await-and-ignore callers stay correct
+ * (the boolean just becomes discarded).
+ *
+ * v1.0.1: default maxAttempts bumped 5 → 20 after Monte Carlo π dogfood
+ * test (2026-05-16) showed 11 of 20 concurrent fan-out dispatches hitting
+ * "push failed after max retries" under thundering-herd contention.
+ *
+ * v1.0.2: structural fix — per-remote push queue. Pushes to the same
+ * remote URL are now serialized daemon-side, eliminating same-daemon
+ * contention. Each call waits its turn behind any pending pushes to its
+ * remote, then runs the retry loop. Cross-daemon contention (multi-machine
+ * pushes to one remote) still possible — retry budget covers it. */
+export async function pushWithRetry(repoPath: string, maxAttempts = 20): Promise<boolean> {
+  const remoteUrl = await getRemoteUrl(repoPath);
+  if (!remoteUrl) return true;  // local-only repo — no remote to push to
+
+  // Chain onto the tail of this remote's push queue. New pushes for the
+  // same remote will queue behind ours. The .catch() swallow ensures one
+  // failed push doesn't poison the chain for subsequent ones.
+  const prev = transportPushQueues.get(remoteUrl) ?? Promise.resolve();
+  let result = false;
+  const next = prev
+    .then(async () => { result = await pushWithRetryRaw(repoPath, maxAttempts); })
+    .catch(() => { result = false; });
+
+  transportPushQueues.set(remoteUrl, next);
+  await next;
+
+  // Tail-cleanup: if no one queued behind us, drop the map entry so the
+  // map doesn't grow unbounded over the daemon's lifetime. Subsequent
+  // pushes for this remote start a fresh chain from Promise.resolve().
+  if (transportPushQueues.get(remoteUrl) === next) {
+    transportPushQueues.delete(remoteUrl);
+  }
+
+  return result;
 }
 
 // Returns the path to an actor's own clone of the transport.
