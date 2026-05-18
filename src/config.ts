@@ -62,6 +62,19 @@ export interface BootstrapConfig {
    * messages. Default 60s; lower for testing, higher (300-600s) for
    * production-scale transports. */
   decayCheckIntervalMs: number;
+  /** v1.4.0-alpha.2+ — designated bootstrap coordinator address. When set,
+   * ONLY the daemon whose operator handle (machine address) or
+   * default-human-actor (human address) matches will run the bootstrap
+   * pass. All other daemons sharing the transport skip their bootstrap
+   * pass entirely. Solves the UAT-discovered push-contention storm where
+   * two daemons racing to post `session-open` for the same channel caused
+   * 20+ git-push retry loops on each daemon.
+   *
+   * Accepts the v1.3 address grammar: `alice@steve` (machine, operator
+   * match required), `steve` (human, default-human-actor match required).
+   * When unset, the daemon falls back to the v1.3 resolution: ROE
+   * coordinator field → first-by-joined-at → first-by-name. */
+  coordinatorAddress?: string;
 }
 
 export interface Config {
@@ -228,6 +241,9 @@ export async function loadConfig(): Promise<Config> {
     decayCheckIntervalMs: typeof bootstrapTable['decay-check-interval-ms'] === 'number'
       ? bootstrapTable['decay-check-interval-ms'] as number
       : DEFAULTS.bootstrap.decayCheckIntervalMs,
+    ...(typeof bootstrapTable['coordinator-address'] === 'string'
+      ? { coordinatorAddress: bootstrapTable['coordinator-address'] as string }
+      : {}),
   };
 
   return { transport, actorEmailSuffix, defaultHeartbeatInterval, defaultHumanActor, operator, relay, agents, bootstrap };

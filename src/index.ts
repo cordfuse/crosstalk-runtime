@@ -181,7 +181,10 @@ if (config.relay.mode === 'server') {
   // any are found, else post `session-open` for any channel currently
   // 'deferred'. This unblocks our own dispatch + signals other daemons
   // watching the same transport to unblock theirs too.
-  const decision = shouldRunBootstrapPass(config.transport, registry, config.operator);
+  const decision = shouldRunBootstrapPass(
+    config.transport, registry, config.operator,
+    config.bootstrap.coordinatorAddress, config.defaultHumanActor,
+  );
   console.log(`[bootstrap] coordinator decision: ${decision.reason}`);
   if (decision.should && decision.coordinatorActor) {
     try {
