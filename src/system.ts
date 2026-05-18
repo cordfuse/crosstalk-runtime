@@ -24,7 +24,7 @@ export const MACHINE_ID = createHash('sha256').update(hostname()).digest('hex').
 
 const MACHINE_HASH = MACHINE_ID.slice(0, 8);
 
-const WATCHER_IDENTITY = { name: 'watcher', email: 'watcher@crosstalk.noreply' };
+export const WATCHER_IDENTITY = { name: 'watcher', email: 'watcher@crosstalk.noreply' };
 
 async function readProtocolVersion(transportRoot: string): Promise<string> {
   try {
