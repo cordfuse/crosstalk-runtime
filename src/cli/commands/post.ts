@@ -40,7 +40,7 @@ import { resolveChannel } from '../lib/channel.js'
 import { scanAllLayers, type ActorEntry } from '../lib/actors.js'
 import { parseAddress, isAddressError } from '../../address.js'
 
-interface PostOptions {
+export interface PostOptions {
   channel:               string
   to:                    string
   body:                  string
@@ -72,7 +72,7 @@ export function registerPostCommand(program: Command): void {
     })
 }
 
-async function runPost(opts: PostOptions): Promise<void> {
+export async function runPost(opts: PostOptions): Promise<void> {
   if (opts.type !== 'text') {
     console.error(`✗ --type ${opts.type} not yet supported. Only "text" works in v0.5.0-alpha.3.`)
     console.error(`  Attachment-ref support lands in a later alpha (TODO #17 follow-up).`)
