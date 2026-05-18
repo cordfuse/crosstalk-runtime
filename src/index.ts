@@ -168,7 +168,7 @@ if (config.relay.mode === 'server') {
 
   // MACHINE_ID is stable across restarts — cursors persist so messages are not re-dispatched
   // SESSION_ID is per-boot — used only in announcements
-  const watcherHandle = startWatcher(transport, config.transport, () => registry, config.actorEmailSuffix, MACHINE_ID, config.defaultHeartbeatInterval, bootstrapCache, config.bootstrap.deferOnNoCoordinator, config.agentEnv);
+  const watcherHandle = startWatcher(transport, config.transport, () => registry, config.actorEmailSuffix, MACHINE_ID, config.defaultHeartbeatInterval, bootstrapCache, config.bootstrap.deferOnNoCoordinator, config.agentEnv, config.signatureMode);
 
   // v1.3.0-alpha.7+ — bridge polling-mode sync to the watcher's rescan path.
   // Linux fs.watch.recursive doesn't catch files in subdirectories that

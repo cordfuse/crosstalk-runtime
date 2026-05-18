@@ -97,3 +97,65 @@ mode = "disabled"
     assert.deepEqual(config.agentEnv, {})
   })
 })
+
+describe('loadConfig — signature-mode (v1.9.0-alpha.3+)', () => {
+  it('absent → defaults to permissive', async () => {
+    const path = writeTmpConfig(`
+transport = "/tmp/x"
+[relay]
+mode = "disabled"
+`)
+    process.env.CROSSTALK_CONFIG = path
+    const config = await loadConfig()
+    assert.equal(config.signatureMode, 'permissive')
+  })
+
+  it('"strict" is recognized', async () => {
+    const path = writeTmpConfig(`
+transport = "/tmp/x"
+signature-mode = "strict"
+[relay]
+mode = "disabled"
+`)
+    process.env.CROSSTALK_CONFIG = path
+    const config = await loadConfig()
+    assert.equal(config.signatureMode, 'strict')
+  })
+
+  it('"permissive" is recognized explicitly', async () => {
+    const path = writeTmpConfig(`
+transport = "/tmp/x"
+signature-mode = "permissive"
+[relay]
+mode = "disabled"
+`)
+    process.env.CROSSTALK_CONFIG = path
+    const config = await loadConfig()
+    assert.equal(config.signatureMode, 'permissive')
+  })
+
+  it('case-insensitive + trimmed', async () => {
+    const path = writeTmpConfig(`
+transport = "/tmp/x"
+signature-mode = "  STRICT "
+[relay]
+mode = "disabled"
+`)
+    process.env.CROSSTALK_CONFIG = path
+    const config = await loadConfig()
+    assert.equal(config.signatureMode, 'strict')
+  })
+
+  it('unknown value falls back to permissive with warning', async () => {
+    const path = writeTmpConfig(`
+transport = "/tmp/x"
+signature-mode = "paranoid"
+[relay]
+mode = "disabled"
+`)
+    process.env.CROSSTALK_CONFIG = path
+    const config = await loadConfig()
+    assert.equal(config.signatureMode, 'permissive',
+      'unknown value falls back; daemon stays usable rather than refusing to start')
+  })
+})

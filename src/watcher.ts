@@ -39,6 +39,10 @@ export function startWatcher(
    * (sourced from config.agentEnv / `[agent-environment]` TOML table).
    * Default undefined = agents inherit the daemon's env unchanged. */
   agentEnv?: Record<string, string>,
+  /** v1.9.0-alpha.3+ — signature verification mode. 'strict' rejects
+   * any non-valid verdict; 'permissive' (default) only rejects
+   * signature-mismatch (tampering). Sourced from config.signatureMode. */
+  signatureMode: 'permissive' | 'strict' = 'permissive',
 ): { rescanAll: () => Promise<void> } {
   console.log(`[watcher] subscribing to transport events`);
 
@@ -93,18 +97,25 @@ export function startWatcher(
     const to = String(data.to ?? '');
     const type = String(data.type ?? 'text');
 
-    // v1.3.0-alpha.2+ — signature verification. Permissive mode in alpha:
-    // unsigned messages pass through (back-compat); cryptographically
-    // tampered messages are REJECTED at dispatch (don't honor a tampered
-    // from: claim). Missing public key also passes (the from: actor hasn't
-    // published their .pub yet — treated like an unsigned message).
+    // v1.3.0-alpha.2+ — signature verification. v1.9.0-alpha.3+ — honors
+    // the operator-configured signature mode.
+    //   permissive (default): only signature-mismatch (tampering)
+    //     rejects; unsigned + missing-pubkey pass through. v1.3 behavior.
+    //   strict: any non-valid verdict rejects. Operators opt in via
+    //     `signature-mode = "strict"` in config.toml.
     if (from) {
       const verdict = verifyMessage(content, from, transportRoot);
-      if (!verdict.valid && verdict.reason === 'signature-mismatch') {
-        console.error(`[watcher] REJECT ${relPath} — signature mismatch on from: ${from}. Tampered message or wrong key.`);
-        return;
+      if (!verdict.valid) {
+        if (verdict.reason === 'signature-mismatch') {
+          console.error(`[watcher] REJECT ${relPath} — signature mismatch on from: ${from}. Tampered message or wrong key.`);
+          return;
+        }
+        if (signatureMode === 'strict') {
+          console.error(`[watcher] REJECT ${relPath} — strict mode rejects from: ${from} (reason: ${verdict.reason}). Either publish a signing pubkey for this actor or switch to permissive mode.`);
+          return;
+        }
+        // permissive: no-signature + no-public-key pass through
       }
-      // no-signature + no-public-key both pass through (permissive)
     }
 
     const registry = getRegistry();
