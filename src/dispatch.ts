@@ -275,6 +275,11 @@ export async function dispatch(
   // PRIVACY.md `to:` is routing, `encrypted-to:` is privacy distinction).
   let inboundFrom: string | null = null;
   let inboundEncryptedTo: string[] | null = null;
+  // v1.7.0-alpha.1+ — also capture the inbound's dispatch policy. When
+  // it's `broadcast-with-quorum`, the actor's response needs an
+  // `in-reply-to: <inbound-relPath>` frontmatter field so the watcher's
+  // QuorumTracker can correlate responses back to the original request.
+  let inboundDispatchPolicy: string | null = null;
   try {
     const { parseFrontmatter } = await import('./frontmatter.js');
     const { data } = parseFrontmatter(messageContent);
@@ -282,6 +287,9 @@ export async function dispatch(
     if (String(data.encryption ?? '') === 'age') {
       const et = String(data['encrypted-to'] ?? '');
       inboundEncryptedTo = et ? et.split(',').map(s => s.trim()).filter(Boolean) : [];
+    }
+    if (typeof data.dispatch === 'string') {
+      inboundDispatchPolicy = data.dispatch.trim().toLowerCase();
     }
   } catch {
     // Malformed frontmatter — fall through; downstream decrypt-or-skip catches.
@@ -414,6 +422,15 @@ export async function dispatch(
           } catch (err) {
             console.error(`[dispatch] ${actor.name} response-in-kind encryption failed: ${err} — falling back to PLAINTEXT response (privacy regression)`);
           }
+        }
+
+        // v1.7.0-alpha.1+ — when the inbound carried
+        // `dispatch: broadcast-with-quorum`, every pool-member response
+        // must carry `in-reply-to: <inbound-relPath>` so the watcher's
+        // QuorumTracker can correlate replies back to the original
+        // quorum request and emit `pool-quorum-reached` at threshold.
+        if (inboundDispatchPolicy === 'broadcast-with-quorum') {
+          extraFrontmatter = { ...(extraFrontmatter ?? {}), 'in-reply-to': messagePath };
         }
 
         // v1.3.0-alpha.4+ — `from:` uses actor.address (qualified in

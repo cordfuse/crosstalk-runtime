@@ -11,6 +11,8 @@ import {
 } from './bootstrap.js';
 import { verifyMessage } from './signing.js';
 import { applyDispatchPolicy, parseDispatchPolicy } from './dispatch-policy.js';
+import { QuorumTracker, emitPoolQuorumReached } from './quorum-tracker.js';
+import { WATCHER_IDENTITY } from './system.js';
 
 /**
  * Subscribes to transport events and dispatches messages to actors per
@@ -39,6 +41,12 @@ export function startWatcher(
   agentEnv?: Record<string, string>,
 ): { rescanAll: () => Promise<void> } {
   console.log(`[watcher] subscribing to transport events`);
+
+  // v1.7.0-alpha.1+ — broadcast-with-quorum runtime tracker. One per
+  // daemon process; state lives in memory and is lost on restart (real
+  // pool responses remain durable in the transport). Construct here so
+  // it's shared between the live processInbound path and replayDeferred.
+  const quorumTracker = new QuorumTracker();
 
   const processInbound = async (event: MessageEvent): Promise<void> => {
     const { channel: guid, relPath, content } = event;
@@ -72,6 +80,27 @@ export function startWatcher(
     }
 
     const registry = getRegistry();
+
+    // v1.7.0-alpha.1+ — quorum response tracking must run BEFORE the
+    // self-loop skip. Pool member responses (`from: worker-N@steve`)
+    // ARE in our local registry, so the self-loop check would early-
+    // exit and the QuorumTracker would never count them. Record FIRST
+    // — bookkeeping is distinct from re-dispatch.
+    {
+      const inReplyTo = typeof data['in-reply-to'] === 'string' ? data['in-reply-to'] : null;
+      if (inReplyTo && from) {
+        const verdict = quorumTracker.recordResponse(guid, inReplyTo, from);
+        if (verdict.action === 'reached') {
+          emitPoolQuorumReached(transport, transportRoot, verdict.state, WATCHER_IDENTITY).catch(err => {
+            console.error(`[watcher] failed to emit pool-quorum-reached for ${inReplyTo}: ${err}`);
+          });
+          quorumTracker.close(guid, inReplyTo);
+          console.log(`[watcher] pool-quorum-reached emitted for ${verdict.state.poolAddress} (${verdict.state.responders.size}/${verdict.state.k})`);
+        } else if (verdict.action === 'all-responded') {
+          quorumTracker.close(guid, inReplyTo);
+        }
+      }
+    }
 
     if (registry.has(from)) {
       console.log(`[watcher] skip (own) ${relPath}`);
@@ -152,6 +181,28 @@ export function startWatcher(
     }
 
     if (targets.length === 0) return;
+
+    // v1.7.0-alpha.1+ — if this inbound IS a broadcast-with-quorum
+    // request, register a tracker entry BEFORE dispatching the pool.
+    // The pool size is `targets.length` (the n in K-of-N). Pool responses
+    // carrying `in-reply-to: <this-relPath>` will count down toward K.
+    if (policy === 'broadcast-with-quorum') {
+      const k = parseInt(String(data.quorum ?? ''), 10);
+      if (Number.isFinite(k) && k >= 1) {
+        if (k > targets.length) {
+          console.warn(`[watcher] quorum K=${k} exceeds pool size ${targets.length} for ${guid.slice(0, 8)}/${relPath} — pool-quorum-reached can never fire; check the message`);
+        }
+        const toAddresses = to.split(',').map(s => s.trim()).filter(Boolean);
+        const poolAddress = toAddresses[0] ?? to;
+        quorumTracker.register(guid, relPath, poolAddress, k, targets.length);
+      } else {
+        console.warn(`[watcher] broadcast-with-quorum on ${guid.slice(0, 8)}/${relPath} missing valid 'quorum: <K>' field — no tracker entry registered`);
+      }
+    }
+
+    // Response recording moved earlier in the function (before the
+    // self-loop check); see the v1.7.0-alpha.1+ block above. Keeping
+    // this anchor comment so the dispatch order stays clear.
 
     for (const actor of targets) {
       await dispatch(actor, transport, transportRoot, guid, relPath, actorEmailSuffix, sessionId, defaultHeartbeatInterval, agentEnv);
