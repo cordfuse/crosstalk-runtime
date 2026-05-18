@@ -34,10 +34,20 @@ import type { ActorConfig } from './registry.js'
 
 /** Recognized dispatch policies. `fanout` is the default and matches
  * v1.4 behavior — every instance receives the message. Other policies
- * subset/aggregate the target list before dispatch fires. */
+ * subset/aggregate the target list before dispatch fires.
+ *
+ * v1.5.0-alpha.2+ adds `random` and `broadcast-with-quorum`. The
+ * `broadcast-with-quorum` policy is fanout-like at the dispatch
+ * layer (every instance gets the message); the K-of-N quorum-tracker
+ * that emits `pool-quorum-reached` events lands in v1.6 — alpha.2
+ * just locks the address-grammar shape so operators can start
+ * writing quorum-aware actors today (the `quorum:` frontmatter
+ * field is preserved end-to-end). */
 export type DispatchPolicy =
-  | 'fanout'        // default: every pool instance gets the message (v1.4 behavior)
-  | 'round-robin'   // pick one instance per message, rotating across the pool
+  | 'fanout'                  // default: every pool instance gets the message (v1.4 behavior)
+  | 'round-robin'             // pick one instance per message, rotating across the pool
+  | 'random'                  // pick one instance per message at random (no state, mild load-balancing)
+  | 'broadcast-with-quorum'   // fanout dispatch; runtime quorum tracker is v1.6 follow-up
 
 /** Parse a `dispatch` frontmatter string. Returns the policy on a valid
  * known value, or `null` when the string is unrecognized. Caller decides
@@ -47,16 +57,22 @@ export type DispatchPolicy =
 export function parseDispatchPolicy(raw: string | undefined): DispatchPolicy | null {
   if (!raw) return 'fanout'
   const v = raw.trim().toLowerCase()
-  if (v === 'fanout' || v === 'round-robin') return v
+  if (v === 'fanout' || v === 'round-robin' || v === 'random' || v === 'broadcast-with-quorum') return v
   return null
 }
 
 /** Where round-robin (and future stateful policies) persist per-channel
  * per-pool rotation cursors. Lives under the daemon's session dir so
  * cursors survive restarts (operator expectation: rotation continues
- * from where it left off, no double-pick on bounce). */
-function cursorDir(sessionId: string): string {
-  return join(homedir(), '.crosstalk', 'sessions', sessionId, 'pool-cursors')
+ * from where it left off, no double-pick on bounce).
+ *
+ * `stateRoot` defaults to `~/.crosstalk/` but accepts an override for
+ * test isolation. The override is critical because `os.homedir()`
+ * snapshots at process start and IGNORES runtime `HOME` env changes
+ * — without an explicit override, tests that point HOME at a tmpdir
+ * still end up writing to the user's real `~/.crosstalk/sessions/`. */
+function cursorDir(sessionId: string, stateRoot?: string): string {
+  return join(stateRoot ?? join(homedir(), '.crosstalk'), 'sessions', sessionId, 'pool-cursors')
 }
 
 /** Filesystem-safe encoding for an address. `@` is POSIX-safe; we
@@ -69,8 +85,8 @@ function encodeAddr(addr: string): string {
 /** Read the cursor for (channel, pool address). Returns 0 on a fresh
  * pool — first-pick is the lowest-instance actor. Tolerant to missing
  * dir / file / unparseable contents (treat as 0). */
-async function readCursor(sessionId: string, channelGuid: string, addr: string): Promise<number> {
-  const path = join(cursorDir(sessionId), channelGuid, encodeAddr(addr))
+async function readCursor(sessionId: string, channelGuid: string, addr: string, stateRoot?: string): Promise<number> {
+  const path = join(cursorDir(sessionId, stateRoot), channelGuid, encodeAddr(addr))
   try {
     const raw = await readFile(path, 'utf-8')
     const n = parseInt(raw.trim(), 10)
@@ -83,8 +99,8 @@ async function readCursor(sessionId: string, channelGuid: string, addr: string):
 /** Write the cursor for (channel, pool address). Creates the parent
  * dir as needed. Best-effort: a write failure logs and falls through
  * (next message just re-picks the same instance, which is harmless). */
-async function writeCursor(sessionId: string, channelGuid: string, addr: string, value: number): Promise<void> {
-  const dir = join(cursorDir(sessionId), channelGuid)
+async function writeCursor(sessionId: string, channelGuid: string, addr: string, value: number, stateRoot?: string): Promise<void> {
+  const dir = join(cursorDir(sessionId, stateRoot), channelGuid)
   try {
     await mkdir(dir, { recursive: true })
     await writeFile(join(dir, encodeAddr(addr)), String(value), 'utf-8')
@@ -108,19 +124,42 @@ export async function applyDispatchPolicy(
   sessionId: string,
   channelGuid: string,
   poolAddress: string,
+  /** Override for the daemon's state root (defaults to `~/.crosstalk/`).
+   * Primarily for testing — production code should pass undefined. */
+  stateRoot?: string,
 ): Promise<ActorConfig[]> {
   if (targets.length <= 1) return targets
   if (policy === 'fanout') return targets
 
   if (policy === 'round-robin') {
-    const cursor = await readCursor(sessionId, channelGuid, poolAddress)
+    const cursor = await readCursor(sessionId, channelGuid, poolAddress, stateRoot)
     const idx = cursor % targets.length
     // Targets are sorted by instance index in registry.getPoolInstances
     // (singletons first, then 1..N), so picking by `idx` gives a stable
     // rotation. Cursor advances by 1 regardless of pool size so the
     // modulo handles pool growth/shrinkage naturally.
-    await writeCursor(sessionId, channelGuid, poolAddress, cursor + 1)
+    await writeCursor(sessionId, channelGuid, poolAddress, cursor + 1, stateRoot)
     return [targets[idx]]
+  }
+
+  if (policy === 'random') {
+    // No state: just pick one at random. Useful when rotation determinism
+    // isn't needed (e.g. operator wants mild load-balancing without the
+    // per-channel cursor overhead). Uniform distribution over targets.
+    const idx = Math.floor(Math.random() * targets.length)
+    return [targets[idx]]
+  }
+
+  if (policy === 'broadcast-with-quorum') {
+    // v1.5.0-alpha.2+ — fanout at the dispatch layer. The K-of-N quorum
+    // tracker that watches for responses and emits a
+    // `pool-quorum-reached` system message lands in v1.6 (gated on a
+    // design pass for in-reply-to correlation + cursor persistence
+    // semantics). For alpha.2, the policy is recognized as a valid
+    // value so operators can pin the frontmatter shape today; the
+    // `quorum: K` field travels alongside the message untouched and
+    // a downstream actor (or v1.6 runtime) can act on it.
+    return targets
   }
 
   // Should be unreachable given parseDispatchPolicy gates known values,
