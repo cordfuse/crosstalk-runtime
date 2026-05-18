@@ -94,7 +94,7 @@ async function runPost(opts: PostOptions): Promise<void> {
   // names. Cross-operator targets (`alice@bob` from a daemon whose operator
   // is `steve`) are accepted blindly — we have no view of the remote
   // operator's registry, so we trust the user.
-  const profiles = scanAllLayers(config.transport)
+  const profiles = scanAllLayers(config.transport, config.operator)
   const targetsRaw = opts.to.trim()
   const targets: 'all' | string[] = targetsRaw === 'all'
     ? 'all'

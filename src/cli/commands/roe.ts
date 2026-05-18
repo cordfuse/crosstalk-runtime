@@ -229,7 +229,7 @@ async function runRoeValidate(opts: RoeValidateOptions): Promise<void> {
 
   // Build the merged actor registry once. validateGovernance() uses it to
   // catch "from: someone-not-in-the-swarm" votes/proposals.
-  const registry = new Set<string>(scanAllLayers(config.transport).map(e => e.name))
+  const registry = new Set<string>(scanAllLayers(config.transport, config.operator).map(e => e.name))
 
   // Load the active template config (v0.7.0-alpha.6+). Enables per-template
   // semantic enforcement in the validator (Parliamentary member-only
