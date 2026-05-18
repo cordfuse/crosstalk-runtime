@@ -91,6 +91,16 @@ export interface Config {
    * Other commands (post/show/tail/etc.) still require explicit channel
    * because their typical usage targets specific named channels. */
   defaultChannel?: string;
+  /** v1.9.0-alpha.3+ — signature verification mode for inbound messages.
+   *   'permissive' (default) — only signature-mismatch (tampering) is
+   *     rejected; unsigned messages + messages whose `from:` actor has
+   *     no published pubkey pass through. Matches v1.3 behavior.
+   *   'strict' — any non-valid verdict rejects the message. Operators
+   *     enable this to guarantee every dispatched message has verified
+   *     provenance. Requires that all participating actors (including
+   *     bootstrap/governance) have published signing pubkeys to
+   *     manifest/identities/. */
+  signatureMode: 'permissive' | 'strict';
   /** v1.3.0-alpha.3+ — operator handle for the multi-operator design
    * (TODO.md #34). When set, all actor profiles on this daemon are
    * registered under qualified addresses (e.g. `alice@steve` instead
@@ -168,6 +178,7 @@ export async function loadConfig(): Promise<Config> {
       },
       agents: {},
       agentEnv: {},
+      signatureMode: 'permissive',
       bootstrap: { ...DEFAULTS.bootstrap, decayCheckIntervalMs: DEFAULTS.bootstrap.decayCheckIntervalMs },
     };
   }
@@ -230,6 +241,18 @@ export async function loadConfig(): Promise<Config> {
   const defaultChannel = typeof data['default-channel'] === 'string'
     ? data['default-channel'] as string
     : undefined;
+
+  // v1.9.0-alpha.3+ — signature verification mode. Default permissive
+  // for v1.3+ back-compat; operators opt into strict by setting
+  // `signature-mode = "strict"` in config.toml.
+  const signatureModeRaw = typeof data['signature-mode'] === 'string'
+    ? (data['signature-mode'] as string).trim().toLowerCase()
+    : 'permissive';
+  if (signatureModeRaw !== 'permissive' && signatureModeRaw !== 'strict') {
+    console.warn(`[config] signature-mode "${signatureModeRaw}" not recognised (valid: permissive | strict) — defaulting to permissive`);
+  }
+  const signatureMode: 'permissive' | 'strict' =
+    signatureModeRaw === 'strict' ? 'strict' : 'permissive';
 
   // v1.3.0-alpha.3+ — operator handle. Optional. When set, daemon enters
   // multi-operator mode (qualified actor addresses). When undefined, the
@@ -298,5 +321,5 @@ export async function loadConfig(): Promise<Config> {
       : {}),
   };
 
-  return { transport, actorEmailSuffix, defaultHeartbeatInterval, defaultHumanActor, defaultChannel, operator, relay, agents, agentEnv, bootstrap };
+  return { transport, actorEmailSuffix, defaultHeartbeatInterval, defaultHumanActor, defaultChannel, operator, relay, agents, agentEnv, signatureMode, bootstrap };
 }

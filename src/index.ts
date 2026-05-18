@@ -168,7 +168,7 @@ if (config.relay.mode === 'server') {
 
   // MACHINE_ID is stable across restarts — cursors persist so messages are not re-dispatched
   // SESSION_ID is per-boot — used only in announcements
-  const watcherHandle = startWatcher(transport, config.transport, () => registry, config.actorEmailSuffix, MACHINE_ID, config.defaultHeartbeatInterval, bootstrapCache, config.bootstrap.deferOnNoCoordinator, config.agentEnv);
+  const watcherHandle = startWatcher(transport, config.transport, () => registry, config.actorEmailSuffix, MACHINE_ID, config.defaultHeartbeatInterval, bootstrapCache, config.bootstrap.deferOnNoCoordinator, config.agentEnv, config.signatureMode);
 
   // v1.3.0-alpha.7+ — bridge polling-mode sync to the watcher's rescan path.
   // Linux fs.watch.recursive doesn't catch files in subdirectories that
@@ -191,9 +191,17 @@ if (config.relay.mode === 'server') {
         console.error(`[crosstalk] poll sync+rescan failed: ${err}`);
       }
     }, intervalMs);
-    // Also rescan immediately after the initial sync (fired earlier in this block).
-    watcherHandle.rescanAll().catch(err => console.error(`[crosstalk] initial rescan failed: ${err}`));
   }
+
+  // v1.9.0-alpha.1+ — single initial rescan for ALL relay modes (was
+  // previously only in disabled-polling mode). This is the startup-
+  // catch-up path; it replaces the legacy startup-scan block further
+  // down that dispatched DIRECTLY (bypassing processInbound's in-flight
+  // tracking and causing concurrent double-dispatches during startup).
+  // rescanAll goes through processInbound which has the synchronous
+  // in-flight check + cursor check + governance-type skip + bootstrap
+  // defer — same skip-list as the legacy block, but with proper dedup.
+  watcherHandle.rescanAll().catch(err => console.error(`[crosstalk] initial rescan failed: ${err}`));
 
   // Bootstrap pass — if we host the coordinator, run the opening governance
   // pass: walk each channel for inconsistencies, post `bootstrap-conflict` if
@@ -268,62 +276,14 @@ if (config.relay.mode === 'server') {
     config.actorEmailSuffix,
   );
 
-  // Startup scan — dispatch any messages missed while daemon was down.
-  // Bootstrap-deferred channels skip non-always-pass message types per
-  // BOOTSTRAP.md; cursor stays in place so deferred messages are picked up
-  // when the channel transitions to 'open'.
-  const { readdir } = await import('fs/promises');
-  try {
-    const channelsDir = join(config.transport, 'channels');
-    const guids = await readdir(channelsDir);
-    for (const guid of guids) {
-      if (guid.startsWith('.') || guid.startsWith('_')) continue;
-      const cursor = await readCursor(MACHINE_ID, guid);
-      const all = await listMessages(join(channelsDir, guid));
-      const missed = messagesAfterCursor(all, cursor);
-      if (missed.length === 0) continue;
-      console.log(`[crosstalk] startup scan: ${missed.length} missed message(s) in ${guid.slice(0, 8)}`);
-      for (const relPath of missed) {
-        const fullPath = join(channelsDir, guid, relPath);
-        let content: string;
-        try { content = await readFile(fullPath, 'utf-8'); } catch { continue; }
-        const { data } = parseFrontmatter(content);
-        const from = String(data.from ?? '');
-        const to = String(data.to ?? '');
-        const type = String(data.type ?? 'text');
-        if (registry.has(from)) continue;
-
-        // v1.3.0-alpha.7+ — governance message types never dispatch to
-        // actors (same rule as watcher.ts processInbound + replay paths).
-        if (ALWAYS_PASS_TYPES.has(type)) continue;
-
-        // Bootstrap gate: defer non-always-pass types when channel is in
-        // 'deferred' state. In 'conflict' state, only roe-* defer; work
-        // continues. Cursor is NOT advanced for deferred messages — they
-        // get re-evaluated on next startup or on watcher pickup once the
-        // state transitions back to 'open'.
-        const state = bootstrapCache.get(guid);
-        if (state === 'deferred') {
-          console.log(`[crosstalk] startup scan defer (bootstrap pending) ${guid.slice(0,8)}/${relPath} (type=${type})`);
-          break;  // stop processing this channel — preserve order, retry after session-open
-        }
-        if (state === 'conflict' && type.startsWith('roe-')) {
-          console.log(`[crosstalk] startup scan defer (bootstrap-conflict, governance only) ${guid.slice(0,8)}/${relPath} (type=${type})`);
-          continue;  // skip THIS message but keep walking — work in same channel still dispatches
-        }
-
-        // v1.3.0-alpha.7+ — address-aware target resolution (was previously
-        // a bare-name `registry.has(t)` filter that missed every qualified
-        // address in multi-op mode).
-        const targets = resolveTargets(registry, to);
-        for (const actor of targets) {
-          await dispatch(actor, transport, config.transport, guid, relPath, config.actorEmailSuffix, MACHINE_ID, config.defaultHeartbeatInterval, config.agentEnv);
-        }
-      }
-    }
-  } catch {
-    // channels dir may not exist yet
-  }
+  // v1.9.0-alpha.1+ — the legacy startup-scan block that lived here was
+  // removed in favor of the single `watcherHandle.rescanAll()` call
+  // earlier in this function. The legacy block dispatched directly
+  // (bypassing processInbound), so during startup it could double-fire
+  // with the live watcher's processInbound on the same messages, which
+  // surfaced as duplicate concierge responses in the v1.8 UAT. rescanAll
+  // routes through processInbound + its in-flight Set, so dedup is
+  // bombproof regardless of how many code paths see the same message.
 
   await announceOnline(transport, config.transport, [...registry.keys()]);
 

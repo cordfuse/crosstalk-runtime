@@ -39,6 +39,10 @@ export function startWatcher(
    * (sourced from config.agentEnv / `[agent-environment]` TOML table).
    * Default undefined = agents inherit the daemon's env unchanged. */
   agentEnv?: Record<string, string>,
+  /** v1.9.0-alpha.3+ — signature verification mode. 'strict' rejects
+   * any non-valid verdict; 'permissive' (default) only rejects
+   * signature-mismatch (tampering). Sourced from config.signatureMode. */
+  signatureMode: 'permissive' | 'strict' = 'permissive',
 ): { rescanAll: () => Promise<void> } {
   console.log(`[watcher] subscribing to transport events`);
 
@@ -48,8 +52,36 @@ export function startWatcher(
   // it's shared between the live processInbound path and replayDeferred.
   const quorumTracker = new QuorumTracker();
 
+  // v1.9.0-alpha.1+ — in-flight dispatch tracking. Per-message Set keyed
+  // on `${channel}/${relPath}`. Added BEFORE dispatch fires; removed when
+  // ALL targets for that message resolve their dispatch promise (which
+  // now includes the cursor write since v1.9 made dispatch await its own
+  // completion). Catches the rescan double-fire case bombproof: while a
+  // dispatch is in-flight, the rescan/fs.watch re-fire skips the message
+  // entirely, regardless of how long the agent takes. v1.8.1 papered
+  // over this with a 10-minute DEDUP_WINDOW_MS in dispatch.ts; this
+  // replaces that workaround (window restored to 2s).
+  const inFlight = new Set<string>();
+
   const processInbound = async (event: MessageEvent): Promise<void> => {
     const { channel: guid, relPath, content } = event;
+
+    // v1.9.0-alpha.1+ — in-flight check FIRST (before any await). Both
+    // the check and the add must be in the same synchronous block —
+    // earlier draft placed the check + add far apart, around several
+    // awaits, allowing two concurrent processInbound calls (one from
+    // fs.watch, one from rescan) to both pass the check before either
+    // added the key. JavaScript's single-threaded execution guarantees
+    // these two Set operations are atomic when no await separates them.
+    // Removal happens in the finally at the bottom.
+    const inFlightKey = `${guid}/${relPath}`;
+    if (inFlight.has(inFlightKey)) {
+      console.log(`[watcher] skip (in-flight) ${relPath}`);
+      return;
+    }
+    inFlight.add(inFlightKey);
+
+    try {
 
     const dedupKey = `${guid}/${relPath}`;
     if (isDuplicate(dedupKey)) return;
@@ -65,18 +97,25 @@ export function startWatcher(
     const to = String(data.to ?? '');
     const type = String(data.type ?? 'text');
 
-    // v1.3.0-alpha.2+ — signature verification. Permissive mode in alpha:
-    // unsigned messages pass through (back-compat); cryptographically
-    // tampered messages are REJECTED at dispatch (don't honor a tampered
-    // from: claim). Missing public key also passes (the from: actor hasn't
-    // published their .pub yet — treated like an unsigned message).
+    // v1.3.0-alpha.2+ — signature verification. v1.9.0-alpha.3+ — honors
+    // the operator-configured signature mode.
+    //   permissive (default): only signature-mismatch (tampering)
+    //     rejects; unsigned + missing-pubkey pass through. v1.3 behavior.
+    //   strict: any non-valid verdict rejects. Operators opt in via
+    //     `signature-mode = "strict"` in config.toml.
     if (from) {
       const verdict = verifyMessage(content, from, transportRoot);
-      if (!verdict.valid && verdict.reason === 'signature-mismatch') {
-        console.error(`[watcher] REJECT ${relPath} — signature mismatch on from: ${from}. Tampered message or wrong key.`);
-        return;
+      if (!verdict.valid) {
+        if (verdict.reason === 'signature-mismatch') {
+          console.error(`[watcher] REJECT ${relPath} — signature mismatch on from: ${from}. Tampered message or wrong key.`);
+          return;
+        }
+        if (signatureMode === 'strict') {
+          console.error(`[watcher] REJECT ${relPath} — strict mode rejects from: ${from} (reason: ${verdict.reason}). Either publish a signing pubkey for this actor or switch to permissive mode.`);
+          return;
+        }
+        // permissive: no-signature + no-public-key pass through
       }
-      // no-signature + no-public-key both pass through (permissive)
     }
 
     const registry = getRegistry();
@@ -204,8 +243,23 @@ export function startWatcher(
     // self-loop check); see the v1.7.0-alpha.1+ block above. Keeping
     // this anchor comment so the dispatch order stays clear.
 
-    for (const actor of targets) {
-      await dispatch(actor, transport, transportRoot, guid, relPath, actorEmailSuffix, sessionId, defaultHeartbeatInterval, agentEnv);
+    // v1.9.0-alpha.1+ — parallel fanout via Promise.all (was sequential
+    // await loop; the change matters now that dispatch awaits its own
+    // completion, otherwise N pool members would dispatch serially).
+    // In-flight removal happens in the outer finally.
+    await Promise.all(
+      targets.map(actor =>
+        dispatch(actor, transport, transportRoot, guid, relPath, actorEmailSuffix, sessionId, defaultHeartbeatInterval, agentEnv)
+      ),
+    );
+
+    } finally {
+      // v1.9.0-alpha.1+ — paired with the in-flight add at the top of
+      // processInbound. Removed AFTER every code path: early-return
+      // (cursor / self-loop / governance / deferred / empty-targets) and
+      // dispatch-complete. Without removal here those skip paths would
+      // leak inFlight entries until daemon restart.
+      inFlight.delete(inFlightKey);
     }
   };
 
@@ -335,8 +389,13 @@ async function replayDeferredMessages(
 
     const targets = resolveTargets(registry, to);
 
-    for (const actor of targets) {
-      await dispatch(actor, transport, transportRoot, channelGuid, relPath, actorEmailSuffix, sessionId, defaultHeartbeatInterval);
-    }
+    // v1.9.0-alpha.1+ — parallel fanout via Promise.all (matches the
+    // live-watcher path's switch from sequential await). Same agentEnv
+    // propagation as the live path.
+    await Promise.all(
+      targets.map(actor =>
+        dispatch(actor, transport, transportRoot, channelGuid, relPath, actorEmailSuffix, sessionId, defaultHeartbeatInterval, agentEnv)
+      ),
+    );
   }
 }

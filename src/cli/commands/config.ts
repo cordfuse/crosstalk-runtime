@@ -80,6 +80,12 @@ async function runConfigShow(opts: ConfigShowOptions): Promise<void> {
   if (safe.defaultHumanActor) {
     console.log(`default-human-actor = "${safe.defaultHumanActor}"`)
   }
+  // v1.9.0-alpha.3+ — show signature-mode only when non-default (strict).
+  // Permissive is the v1.3+ default; printing it adds noise to ordinary
+  // configs.
+  if (config.signatureMode === 'strict') {
+    console.log(`signature-mode = "strict"`)
+  }
   console.log(``)
   console.log(`[relay]`)
   console.log(`mode = "${safe.relay.mode}"`)
