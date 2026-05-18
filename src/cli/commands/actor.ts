@@ -48,7 +48,7 @@ function registerActorList(parent: Command): void {
   parent
     .command('list')
     .description('list actors — by default merged across framework + custom + local layers')
-    .option('--registry <layer>', 'framework | custom | local | all (default: all, merged with last-wins)', 'all')
+    .option('--registry <layer>', 'framework | custom | operator | local | all (default: all, merged with last-wins; "operator" = v1.4+ per-operator layer at manifest/operators/<handle>/actors/)', 'all')
     .option('--json',             'machine-readable JSON output')
     .action(async (opts: ActorListOptions) => {
       await runActorList(opts)
@@ -61,9 +61,9 @@ async function runActorList(opts: ActorListOptions): Promise<void> {
 
   let entries: ActorEntry[]
   if (layer === 'all') {
-    entries = scanAllLayers(config.transport)
-  } else if (layer === 'framework' || layer === 'custom' || layer === 'local') {
-    entries = scanActorLayer(config.transport, layer as ActorLayer)
+    entries = scanAllLayers(config.transport, config.operator)
+  } else if (layer === 'framework' || layer === 'custom' || layer === 'operator' || layer === 'local') {
+    entries = scanActorLayer(config.transport, layer as ActorLayer, config.operator)
   } else {
     console.error(`✗ Unknown --registry value: ${layer}`)
     console.error(`  Valid: framework, custom, local, all`)
@@ -81,6 +81,17 @@ async function runActorList(opts: ActorListOptions): Promise<void> {
       : `(no actors in ${layer} layer)`)
     return
   }
+
+  // v1.4.0-alpha.3+ — header line indicates operator mode so operators
+  // can see at a glance which daemon they're inspecting. Single-op
+  // mode is highlighted because cross-op addresses behave differently
+  // (UAT showed operators getting confused which mode they were in).
+  if (config.operator) {
+    console.log(`Operator handle: ${config.operator}  (multi-operator mode)`)
+  } else {
+    console.log(`Operator handle: (unset)  (single-operator mode — set \`operator = "<handle>"\` in config.toml for multi-op)`)
+  }
+  console.log('')
 
   // Pretty table. v1.3.0-alpha.8+ — ADDRESS column added so operators in
   // multi-op mode can see at a glance which actor is `alice@steve` vs
@@ -138,7 +149,7 @@ function registerActorValidate(parent: Command): void {
   parent
     .command('validate [name]')
     .description('validate actor profile(s) against the framework spec — exits non-zero on any error')
-    .option('--registry <layer>', 'framework | custom | local | all (default: all)', 'all')
+    .option('--registry <layer>', 'framework | custom | operator | local | all (default: all)', 'all')
     .action(async (name: string | undefined, opts: ActorValidateOptions) => {
       await runActorValidate(name, opts)
     })
@@ -150,15 +161,15 @@ async function runActorValidate(name: string | undefined, opts: ActorValidateOpt
 
   // Always build the full merged registry — needed for parent-chain cycle
   // detection even when validating only one layer.
-  const allEntries = scanAllLayers(config.transport)
+  const allEntries = scanAllLayers(config.transport, config.operator)
   const registry = new Map<string, ActorEntry>()
   for (const e of allEntries) registry.set(e.name, e)
 
   let entries: ActorEntry[]
   if (layer === 'all') {
     entries = allEntries
-  } else if (layer === 'framework' || layer === 'custom' || layer === 'local') {
-    entries = scanActorLayer(config.transport, layer as ActorLayer)
+  } else if (layer === 'framework' || layer === 'custom' || layer === 'operator' || layer === 'local') {
+    entries = scanActorLayer(config.transport, layer as ActorLayer, config.operator)
   } else {
     console.error(`✗ Unknown --registry value: ${layer}`)
     process.exit(1)

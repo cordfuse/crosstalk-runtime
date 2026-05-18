@@ -121,7 +121,7 @@ async function runJoin(channelArg: string, opts: JoinOptions): Promise<void> {
   // than loadRegistry, because loadRegistry filters to dispatchable actors
   // (agent or command set) and humans are spec-forbidden from carrying
   // those fields — so loadRegistry never sees them.
-  const profiles = scanAllLayers(config.transport)
+  const profiles = scanAllLayers(config.transport, config.operator)
   const profile  = profiles.find(p => p.name === fromActor)
   if (!profile) {
     const known = profiles.map(p => `${p.name} (${p.data.type ?? '?'})`).sort().join(', ')

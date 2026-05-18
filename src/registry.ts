@@ -8,6 +8,17 @@ import { parseAddress, isAddressError, formatAddress, validateBareRoleName } fro
 const LOCAL_ACTORS_DIR = join(homedir(), '.crosstalk', 'actors');
 const FRAMEWORK_ACTORS_SUBPATH = join('manifest', 'framework', 'actors');
 const CUSTOM_ACTORS_SUBPATH = join('manifest', 'custom', 'actors');
+/** v1.4.0-alpha.1+ — operator-scoped profiles. Path template:
+ *   `<transport>/manifest/operators/<operator-handle>/actors/<name>.md`
+ * Profiles here are only loaded by the daemon whose `operator = "<handle>"`
+ * matches; other operators sharing the same transport ignore them. Solves
+ * the UAT-surfaced issue where pushing `dart-thrower-3.md` to the shared
+ * `manifest/custom/actors/` caused it to register on EVERY operator's
+ * daemon as `dart-thrower-3@<that-operator>`. With the operators/ layer,
+ * steve can stage actors only steve's daemon sees, bob only bob's. */
+function operatorActorsSubpath(operator: string): string {
+  return join('manifest', 'operators', operator, 'actors');
+}
 
 const KEBAB_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 
@@ -194,6 +205,15 @@ export async function loadRegistry(
   const registry = new Map<string, ActorConfig>();
   await loadActorsFromDir(join(transportRoot, FRAMEWORK_ACTORS_SUBPATH), registry, operator);
   await loadActorsFromDir(join(transportRoot, CUSTOM_ACTORS_SUBPATH), registry, operator);
+  // v1.4.0-alpha.1+ — operator-scoped layer. Only loaded when an operator
+  // handle is configured; otherwise there's no `<handle>` to scope by.
+  // Loaded AFTER custom but BEFORE local: operator-scoped profiles win
+  // over shared `custom/`, but a machine-local entry in ~/.crosstalk/
+  // actors/ still overrides everything (matches the existing local-wins
+  // override semantics from v1.2).
+  if (operator) {
+    await loadActorsFromDir(join(transportRoot, operatorActorsSubpath(operator)), registry, operator);
+  }
   await loadActorsFromDir(localActorsDir ?? LOCAL_ACTORS_DIR, registry, operator);
   return registry;
 }
@@ -273,12 +293,16 @@ export function resolveAddress(
   return getPoolInstances(registry, role, operator);
 }
 
-export function watchRegistry(transportRoot: string, onChange: () => void): void {
-  for (const dir of [
+export function watchRegistry(transportRoot: string, onChange: () => void, operator?: string): void {
+  const dirs = [
     join(transportRoot, FRAMEWORK_ACTORS_SUBPATH),
     join(transportRoot, CUSTOM_ACTORS_SUBPATH),
     LOCAL_ACTORS_DIR,
-  ]) {
+  ];
+  if (operator) {
+    dirs.push(join(transportRoot, operatorActorsSubpath(operator)));
+  }
+  for (const dir of dirs) {
     try {
       watch(dir, { recursive: false }, onChange);
     } catch {

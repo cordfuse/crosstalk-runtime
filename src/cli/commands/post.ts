@@ -94,7 +94,7 @@ async function runPost(opts: PostOptions): Promise<void> {
   // names. Cross-operator targets (`alice@bob` from a daemon whose operator
   // is `steve`) are accepted blindly — we have no view of the remote
   // operator's registry, so we trust the user.
-  const profiles = scanAllLayers(config.transport)
+  const profiles = scanAllLayers(config.transport, config.operator)
   const targetsRaw = opts.to.trim()
   const targets: 'all' | string[] = targetsRaw === 'all'
     ? 'all'
@@ -125,6 +125,30 @@ async function runPost(opts: PostOptions): Promise<void> {
         console.error(`  Use --allow-unknown-targets to bypass this check.`)
       }
       process.exit(1)
+    }
+
+    // v1.4.0-alpha.3+ — warn on cross-operator addresses in single-op mode.
+    // The message will land on the transport but no other daemon is configured
+    // to receive it (since the operator handle is unset on this daemon and no
+    // other handles are coordinating). This was a UAT-discovered silent failure
+    // — operators trying multi-op out for the first time would post `--to
+    // alice@bob` with no `operator` field set in config, get a successful
+    // commit, and wonder why alice@bob never responded.
+    if (config.operator === undefined) {
+      const crossOp: string[] = []
+      for (const t of targets as string[]) {
+        const parsed = parseAddress(t)
+        if (!isAddressError(parsed) && parsed.kind === 'machine' && parsed.operator !== undefined) {
+          crossOp.push(t)
+        }
+      }
+      if (crossOp.length > 0) {
+        console.warn(`⚠ Cross-operator target(s) on a single-operator daemon: ${crossOp.join(', ')}`)
+        console.warn(`  This daemon has no \`operator =\` field in config.toml, so no daemon will`)
+        console.warn(`  recognise these messages as ours OR theirs. The message will be written`)
+        console.warn(`  but is unlikely to be processed. Set \`operator = "<handle>"\` in config`)
+        console.warn(`  if you mean to run this daemon in multi-operator mode.`)
+      }
     }
   }
 

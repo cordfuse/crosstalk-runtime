@@ -30,7 +30,26 @@ import { GitTransport } from './transports/git.js';
         console.error('[crosstalk] --config requires a path argument');
         process.exit(1);
       }
-      process.env.CROSSTALK_CONFIG = args[i + 1];
+      // v1.4.0-alpha.3+ — UX hint for the long-standing `-c` collision.
+      // `-c` is `--config` at the top level AND `--channel` in the post/
+      // channel-show/etc. subcommands. When the value extracted as a
+      // config path is followed by a subcommand keyword that ALSO accepts
+      // `-c`, surface the ambiguity rather than silently swallowing what
+      // the user probably meant as a channel name. The subcommand list
+      // here is small enough to enumerate; missing one degrades back to
+      // the old silent-swallow which is the pre-existing behaviour, so
+      // worst-case no regression.
+      const SHORT_CH_SUBCOMMANDS = new Set(['post', 'channel']);
+      const value = args[i + 1];
+      const rest = args.slice(i + 2);
+      const subcommandIdx = rest.findIndex(a => SHORT_CH_SUBCOMMANDS.has(a));
+      if (subcommandIdx >= 0 && args[i] === '-c') {
+        console.error(`[crosstalk] -c "${value}" was parsed as --config (config-file path), but the subcommand "${rest[subcommandIdx]}" also accepts -c (meaning --channel).`);
+        console.error(`           If you meant a channel name, use --channel "${value}" (or move -c <config-path> after the subcommand).`);
+        console.error(`           If you really did mean --config, use the long form to silence this check: --config "${value}"`);
+        process.exit(1);
+      }
+      process.env.CROSSTALK_CONFIG = value;
       args.splice(i, 2);
       i--;
     }
@@ -116,7 +135,7 @@ if (config.relay.mode === 'server') {
   watchRegistry(config.transport, async () => {
     registry = await loadRegistry(config.transport, config.operator);
     console.log(`[crosstalk] registry reloaded: ${[...registry.keys()].join(', ') || 'none'}`);
-  });
+  }, config.operator);
 
   // v1.2.0+ — polling fallback when no relay. Calls transport.sync() on a
   // timer so commits from other machines / PR merges / external pushes get
@@ -181,7 +200,10 @@ if (config.relay.mode === 'server') {
   // any are found, else post `session-open` for any channel currently
   // 'deferred'. This unblocks our own dispatch + signals other daemons
   // watching the same transport to unblock theirs too.
-  const decision = shouldRunBootstrapPass(config.transport, registry, config.operator);
+  const decision = shouldRunBootstrapPass(
+    config.transport, registry, config.operator,
+    config.bootstrap.coordinatorAddress, config.defaultHumanActor,
+  );
   console.log(`[bootstrap] coordinator decision: ${decision.reason}`);
   if (decision.should && decision.coordinatorActor) {
     try {

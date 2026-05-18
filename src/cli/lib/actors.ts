@@ -1,16 +1,16 @@
 /**
  * Per-layer actor scanning — used by `crosstalk actor list/validate`.
  *
- * The runtime's loadRegistry() merges all three layers into a deduplicated
- * Registry with last-wins semantics. For the CLI we want to SHOW the layer
- * each actor came from, and we want to handle each layer separately for the
- * --registry flag. So this lib walks each layer independently.
+ * The runtime's loadRegistry() merges all four layers (v1.4.0-alpha.1+)
+ * into a deduplicated Registry with last-wins semantics. For the CLI we
+ * want to SHOW the layer each actor came from, and we want to handle each
+ * layer separately for the --registry flag.
  *
- * Three layers (framework wins last, custom wins over framework, local wins
- * over both):
+ * Four layers (later wins on collision):
  *   1. <transport>/manifest/framework/actors/
  *   2. <transport>/manifest/custom/actors/
- *   3. ~/.crosstalk/actors/
+ *   3. <transport>/manifest/operators/<handle>/actors/   (v1.4.0-alpha.1+; only loaded when operator handle is set)
+ *   4. ~/.crosstalk/actors/
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -18,7 +18,7 @@ import { homedir } from 'node:os'
 import { parseFrontmatter } from '../../frontmatter.js'
 import { isKebabCase } from '../../registry.js'
 
-export type ActorLayer = 'framework' | 'custom' | 'local'
+export type ActorLayer = 'framework' | 'custom' | 'operator' | 'local'
 
 export interface ActorEntry {
   name:           string
@@ -32,15 +32,18 @@ export interface ActorEntry {
   parseError?:    string
 }
 
-const LAYER_PATHS: Record<ActorLayer, (transport: string) => string> = {
-  framework: (t) => join(t, 'manifest', 'framework', 'actors'),
-  custom:    (t) => join(t, 'manifest', 'custom', 'actors'),
-  local:     (_) => join(homedir(), '.crosstalk', 'actors'),
+function layerDir(transport: string, layer: ActorLayer, operator?: string): string | null {
+  switch (layer) {
+    case 'framework': return join(transport, 'manifest', 'framework', 'actors')
+    case 'custom':    return join(transport, 'manifest', 'custom', 'actors')
+    case 'operator':  return operator ? join(transport, 'manifest', 'operators', operator, 'actors') : null
+    case 'local':     return join(homedir(), '.crosstalk', 'actors')
+  }
 }
 
-export function scanActorLayer(transport: string, layer: ActorLayer): ActorEntry[] {
-  const dir = LAYER_PATHS[layer](transport)
-  if (!existsSync(dir)) return []
+export function scanActorLayer(transport: string, layer: ActorLayer, operator?: string): ActorEntry[] {
+  const dir = layerDir(transport, layer, operator)
+  if (!dir || !existsSync(dir)) return []
 
   const out: ActorEntry[] = []
   for (const file of readdirSync(dir)) {
@@ -66,12 +69,16 @@ export function scanActorLayer(transport: string, layer: ActorLayer): ActorEntry
   return out
 }
 
-/** Merge all three layers with last-wins semantics, but track where each
- * winning entry came from. Returns a flat array of effective entries. */
-export function scanAllLayers(transport: string): ActorEntry[] {
+/** Merge all layers with last-wins semantics, but track where each
+ * winning entry came from. Returns a flat array of effective entries.
+ *
+ * Pass `operator` to include the operator-scoped layer (v1.4.0-alpha.1+);
+ * omit it (or pass undefined) and the operator layer is skipped — matching
+ * single-op back-compat where there's no `<handle>` to scope by. */
+export function scanAllLayers(transport: string, operator?: string): ActorEntry[] {
   const merged = new Map<string, ActorEntry>()
-  for (const layer of ['framework', 'custom', 'local'] as ActorLayer[]) {
-    for (const e of scanActorLayer(transport, layer)) {
+  for (const layer of ['framework', 'custom', 'operator', 'local'] as ActorLayer[]) {
+    for (const e of scanActorLayer(transport, layer, operator)) {
       merged.set(e.name, e)  // last wins
     }
   }

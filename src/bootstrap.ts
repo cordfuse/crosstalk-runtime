@@ -67,6 +67,7 @@ import { MESSAGE_FILE_RE } from './filenames.js'
 import type { Registry } from './registry.js'
 import { MACHINE_ID } from './system.js'
 import { machineGitEmail } from './transports/git.js'
+import { parseAddress, isAddressError } from './address.js'
 
 const YEAR_RE = /^\d{4}$/
 const DD_RE = /^\d{2}$/
@@ -338,8 +339,15 @@ export function listAllActorProfiles(
   const dirs = [
     join(transportRoot, 'manifest', 'framework', 'actors'),
     join(transportRoot, 'manifest', 'custom', 'actors'),
-    join(homedir(), '.crosstalk', 'actors'),
   ]
+  // v1.4.0-alpha.1+ — operator-scoped layer. Only consulted when this
+  // daemon has an operator handle, matching the same gating as
+  // registry.ts loadRegistry so the governance lens stays in sync with
+  // the dispatch lens.
+  if (operator) {
+    dirs.push(join(transportRoot, 'manifest', 'operators', operator, 'actors'))
+  }
+  dirs.push(join(homedir(), '.crosstalk', 'actors'))
   for (const dir of dirs) {
     if (!existsSync(dir)) continue
     let files: string[] = []
@@ -372,15 +380,24 @@ export interface CoordinatorDecision {
 }
 
 /** Decide whether this daemon hosts the coordinator. Resolution order:
- * 1. Active ROE has `coordinator: <name>` field → if `<name>` is in our
+ * 1. **v1.4.0-alpha.2+** — config-designated `bootstrap.coordinator-address`.
+ *    Wins over everything else. This daemon coordinates iff:
+ *    - machine address (alice@steve): our operator handle matches the
+ *      operator part
+ *    - human address (steve): our default-human-actor matches the name
+ *    Built for the multi-op case where two daemons race to post
+ *    session-open and storm git push contention. Setting this on each
+ *    daemon's config gives one authoritative coordinator and lets the
+ *    others skip bootstrap entirely.
+ * 2. Active ROE has `coordinator: <name>` field → if `<name>` is in our
  *    all-actors set (governance lens, not dispatch registry), we coordinate.
  *    If `<name>` is named but not in our all-actors set, we don't coordinate
  *    (the other machine does).
- * 2. No ROE coordinator field: permissive fallback to first-actor-by-
+ * 3. No ROE coordinator field: permissive fallback to first-actor-by-
  *    `joined-at`. Multi-coordinator races are possible if both machines
  *    have the same actor, but `session-open` is idempotent at the channel
  *    level (cache shows 'open' once any lands).
- * 3. No actors with `joined-at` field: alphabetic name order as last resort.
+ * 4. No actors with `joined-at` field: alphabetic name order as last resort.
  *
  * NOTE: uses the all-actors set, not the dispatch registry. The dispatch
  * registry filters out actors without `agent`/`command` (humans), but
@@ -397,7 +414,35 @@ export function shouldRunBootstrapPass(
    * in multi-op mode. session-open then posts `from: <canonical>`
    * which lets the receiving daemon's self-loop check work. */
   operator?: string,
+  /** v1.4.0-alpha.2+ — config.bootstrap.coordinatorAddress. When set,
+   * resolution is fully deterministic: this daemon coordinates iff it
+   * owns the address. */
+  coordinatorAddress?: string,
+  /** v1.4.0-alpha.2+ — config.defaultHumanActor. Used to decide
+   * coordination when `coordinatorAddress` is a bare human name —
+   * the daemon's local human identity must match. */
+  defaultHumanActor?: string,
 ): CoordinatorDecision {
+  // v1.4.0-alpha.2+ — config-designated coordinator wins. Authoritative
+  // when set; no race, no fallback.
+  if (coordinatorAddress) {
+    const parsed = parseAddress(coordinatorAddress)
+    if (isAddressError(parsed)) {
+      return { should: false, reason: `bootstrap.coordinator-address "${coordinatorAddress}" is malformed: ${parsed.message}` }
+    }
+    if (parsed.kind === 'human') {
+      if (defaultHumanActor === parsed.name) {
+        return { should: true, coordinatorActor: parsed.name, reason: `config bootstrap.coordinator-address designates human '${parsed.name}' and this daemon's default-human-actor matches` }
+      }
+      return { should: false, reason: `config bootstrap.coordinator-address designates human '${parsed.name}'; this daemon's default-human-actor (${defaultHumanActor ?? 'unset'}) does not match — another machine coordinates` }
+    }
+    // machine address — operator part must match
+    if (parsed.operator === operator) {
+      return { should: true, coordinatorActor: coordinatorAddress, reason: `config bootstrap.coordinator-address designates '${coordinatorAddress}' and this daemon's operator handle matches` }
+    }
+    return { should: false, reason: `config bootstrap.coordinator-address designates '${coordinatorAddress}'; this daemon's operator ('${operator ?? 'unset'}') does not match — another machine coordinates` }
+  }
+
   const allActors = listAllActorProfiles(transportRoot, operator)
   const fromROE = readCoordinatorFromROE(transportRoot)
   if (fromROE) {

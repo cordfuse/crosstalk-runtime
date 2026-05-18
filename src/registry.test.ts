@@ -13,7 +13,7 @@ import { loadRegistry, getPoolInstances, listRoles, resolveAddress } from './reg
 
 function freshTransport(): {
   root: string
-  writeActor: (name: string, opts?: { agent?: string; command?: string; layer?: 'custom' | 'framework' }) => void
+  writeActor: (name: string, opts?: { agent?: string; command?: string; layer?: 'custom' | 'framework' | { operator: string } }) => void
 } {
   const root = mkdtempSync(join(tmpdir(), 'crosstalk-reg-'))
   mkdirSync(join(root, 'manifest', 'custom', 'actors'), { recursive: true })
@@ -35,7 +35,15 @@ ${fmKey}: ${fmValue}
 
 Test actor ${name}
 `
-      writeFileSync(join(root, 'manifest', layer, 'actors', `${name}.md`), content)
+      let dir: string
+      if (typeof layer === 'object') {
+        // v1.4.0-alpha.1+ operator-scoped layer
+        dir = join(root, 'manifest', 'operators', layer.operator, 'actors')
+        mkdirSync(dir, { recursive: true })
+      } else {
+        dir = join(root, 'manifest', layer, 'actors')
+      }
+      writeFileSync(join(dir, `${name}.md`), content)
     },
   }
 }
@@ -240,5 +248,61 @@ describe('loadRegistry — three-layer merging', () => {
     t.writeActor('alice', { agent: 'custom-agent', layer: 'custom' })
     const registry = await loadRegistry(t.root, undefined, t.root + "/empty-local")
     assert.equal(registry.get('alice')!.agent, 'custom-agent')
+  })
+})
+
+describe('loadRegistry — operator-scoped layer (v1.4.0-alpha.1+)', () => {
+  it('operator-scoped profiles load when operator handle matches', async () => {
+    const t = freshTransport()
+    t.writeActor('only-on-steve', { agent: 'claude', layer: { operator: 'steve' } })
+    const registry = await loadRegistry(t.root, 'steve', t.root + '/empty-local')
+    assert.ok(registry.has('only-on-steve@steve'), 'steve should see operator-scoped profile')
+  })
+
+  it('operator-scoped profiles are INVISIBLE to a different operator', async () => {
+    const t = freshTransport()
+    // steve stages a profile under his operator scope; bob's daemon should not see it
+    t.writeActor('steve-secret', { agent: 'claude', layer: { operator: 'steve' } })
+    const registry = await loadRegistry(t.root, 'bob', t.root + '/empty-local')
+    assert.equal(registry.has('steve-secret@bob'), false,
+      'bob must not register steve-scoped profile under his own handle')
+    assert.equal(registry.size, 0, 'bob sees an empty registry, not a leak from steve')
+  })
+
+  it('operator-scoped layer is skipped entirely in single-op mode', async () => {
+    const t = freshTransport()
+    t.writeActor('legacy', { agent: 'claude', layer: { operator: 'steve' } })
+    const registry = await loadRegistry(t.root, undefined, t.root + '/empty-local')
+    assert.equal(registry.size, 0,
+      'single-op mode has no operator handle, so the scoped layer never loads')
+  })
+
+  it('operator-scoped layer overrides custom on the same name', async () => {
+    const t = freshTransport()
+    t.writeActor('alice', { agent: 'custom-agent', layer: 'custom' })
+    t.writeActor('alice', { agent: 'op-scoped-agent', layer: { operator: 'steve' } })
+    const registry = await loadRegistry(t.root, 'steve', t.root + '/empty-local')
+    assert.equal(registry.get('alice@steve')!.agent, 'op-scoped-agent',
+      'operator-scoped layer is between custom and local; should win over custom')
+  })
+
+  it('coexists with shared custom — steve sees both shared + own scoped', async () => {
+    const t = freshTransport()
+    t.writeActor('shared', { agent: 'claude', layer: 'custom' })
+    t.writeActor('only-steve', { agent: 'claude', layer: { operator: 'steve' } })
+    t.writeActor('only-bob',   { agent: 'claude', layer: { operator: 'bob' } })
+
+    const steveReg = await loadRegistry(t.root, 'steve', t.root + '/empty-local')
+    assert.ok(steveReg.has('shared@steve'),     'steve sees shared profile qualified to @steve')
+    assert.ok(steveReg.has('only-steve@steve'), 'steve sees own scoped profile')
+    assert.equal(steveReg.has('only-bob@steve'),  false, 'steve must not see bob-scoped profile')
+    assert.equal(steveReg.has('only-bob@bob'),    false, 'steve must not see bob qualified at all')
+    assert.equal(steveReg.size, 2)
+
+    const bobReg = await loadRegistry(t.root, 'bob', t.root + '/empty-local')
+    assert.ok(bobReg.has('shared@bob'),       'bob also sees shared profile qualified to @bob')
+    assert.ok(bobReg.has('only-bob@bob'),     'bob sees own scoped profile')
+    assert.equal(bobReg.has('only-steve@bob'),  false, 'bob must not see steve-scoped profile')
+    assert.equal(bobReg.size, 2)
   })
 })
