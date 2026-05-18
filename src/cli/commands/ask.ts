@@ -34,7 +34,7 @@ import { loadConfig } from '../../config.js'
 import { runPost, type PostOptions } from './post.js'
 
 interface AskOptions {
-  channel:  string
+  channel?: string  // v1.8.1+ — optional when config.defaultChannel is set
   from?:    string
   push?:    boolean   // commander inverts --no-push to push: false
 }
@@ -43,23 +43,34 @@ export function registerAskCommand(program: Command): void {
   program
     .command('ask <text>')
     .description('shortcut: post a natural-language request to the concierge actor — equivalent to `crosstalk post --to concierge[@<op>] --body "<text>"`')
-    .requiredOption('-c, --channel <name-or-guid>', 'channel to post into (friendly name from _header.md, or full GUID)')
-    .option('-f, --from <actor>',                   'sender identity (defaults to default-human-actor in config.toml)')
-    .option('--no-push',                            'commit but do not push (leaves the commit local)')
+    .option('-c, --channel <name-or-guid>', 'channel to post into (friendly name from _header.md, or full GUID; v1.8.1+ — optional when `default-channel` is set in config.toml)')
+    .option('-f, --from <actor>',           'sender identity (defaults to default-human-actor in config.toml)')
+    .option('--no-push',                    'commit but do not push (leaves the commit local)')
     .action(async (text: string, opts: AskOptions) => {
       const config = await loadConfig()
       const conciergeAddress = config.operator ? `concierge@${config.operator}` : 'concierge'
 
+      // v1.8.1+ — `default-channel` config supplies the channel when
+      // `--channel` is omitted. Operators set up a permanent concierge
+      // inbox channel once and `crosstalk ask "..."` just works.
+      const channel = opts.channel ?? config.defaultChannel
+      if (!channel) {
+        console.error(`✗ --channel is required when no \`default-channel\` is set in ~/.crosstalk/config.toml.`)
+        console.error(`  Either pass --channel <name>, or add to config.toml:`)
+        console.error(``)
+        console.error(`    default-channel = "concierge"`)
+        console.error(``)
+        console.error(`  Then \`crosstalk ask "..."\` will route there without --channel.`)
+        process.exit(1)
+      }
+
       const postOpts: PostOptions = {
-        channel: opts.channel,
-        to:      conciergeAddress,
-        from:    opts.from,
-        body:    text,
-        type:    'text',
-        push:    opts.push,
-        // No dispatch policy override — concierge is typically a singleton
-        // (not a pool). If operators stage concierge as a pool they can
-        // use `crosstalk post --dispatch round-robin` directly.
+        channel,
+        to:   conciergeAddress,
+        from: opts.from,
+        body: text,
+        type: 'text',
+        push: opts.push,
       }
       await runPost(postOpts)
     })
