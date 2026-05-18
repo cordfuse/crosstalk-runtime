@@ -175,7 +175,7 @@ async function runPost(opts: PostOptions): Promise<void> {
     console.log(`✓ Encrypted to ${recipientMap.size} recipient(s): ${encryptedToNames.join(', ')}`)
   }
 
-  const messageContent = composeMessage({
+  let messageContent = composeMessage({
     from,
     to:        toField,
     timestamp: now.toISOString(),
@@ -183,6 +183,22 @@ async function runPost(opts: PostOptions): Promise<void> {
     body,
     extraFrontmatter: encryptionFields,
   })
+
+  // v1.3.0-alpha.8+ — sign the message with --from's ed25519 key if one
+  // exists locally. Closes the UAT-discovered gap where CLI-posted messages
+  // bypassed the signing layer entirely (since this command writes the file
+  // directly instead of going through Transport.postMessage). Without this,
+  // any operator could post `from: alice@steve` via CLI without holding
+  // alice@steve's signing key — defeats the whole point of Phase 2 identity.
+  // Permissive: no key = post unsigned (same as the daemon dispatch path).
+  try {
+    const { loadPrivateSigningKey, signAndEmbed } = await import('../../signing.js')
+    if (loadPrivateSigningKey(from) !== null) {
+      messageContent = signAndEmbed(messageContent, from)
+    }
+  } catch (err) {
+    console.warn(`⚠ signing failed for ${from}, posting unsigned: ${err}`)
+  }
 
   // Atomic write — temp in same directory as target so rename never crosses fs
   if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true })

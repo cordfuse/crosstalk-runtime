@@ -71,7 +71,7 @@ async function runActorList(opts: ActorListOptions): Promise<void> {
   }
 
   if (opts.json) {
-    console.log(JSON.stringify(entries.map(asListJson), null, 2))
+    console.log(JSON.stringify(entries.map(e => asListJson(e, config.operator)), null, 2))
     return
   }
 
@@ -82,30 +82,42 @@ async function runActorList(opts: ActorListOptions): Promise<void> {
     return
   }
 
-  // Pretty table
-  const nameW  = Math.max(4, ...entries.map(e => e.name.length))
-  const layerW = Math.max(5, ...entries.map(e => e.layer.length))
-  const typeW  = Math.max(4, ...entries.map(e => String(e.data.type ?? '?').length))
-  const agentW = Math.max(5, ...entries.map(e => String(e.data.agent ?? '').length))
-  console.log(`${pad('NAME', nameW)}  ${pad('LAYER', layerW)}  ${pad('TYPE', typeW)}  ${pad('AGENT', agentW)}  MODEL`)
+  // Pretty table. v1.3.0-alpha.8+ — ADDRESS column added so operators in
+  // multi-op mode can see at a glance which actor is `alice@steve` vs
+  // `alice@bob` rather than only the filename-derived bare name. In
+  // single-op mode (no operator handle) address == name and the column
+  // is informationally redundant; we still show it for consistency.
+  const addressFor = (e: ActorEntry): string => {
+    const isHuman = String(e.data.type ?? '') === 'human'
+    return config.operator && !isHuman ? `${e.name}@${config.operator}` : e.name
+  }
+  const nameW    = Math.max(4, ...entries.map(e => e.name.length))
+  const addressW = Math.max(7, ...entries.map(e => addressFor(e).length))
+  const layerW   = Math.max(5, ...entries.map(e => e.layer.length))
+  const typeW    = Math.max(4, ...entries.map(e => String(e.data.type ?? '?').length))
+  const agentW   = Math.max(5, ...entries.map(e => String(e.data.agent ?? '').length))
+  console.log(`${pad('NAME', nameW)}  ${pad('ADDRESS', addressW)}  ${pad('LAYER', layerW)}  ${pad('TYPE', typeW)}  ${pad('AGENT', agentW)}  MODEL`)
   for (const e of entries) {
     const type  = String(e.data.type  ?? '?')
     const agent = String(e.data.agent ?? '')
     const model = String(e.data.model ?? '')
-    console.log(`${pad(e.name, nameW)}  ${pad(e.layer, layerW)}  ${pad(type, typeW)}  ${pad(agent, agentW)}  ${model}`)
+    console.log(`${pad(e.name, nameW)}  ${pad(addressFor(e), addressW)}  ${pad(e.layer, layerW)}  ${pad(type, typeW)}  ${pad(agent, agentW)}  ${model}`)
   }
 }
 
-function asListJson(e: ActorEntry): Record<string, unknown> {
+function asListJson(e: ActorEntry, operator?: string): Record<string, unknown> {
+  const isHuman = String(e.data.type ?? '') === 'human'
+  const address = operator && !isHuman ? `${e.name}@${operator}` : e.name
   return {
-    name:  e.name,
-    layer: e.layer,
-    type:  e.data.type ?? null,
-    agent: e.data.agent ?? null,
-    model: e.data.model ?? null,
-    role:  e.data.role ?? null,
-    parent: e.data.parent ?? null,
-    file:  e.file,
+    name:    e.name,
+    address,
+    layer:   e.layer,
+    type:    e.data.type ?? null,
+    agent:   e.data.agent ?? null,
+    model:   e.data.model ?? null,
+    role:    e.data.role ?? null,
+    parent:  e.data.parent ?? null,
+    file:    e.file,
   }
 }
 
