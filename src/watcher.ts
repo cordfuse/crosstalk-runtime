@@ -33,6 +33,10 @@ export function startWatcher(
    * (work + roe-*). When false, only roe-* messages defer (work continues
    * unaffected). False = the safe default for transports without governance. */
   _deferOnNoCoordinator: boolean,
+  /** v1.6.0-alpha.1+ — env layer forwarded to spawned agent children
+   * (sourced from config.agentEnv / `[agent-environment]` TOML table).
+   * Default undefined = agents inherit the daemon's env unchanged. */
+  agentEnv?: Record<string, string>,
 ): { rescanAll: () => Promise<void> } {
   console.log(`[watcher] subscribing to transport events`);
 
@@ -93,7 +97,7 @@ export function startWatcher(
       bootstrapCache.invalidate(guid);
       const newState = bootstrapCache.get(guid);
       if (wasDeferred && newState === 'open') {
-        replayDeferredMessages(transport, transportRoot, guid, getRegistry, actorEmailSuffix, sessionId, defaultHeartbeatInterval, bootstrapCache).catch(err => {
+        replayDeferredMessages(transport, transportRoot, guid, getRegistry, actorEmailSuffix, sessionId, defaultHeartbeatInterval, bootstrapCache, agentEnv).catch(err => {
           console.error(`[watcher] replay failed for ${guid.slice(0, 8)}: ${err}`);
         });
       }
@@ -150,7 +154,7 @@ export function startWatcher(
     if (targets.length === 0) return;
 
     for (const actor of targets) {
-      await dispatch(actor, transport, transportRoot, guid, relPath, actorEmailSuffix, sessionId, defaultHeartbeatInterval);
+      await dispatch(actor, transport, transportRoot, guid, relPath, actorEmailSuffix, sessionId, defaultHeartbeatInterval, agentEnv);
     }
   };
 
@@ -243,6 +247,7 @@ async function replayDeferredMessages(
   sessionId: string,
   defaultHeartbeatInterval: number | undefined,
   bootstrapCache: BootstrapStateCache,
+  agentEnv?: Record<string, string>,
 ): Promise<void> {
   const channelDir = join(transportRoot, 'channels', channelGuid);
   const cursor = await readCursor(sessionId, channelGuid);

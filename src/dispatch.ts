@@ -65,7 +65,21 @@ function substituteVars(template: string, vars: Record<string, string>): string 
 // Common spawn options for agent CLIs: ignore stdin, capture stdout, inherit stderr.
 const AGENT_STDIO = ['ignore', 'pipe', 'inherit'] as const;
 
-function spawnClaude(actor: ActorConfig, messageContent: string): ChildProcess {
+/** Build the env passed to a child agent process. Layers, last-wins:
+ *   1. process.env                              — daemon's own env (HOME, USER, etc.)
+ *   2. PATH                                    — augmented with ~/.bun/bin + ~/.local/bin
+ *   3. agentEnv from config                    — v1.6.0-alpha.1+ operator overrides
+ *
+ * The `agentEnv` layer is the lever for multi-operator-on-one-machine
+ * deployments where the daemon's HOME is sandboxed (per-operator
+ * `~/.crosstalk/` state) but agents need credentials in the operator's
+ * REAL home. Setting `HOME` here makes claude/gemini find their auth
+ * while keeping the daemon's state partitioned. */
+function buildAgentEnv(agentEnv: Record<string, string> | undefined): NodeJS.ProcessEnv {
+  return { ...process.env, PATH: augmentedPath, ...(agentEnv ?? {}) };
+}
+
+function spawnClaude(actor: ActorConfig, messageContent: string, agentEnv?: Record<string, string>): ChildProcess {
   const personality = actor.personality ?? `You are ${actor.name}.`;
   const model = actor.model ?? 'claude-sonnet-4-6';
   const userPrompt = `The following message arrived in your channel:\n\n${messageContent}\n\nRespond in character. Write only your response.`;
@@ -79,7 +93,7 @@ function spawnClaude(actor: ActorConfig, messageContent: string): ChildProcess {
     userPrompt,
   ], {
     stdio: [...AGENT_STDIO],
-    env: { ...process.env, PATH: augmentedPath },
+    env: buildAgentEnv(agentEnv),
     // v1.0.2+ — child runs as its own process-group leader so on timeout
     // we can signal the WHOLE group via process.kill(-pid, ...), reaching
     // the agent's own subprocesses (e.g. opencode's LLM-client subprocess
@@ -89,7 +103,7 @@ function spawnClaude(actor: ActorConfig, messageContent: string): ChildProcess {
   });
 }
 
-function spawnGemini(actor: ActorConfig, messageContent: string): ChildProcess {
+function spawnGemini(actor: ActorConfig, messageContent: string, agentEnv?: Record<string, string>): ChildProcess {
   const personality = actor.personality ?? `You are ${actor.name}.`;
   const model = actor.model ?? 'gemini-2.5-flash';
   // Gemini has no --system-prompt flag; bake personality into the prompt body
@@ -97,12 +111,12 @@ function spawnGemini(actor: ActorConfig, messageContent: string): ChildProcess {
 
   return spawn('gemini', ['-m', model, '-p', prompt, '-y', '--output-format', 'text'], {
     stdio: [...AGENT_STDIO],
-    env: { ...process.env, PATH: augmentedPath },
+    env: buildAgentEnv(agentEnv),
     detached: true,  // see spawnClaude comment — process-group leader for kill-on-timeout
   });
 }
 
-function spawnQwen(actor: ActorConfig, messageContent: string): ChildProcess {
+function spawnQwen(actor: ActorConfig, messageContent: string, agentEnv?: Record<string, string>): ChildProcess {
   const personality = actor.personality ?? `You are ${actor.name}.`;
   const model = actor.model ?? 'qwen-plus';
   const userPrompt = `The following message arrived in your channel:\n\n${messageContent}\n\nRespond in character. Write only your response.`;
@@ -116,12 +130,12 @@ function spawnQwen(actor: ActorConfig, messageContent: string): ChildProcess {
     '--no-chat-recording',
   ], {
     stdio: [...AGENT_STDIO],
-    env: { ...process.env, PATH: augmentedPath },
+    env: buildAgentEnv(agentEnv),
     detached: true,  // see spawnClaude comment — process-group leader for kill-on-timeout
   });
 }
 
-function spawnOpenCode(actor: ActorConfig, messageContent: string): ChildProcess {
+function spawnOpenCode(actor: ActorConfig, messageContent: string, agentEnv?: Record<string, string>): ChildProcess {
   const personality = actor.personality ?? `You are ${actor.name}.`;
   const model = actor.model ?? 'ollama/mistral-nemo:latest';
   // OpenCode has no --system-prompt flag; bake personality into the message
@@ -129,7 +143,7 @@ function spawnOpenCode(actor: ActorConfig, messageContent: string): ChildProcess
 
   return spawn('opencode', ['run', prompt, '-m', model, '--dangerously-skip-permissions', '--format', 'json'], {
     stdio: [...AGENT_STDIO],
-    env: { ...process.env, PATH: augmentedPath },
+    env: buildAgentEnv(agentEnv),
     detached: true,  // critical for opencode — its LLM-client subprocess survives SIGTERM otherwise (see spawnClaude comment)
   });
 }
@@ -148,12 +162,12 @@ function extractOpenCodeText(jsonl: string): string {
     }, '');
 }
 
-function spawnCustom(actor: ActorConfig, vars: Record<string, string>): ChildProcess {
+function spawnCustom(actor: ActorConfig, vars: Record<string, string>, agentEnv?: Record<string, string>): ChildProcess {
   if (!actor.command) throw new Error(`[dispatch] ${actor.name}: no command defined and agent "${actor.agent}" is not a native provider`);
   const args = actor.args.map(a => substituteVars(a, vars));
   return spawn(actor.command, args, {
     stdio: [...AGENT_STDIO],
-    env: { ...process.env, PATH: augmentedPath },
+    env: buildAgentEnv(agentEnv),
     detached: true,  // see spawnClaude comment — process-group leader for kill-on-timeout
   });
 }
@@ -227,6 +241,12 @@ export async function dispatch(
   actorEmailSuffix: string,
   sessionId = 'default',
   defaultHeartbeatInterval?: number,
+  /** v1.6.0-alpha.1+ — extra env forwarded to the spawned agent child
+   * process. Sourced from `config.agentEnv` (the `[agent-environment]`
+   * TOML table). Primary use case: pointing agent CLIs at the operator's
+   * REAL `$HOME` when the daemon's HOME is sandboxed for per-operator
+   * `~/.crosstalk/` state isolation. */
+  agentEnv?: Record<string, string>,
 ): Promise<void> {
   const vars: Record<string, string> = {
     transport_root: transportRoot,  // shared root for custom commands' info
@@ -290,11 +310,11 @@ export async function dispatch(
 
   let proc: ChildProcess;
   try {
-    proc = actor.agent === 'claude' ? spawnClaude(actor, messageContent)
-      : actor.agent === 'gemini' ? spawnGemini(actor, messageContent)
-      : actor.agent === 'qwen' ? spawnQwen(actor, messageContent)
-      : actor.agent === 'opencode' ? spawnOpenCode(actor, messageContent)
-      : spawnCustom(actor, vars);
+    proc = actor.agent === 'claude' ? spawnClaude(actor, messageContent, agentEnv)
+      : actor.agent === 'gemini' ? spawnGemini(actor, messageContent, agentEnv)
+      : actor.agent === 'qwen' ? spawnQwen(actor, messageContent, agentEnv)
+      : actor.agent === 'opencode' ? spawnOpenCode(actor, messageContent, agentEnv)
+      : spawnCustom(actor, vars, agentEnv);
   } catch (err) {
     console.error(`[dispatch] ${actor.name} spawn failed: ${err}`);
     return;
