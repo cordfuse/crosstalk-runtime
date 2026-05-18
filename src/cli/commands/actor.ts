@@ -82,6 +82,17 @@ async function runActorList(opts: ActorListOptions): Promise<void> {
     return
   }
 
+  // v1.4.0-alpha.3+ — header line indicates operator mode so operators
+  // can see at a glance which daemon they're inspecting. Single-op
+  // mode is highlighted because cross-op addresses behave differently
+  // (UAT showed operators getting confused which mode they were in).
+  if (config.operator) {
+    console.log(`Operator handle: ${config.operator}  (multi-operator mode)`)
+  } else {
+    console.log(`Operator handle: (unset)  (single-operator mode — set \`operator = "<handle>"\` in config.toml for multi-op)`)
+  }
+  console.log('')
+
   // Pretty table. v1.3.0-alpha.8+ — ADDRESS column added so operators in
   // multi-op mode can see at a glance which actor is `alice@steve` vs
   // `alice@bob` rather than only the filename-derived bare name. In
