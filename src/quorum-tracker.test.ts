@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test'
 import { strict as assert } from 'node:assert'
-import { QuorumTracker, buildQuorumReachedMessage } from './quorum-tracker.js'
+import { QuorumTracker, buildQuorumReachedMessage, buildQuorumFailedMessage } from './quorum-tracker.js'
 
 describe('QuorumTracker — register', () => {
   it('register on a fresh key creates state', () => {
@@ -149,6 +149,95 @@ describe('QuorumTracker — TTL + sweep (v1.9.0-alpha.2)', () => {
     assert.equal(t.sweepExpired(Date.now() + 9 * 60 * 1000), 0)
     // 11 minutes — swept
     assert.equal(t.sweepExpired(Date.now() + 11 * 60 * 1000), 1)
+  })
+
+  it('onExpired callback fires per swept entry (v1.10.0-alpha.1)', () => {
+    const expired: string[] = []
+    const t = new QuorumTracker({
+      ttlMs: 1,
+      autoStart: false,
+      onExpired: (state) => expired.push(state.originRelPath),
+    })
+    t.register('ch1', 'rel-a', 'alice@steve', 2, 3)
+    t.register('ch1', 'rel-b', 'bob@steve', 1, 2)
+    t.register('ch1', 'rel-c', 'carol@steve', 3, 5)
+
+    // Record some responders on rel-a so the failed event carries them
+    t.recordResponse('ch1', 'rel-a', 'alice-1@steve')
+
+    const swept = t.sweepExpired(Date.now() + 60 * 60 * 1000)
+    assert.equal(swept, 3)
+    assert.equal(expired.length, 3)
+    assert.deepEqual(expired.sort(), ['rel-a', 'rel-b', 'rel-c'])
+  })
+
+  it('onExpired callback errors are caught (single bad callback does not poison the sweep)', () => {
+    let goodFired = 0
+    const t = new QuorumTracker({
+      ttlMs: 1,
+      autoStart: false,
+      onExpired: (state) => {
+        if (state.originRelPath === 'rel-bad') throw new Error('boom')
+        goodFired++
+      },
+    })
+    t.register('ch1', 'rel-bad', 'alice@steve', 1, 1)
+    t.register('ch1', 'rel-good-1', 'bob@steve', 1, 1)
+    t.register('ch1', 'rel-good-2', 'carol@steve', 1, 1)
+
+    // Sweep — bad throws, but the other two should still fire + remove
+    const swept = t.sweepExpired(Date.now() + 60 * 60 * 1000)
+    assert.equal(swept, 3, 'all entries should be removed regardless of callback errors')
+    assert.equal(goodFired, 2, 'good callbacks should still fire')
+    assert.equal(t.size(), 0)
+  })
+
+  it('no onExpired → sweep still removes entries (back-compat)', () => {
+    const t = new QuorumTracker({ ttlMs: 1, autoStart: false })  // no onExpired
+    t.register('ch1', 'rel1', 'alice@steve', 1, 1)
+    assert.equal(t.sweepExpired(Date.now() + 60 * 60 * 1000), 1)
+    assert.equal(t.size(), 0)
+  })
+})
+
+describe('buildQuorumFailedMessage (v1.10.0-alpha.1)', () => {
+  it('emits well-formed pool-quorum-failed frontmatter + body', () => {
+    const t = new QuorumTracker({ autoStart: false })
+    t.register('ch1', '2026/05/18/120000000Z-deadbeef.md', 'alice@steve', 3, 5)
+    t.recordResponse('ch1', '2026/05/18/120000000Z-deadbeef.md', 'alice-1@steve')
+    // Simulate expiry: sweep to capture the state via onExpired
+    let captured: any = null
+    const t2 = new QuorumTracker({
+      ttlMs: 1,
+      autoStart: false,
+      onExpired: (s) => { captured = s },
+    })
+    t2.register('ch1', '2026/05/18/120000000Z-deadbeef.md', 'alice@steve', 3, 5)
+    t2.recordResponse('ch1', '2026/05/18/120000000Z-deadbeef.md', 'alice-1@steve')
+    t2.sweepExpired(Date.now() + 60 * 60 * 1000)
+
+    const msg = buildQuorumFailedMessage(captured, 'watcher')
+    assert.ok(msg.includes('type: pool-quorum-failed'))
+    assert.ok(msg.includes('reason: ttl-expired'))
+    assert.ok(msg.includes('quorum-required: 3'))
+    assert.ok(msg.includes('responses-received: 1'))
+    assert.ok(msg.includes('pool-size: 5'))
+    assert.ok(msg.includes('responders: alice-1@steve'))
+    assert.ok(msg.includes('Pool quorum failed (ttl-expired)'))
+  })
+
+  it('handles zero-responder case (no one replied at all)', () => {
+    let captured: any = null
+    const t = new QuorumTracker({
+      ttlMs: 1,
+      autoStart: false,
+      onExpired: (s) => { captured = s },
+    })
+    t.register('ch1', 'rel1', 'alice@steve', 2, 3)
+    t.sweepExpired(Date.now() + 60 * 60 * 1000)
+    const msg = buildQuorumFailedMessage(captured, 'watcher')
+    assert.ok(msg.includes('responders: (none)'))
+    assert.ok(msg.includes('responses-received: 0'))
   })
 })
 

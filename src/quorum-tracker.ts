@@ -72,16 +72,29 @@ export class QuorumTracker {
   private sweepTimer: NodeJS.Timeout | null = null
   private readonly ttlMs: number
   private readonly sweepIntervalMs: number
+  private readonly onExpired?: (state: QuorumState) => void
 
   /** v1.9.0-alpha.2+ — configurable TTL + GC sweep. K-never-reached
    * entries used to leak in memory until daemon restart. Defaults
    * (10-minute TTL, 60-second sweep) are sized for typical workloads
    * where quorum requests resolve in seconds. Override for tests or
    * for unusual deployments where K-of-N agreement legitimately takes
-   * minutes (e.g. human-in-loop coordinator chains). */
-  constructor(opts?: { ttlMs?: number; sweepIntervalMs?: number; autoStart?: boolean }) {
+   * minutes (e.g. human-in-loop coordinator chains).
+   *
+   * v1.10.0-alpha.1+ — `onExpired` callback. Fired ONCE per state when
+   * the sweep purges an entry. Watcher uses this to emit a
+   * `pool-quorum-failed` system message so actors can observe quorum
+   * failure (the symmetric counterpart to pool-quorum-reached). Tracker
+   * stays pure data; I/O lives in the caller. */
+  constructor(opts?: {
+    ttlMs?: number
+    sweepIntervalMs?: number
+    autoStart?: boolean
+    onExpired?: (state: QuorumState) => void
+  }) {
     this.ttlMs = opts?.ttlMs ?? 10 * 60 * 1000
     this.sweepIntervalMs = opts?.sweepIntervalMs ?? 60 * 1000
+    this.onExpired = opts?.onExpired
     if (opts?.autoStart !== false) this.startSweep()
   }
 
@@ -112,6 +125,16 @@ export class QuorumTracker {
     for (const [id, state] of this.states.entries()) {
       if (now - state.registeredAt > this.ttlMs) {
         this.states.delete(id)
+        // v1.10.0-alpha.1+ — fire onExpired BEFORE deleting (state still
+        // contains the responders + K/N + addresses). Caller (typically
+        // the watcher) emits a pool-quorum-failed system message; tracker
+        // ignores callback errors so a single bad emit can't poison the
+        // whole sweep.
+        if (this.onExpired) {
+          try { this.onExpired(state) } catch (err) {
+            console.warn(`[quorum] onExpired callback threw for ${id}: ${err}`)
+          }
+        }
         swept++
       }
     }
@@ -232,6 +255,42 @@ export function buildQuorumReachedMessage(state: QuorumState, watcherIdentity: s
   ].join('\n')
 }
 
+/** v1.10.0-alpha.1+ — build the body of a `pool-quorum-failed` system
+ * message. Symmetric with the reached path: same fields, type +
+ * narrative line differ. Fires from the watcher when the TTL sweep
+ * purges an entry that never reached K. Lets actors observe failure
+ * the same way they observe success (subscribe to the system channel,
+ * react to `type: pool-quorum-failed`).
+ *
+ * Note: this is for TTL expiry only. The other failure mode
+ * (all-N-responded-but-K-was-never-reachable because K > N) closes
+ * silently inside recordResponse → close. That's an operator
+ * misconfig caught at register time with a console.warn; emitting
+ * a failure event for it would be noise. */
+export function buildQuorumFailedMessage(state: QuorumState, watcherIdentity: string, reason: 'ttl-expired' = 'ttl-expired'): string {
+  const now = new Date().toISOString()
+  const responders = [...state.responders].sort().join(', ')
+  return [
+    `---`,
+    `from: ${watcherIdentity}`,
+    `to: all`,
+    `timestamp: ${now}`,
+    `type: pool-quorum-failed`,
+    `in-reply-to: ${state.originRelPath}`,
+    `channel: ${state.channel}`,
+    `pool-address: ${state.poolAddress}`,
+    `quorum-required: ${state.k}`,
+    `responses-received: ${state.responders.size}`,
+    `pool-size: ${state.n}`,
+    `responders: ${responders || '(none)'}`,
+    `reason: ${reason}`,
+    `---`,
+    ``,
+    `Pool quorum failed (${reason}): only ${state.responders.size}/${state.k} responses to ${state.poolAddress} in channel ${state.channel.slice(0, 8)} before TTL expiry.`,
+    ``,
+  ].join('\n')
+}
+
 /** Helper used by the watcher to actually emit the system message. Kept
  * here (rather than inline in watcher) so the file write is testable in
  * isolation. The transport is passed in by caller so this module stays
@@ -242,7 +301,37 @@ export async function emitPoolQuorumReached(
   state: QuorumState,
   watcherIdentity: ActorIdentity,
 ): Promise<void> {
-  const body = buildQuorumReachedMessage(state, watcherIdentity.name)
+  await emitQuorumMessage(
+    transport,
+    transportRoot,
+    watcherIdentity,
+    buildQuorumReachedMessage(state, watcherIdentity.name),
+  )
+}
+
+/** v1.10.0-alpha.1+ — emit pool-quorum-failed. Same I/O pattern as the
+ * reached path: try postMessage, fall back to direct write on transport
+ * contention. */
+export async function emitPoolQuorumFailed(
+  transport: Transport,
+  transportRoot: string,
+  state: QuorumState,
+  watcherIdentity: ActorIdentity,
+): Promise<void> {
+  await emitQuorumMessage(
+    transport,
+    transportRoot,
+    watcherIdentity,
+    buildQuorumFailedMessage(state, watcherIdentity.name),
+  )
+}
+
+async function emitQuorumMessage(
+  transport: Transport,
+  transportRoot: string,
+  watcherIdentity: ActorIdentity,
+  body: string,
+): Promise<void> {
   try {
     await transport.postMessage(SYSTEM_CHANNEL, watcherIdentity, body)
   } catch (err) {

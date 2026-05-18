@@ -21,6 +21,7 @@ import { messageDatePath, messageFilename } from '../../filenames.js'
 import { parseFrontmatter } from '../../frontmatter.js'
 import { listChannels, resolveChannel, formatRelativeTime, readChannelMessages, printMessage } from '../lib/channel.js'
 import { registerChannelJoin } from './channel-join.js'
+import { pushWithRetry } from '../../git.js'
 
 export function registerChannelCommand(program: Command): void {
   const channel = program
@@ -132,8 +133,10 @@ async function runChannelNew(topic: string, opts: ChannelNewOptions): Promise<vo
   console.log(`✓ Committed: ${commitMsg}`)
 
   if (opts.push !== false) {
-    if (!gitCmd(config.transport, ['push'])) {
-      console.error(`✗ Push failed — commit is local. Run \`git -C ${config.transport} push\` to retry.`)
+    // v1.10.0-alpha.2+ — pushWithRetry handles CLI/daemon push contention.
+    const pushed = await pushWithRetry(config.transport, 5)
+    if (!pushed) {
+      console.error(`✗ Push failed after retries — commit is local. Run \`git -C ${config.transport} pull --rebase && git push\` to recover.`)
       process.exit(1)
     }
     console.log(`✓ Pushed`)

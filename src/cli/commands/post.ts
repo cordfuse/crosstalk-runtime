@@ -39,6 +39,7 @@ import { messageDatePath, messageFilename } from '../../filenames.js'
 import { resolveChannel } from '../lib/channel.js'
 import { scanAllLayers, type ActorEntry } from '../lib/actors.js'
 import { parseAddress, isAddressError } from '../../address.js'
+import { pushWithRetry } from '../../git.js'
 
 export interface PostOptions {
   channel:               string
@@ -277,8 +278,16 @@ export async function runPost(opts: PostOptions): Promise<void> {
   console.log(`✓ Committed: ${commitMsg}`)
 
   if (opts.push !== false) {
-    if (!gitCmd(config.transport, ['push'])) {
-      console.error(`✗ Push failed — commit is local. Run \`git -C ${config.transport} push\` to retry.`)
+    // v1.10.0-alpha.2+ — pushWithRetry instead of raw git push. Handles
+    // the CLI/daemon push race that surfaced as a v1.4 carryforward:
+    // when the daemon is mid-bootstrap-push (from its actor clone) and
+    // the operator runs `crosstalk post` at the same time, both try to
+    // push to the same bare repo and the loser gets non-fast-forward
+    // rejected. pushWithRetry rebases + retries (5 attempts is enough
+    // for CLI use; daemon uses 20 for sustained contention).
+    const pushed = await pushWithRetry(config.transport, 5)
+    if (!pushed) {
+      console.error(`✗ Push failed after retries — commit is local. Run \`git -C ${config.transport} pull --rebase && git push\` to recover.`)
       process.exit(1)
     }
     console.log(`✓ Pushed`)
