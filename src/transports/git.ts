@@ -30,6 +30,7 @@ import {
   type Transport, type ActorIdentity, type MessageRef, type MessageEvent,
   SYSTEM_CHANNEL,
 } from '../transport.js'
+import { loadPrivateSigningKey, signAndEmbed } from '../signing.js'
 
 const execFileP = promisify(execFile)
 
@@ -164,11 +165,29 @@ export class GitTransport implements Transport {
     const filename = messageFilename(now)
     const relPath = `${datePath}/${filename}`
 
+    // v1.3.0-alpha.2+ — sign the body with the actor's ed25519 signing key
+    // if one exists locally. Opt-in: actors without a generated signing key
+    // continue to post unsigned (backward compat with v1.2 transports).
+    // The verifier (watcher.ts) treats missing signatures permissively but
+    // rejects tampered ones — so opting INTO signing is strictly safer for
+    // an actor than opting out.
+    let signedBody = body
+    try {
+      if (loadPrivateSigningKey(actor.name) !== null) {
+        signedBody = signAndEmbed(body, actor.name)
+      }
+    } catch (err) {
+      // Signing failures shouldn't break message posting — log and continue
+      // with unsigned message. The downstream verifier will surface this
+      // as no-signature, which is permissive in alpha.2.
+      console.warn(`[git] signing failed for ${actor.name}, posting unsigned: ${err}`)
+    }
+
     const dir = isSystem
       ? join(writePath, SYSTEM_CHANNEL, datePath)
       : join(writePath, 'channels', channel, datePath)
     await mkdir(dir, { recursive: true })
-    await writeFile(join(dir, filename), body, 'utf8')
+    await writeFile(join(dir, filename), signedBody, 'utf8')
 
     const repoRelPath = isSystem
       ? `${SYSTEM_CHANNEL}/${relPath}`
@@ -365,9 +384,17 @@ async function walkChannelMessages(channelDir: string): Promise<string[]> {
 
 /** Convenience derivation: actor email from name + suffix. Pure utility;
  * not transport-specific but kept here since `commitAndPush` is the
- * primary consumer. */
+ * primary consumer.
+ *
+ * v1.3.0-alpha.6+ — sanitises `@` in addresses to `.` so qualified
+ * multi-operator addresses (`alice@steve`) produce legal email local
+ * parts (`alice.steve@<suffix>`). Without this, the natural string
+ * interpolation builds `alice@steve@<suffix>` which is malformed and
+ * gets git CLI rejection on commit. Bare names (single-op) pass
+ * through unchanged. */
 export function machineGitEmail(actorName: string, suffix: string): string {
-  return `${actorName}@${suffix}`
+  const localPart = actorName.includes('@') ? actorName.replace('@', '.') : actorName
+  return `${localPart}@${suffix}`
 }
 
 /** Existence check — does this transport's working tree look like a git

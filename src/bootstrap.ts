@@ -66,6 +66,7 @@ import type { Transport, ActorIdentity } from './transport.js'
 import { MESSAGE_FILE_RE } from './filenames.js'
 import type { Registry } from './registry.js'
 import { MACHINE_ID } from './system.js'
+import { machineGitEmail } from './transports/git.js'
 
 const YEAR_RE = /^\d{4}$/
 const DD_RE = /^\d{2}$/
@@ -321,7 +322,18 @@ export class BootstrapStateCache {
  * to see every actor profile this machine knows about, including humans.
  *
  * Last-wins on name collision (matches the registry's three-layer ordering). */
-export function listAllActorProfiles(transportRoot: string): Map<string, Record<string, unknown>> {
+export function listAllActorProfiles(
+  transportRoot: string,
+  /** v1.3.0-alpha.7+ — when this daemon runs in multi-operator mode
+   * (operator handle set in config), machine actors are qualified to
+   * canonical addresses (`alice` → `alice@steve`) and humans stay
+   * bare. This keeps governance (coordinator selection, presence
+   * tracking) using the same address identity as dispatch, signing,
+   * and message `from:` fields — so a session-open posted by the
+   * bootstrap pass carries `from: alice@steve` not `from: alice`,
+   * and the receiving daemon's self-loop check works correctly. */
+  operator?: string,
+): Map<string, Record<string, unknown>> {
   const out = new Map<string, Record<string, unknown>>()
   const dirs = [
     join(transportRoot, 'manifest', 'framework', 'actors'),
@@ -339,7 +351,12 @@ export function listAllActorProfiles(transportRoot: string): Map<string, Record<
       try { content = readFileSync(join(dir, f), 'utf-8') } catch { continue }
       try {
         const { data } = parseFrontmatter(content)
-        out.set(name, data)
+        const isHuman = String(data.type ?? '') === 'human'
+        // Machine actors get @operator qualification in multi-op mode;
+        // humans always stay bare; single-op mode (no operator) keeps
+        // every name bare (v1.2 behavior).
+        const key = operator && !isHuman ? `${name}@${operator}` : name
+        out.set(key, data)
       } catch { /* skip */ }
     }
   }
@@ -374,8 +391,14 @@ export interface CoordinatorDecision {
 export function shouldRunBootstrapPass(
   transportRoot: string,
   _dispatchRegistry: Registry,  // accepted but ignored — see NOTE above
+  /** v1.3.0-alpha.7+ — daemon's operator handle (config.operator). Passed
+   * through to listAllActorProfiles so coordinator selection sees
+   * canonical addresses (alice@steve) rather than filename-bare names
+   * in multi-op mode. session-open then posts `from: <canonical>`
+   * which lets the receiving daemon's self-loop check work. */
+  operator?: string,
 ): CoordinatorDecision {
-  const allActors = listAllActorProfiles(transportRoot)
+  const allActors = listAllActorProfiles(transportRoot, operator)
   const fromROE = readCoordinatorFromROE(transportRoot)
   if (fromROE) {
     if (allActors.has(fromROE)) {
@@ -453,11 +476,15 @@ export async function buildBootstrapSummary(
   transportRoot: string,
   _registry: Registry,  // accepted for backward compat; uses all-actors set internally
   channelDir?: string,
+  /** v1.3.0-alpha.7+ — see listAllActorProfiles for the rationale.
+   * Surfaced as `Online actors` in the session-open body using canonical
+   * addresses in multi-op mode. */
+  operator?: string,
 ): Promise<BootstrapSummary> {
   // Use the governance lens (all actor profiles), not the dispatch registry.
   // Humans are the typical coordinators in real templates and need to be
   // surfaced in the bootstrap summary.
-  const allActors = listAllActorProfiles(transportRoot)
+  const allActors = listAllActorProfiles(transportRoot, operator)
   const onlineActors = [...allActors.keys()].sort()
 
   // alpha.2 MVP: don't try to track per-actor lastSeen — the existing
@@ -551,9 +578,14 @@ export async function postSessionOpen(
     `## Pending amendments\n\n` +
     `${pendingSection}\n`
 
+  // v1.3.0-alpha.6+ — `coordinatorActor` may be a qualified multi-operator
+  // address (`alice@steve`) when the daemon is in multi-op mode and the
+  // ROE coordinator field designates a qualified actor. machineGitEmail
+  // sanitises the `@` to `.` for the email local part; the ActorIdentity
+  // name stays as the canonical address.
   const identity: ActorIdentity = {
     name: coordinatorActor,
-    email: `${coordinatorActor}@${actorEmailSuffix}`,
+    email: machineGitEmail(coordinatorActor, actorEmailSuffix),
   }
 
   try {

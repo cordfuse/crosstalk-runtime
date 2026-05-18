@@ -37,7 +37,8 @@ import type { Command } from 'commander'
 import { loadConfig } from '../../config.js'
 import { messageDatePath, messageFilename } from '../../filenames.js'
 import { resolveChannel } from '../lib/channel.js'
-import { scanAllLayers } from '../lib/actors.js'
+import { scanAllLayers, type ActorEntry } from '../lib/actors.js'
+import { parseAddress, isAddressError } from '../../address.js'
 
 interface PostOptions {
   channel:               string
@@ -87,20 +88,42 @@ async function runPost(opts: PostOptions): Promise<void> {
   // `crosstalk actor list` shows the human fine. Same root cause + fix as the
   // channel-join PR #11 patch. See src/cli/commands/channel-join.ts:117-125
   // for the parallel comment.
+  //
+  // v1.3.0-alpha.5+ — address-aware validation. Accepts qualified addresses
+  // (`alice@steve`, `dart-thrower@steve`, `dart-thrower-2@steve`) and pool
+  // names. Cross-operator targets (`alice@bob` from a daemon whose operator
+  // is `steve`) are accepted blindly — we have no view of the remote
+  // operator's registry, so we trust the user.
   const profiles = scanAllLayers(config.transport)
-  const knownNames = new Set(profiles.map(p => p.name))
   const targetsRaw = opts.to.trim()
   const targets: 'all' | string[] = targetsRaw === 'all'
     ? 'all'
     : targetsRaw.split(',').map(t => t.trim()).filter(Boolean)
 
   if (targets !== 'all' && !opts.allowUnknownTargets) {
-    const unknown = (targets as string[]).filter(t => !knownNames.has(t))
+    const unknown: string[] = []
+    const invalid: { target: string; reason: string }[] = []
+    for (const t of targets as string[]) {
+      const verdict = validateTarget(t, profiles, config.operator)
+      if (verdict.ok === false) {
+        if (verdict.kind === 'invalid')        invalid.push({ target: t, reason: verdict.reason })
+        else if (verdict.kind === 'unknown')   unknown.push(t)
+      }
+    }
+    if (invalid.length > 0) {
+      for (const i of invalid) console.error(`✗ Invalid address "${i.target}" — ${i.reason}`)
+      process.exit(1)
+    }
     if (unknown.length > 0) {
       const known = profiles.map(p => `${p.name} (${p.data.type ?? '?'})`).sort().join(', ')
       console.error(`✗ Unknown actor target(s): ${unknown.join(', ')}`)
-      console.error(`  Known actors: ${known || '(none)'}`)
-      console.error(`  Use --allow-unknown-targets to bypass this check.`)
+      console.error(`  Known actors on this daemon: ${known || '(none)'}`)
+      if (config.operator) {
+        console.error(`  This daemon's operator handle is "${config.operator}" — use \`<role>@${config.operator}\` for local actors,`)
+        console.error(`  \`<role>@<other-op>\` for cross-operator targets, or --allow-unknown-targets to bypass.`)
+      } else {
+        console.error(`  Use --allow-unknown-targets to bypass this check.`)
+      }
       process.exit(1)
     }
   }
@@ -225,4 +248,75 @@ function composeMessage(m: MessageInputs): string {
 function gitCmd(cwd: string, args: string[]): boolean {
   const result = spawnSync('git', args, { cwd, stdio: 'inherit' })
   return result.status === 0
+}
+
+/** Validate a single `--to` target against the local profile set + this
+ * daemon's operator handle. Returns:
+ *   - `{ ok: true }` if the target is acceptable to post
+ *   - `{ ok: false, kind: 'invalid', reason }` if the address grammar is broken
+ *   - `{ ok: false, kind: 'unknown' }` if grammar is fine but no local match
+ *
+ * Acceptance rules (v1.3.0-alpha.5+):
+ *   - Cross-operator address (`alice@bob` from a `steve` daemon) → always OK;
+ *     we can't see the remote registry, so we trust the user
+ *   - Local machine address (`alice@steve` from a `steve` daemon) → matched
+ *     against profile filenames (`alice`, or for pool instances `alice-1`)
+ *   - Pool address (`dart-thrower@steve`, no instance) → OK if AT LEAST
+ *     one instance of that role exists locally
+ *   - Bare name in multi-op mode → must match a human profile (machine
+ *     actors require qualification in multi-op)
+ *   - Bare name in single-op mode → must match ANY profile (no operator
+ *     namespacing; v1.2 behavior preserved)
+ */
+export type ValidateResult =
+  | { ok: true }
+  | { ok: false; kind: 'invalid'; reason: string }
+  | { ok: false; kind: 'unknown' }
+
+export function validateTarget(target: string, profiles: ActorEntry[], myOperator: string | undefined): ValidateResult {
+  const parsed = parseAddress(target)
+  if (isAddressError(parsed)) {
+    return { ok: false, kind: 'invalid', reason: parsed.message }
+  }
+
+  // Cross-operator machine address — accept blindly. The remote operator's
+  // daemon will see the same message land on the transport and process it
+  // from there; we have no visibility into their registry to validate.
+  if (parsed.kind === 'machine' && parsed.operator !== undefined && parsed.operator !== myOperator) {
+    return { ok: true }
+  }
+
+  if (parsed.kind === 'machine') {
+    // Local machine address. The `instance` field is a discriminated union:
+    //   undefined            → pool address, OK if at least one instance exists
+    //   {kind:'index', n}    → specific pool instance `<role>-<n>.md`
+    //   {kind:'tag', tag}    → tag-form instance (alice@steve/cachy) — not
+    //                          yet a first-class profile lookup, treat as unknown
+    if (parsed.instance === undefined) {
+      const hasInstance = profiles.some(p => {
+        if (p.name === parsed.role) return true
+        const m = p.name.match(/^(.+)-(\d+)$/)
+        return m !== null && m[1] === parsed.role
+      })
+      return hasInstance ? { ok: true } : { ok: false, kind: 'unknown' }
+    }
+    if (parsed.instance.kind === 'index') {
+      const expected = `${parsed.role}-${parsed.instance.n}`
+      return profiles.some(p => p.name === expected) ? { ok: true } : { ok: false, kind: 'unknown' }
+    }
+    // Tag form — Steve's locked design uses hyphen-integer; tags still parse
+    // for forward-compat but aren't a profile-lookup target. Accept blindly
+    // (treat like a cross-operator address — the resolver decides at dispatch).
+    return { ok: true }
+  }
+
+  // Bare name (parsed as human by the grammar — could be a human profile or,
+  // in single-op mode, also a machine profile with that name).
+  if (myOperator === undefined) {
+    // Single-op back-compat: bare name matches any profile by filename.
+    return profiles.some(p => p.name === parsed.name) ? { ok: true } : { ok: false, kind: 'unknown' }
+  }
+  // Multi-op: bare name must be a human profile; machines must be qualified.
+  const isHuman = profiles.some(p => p.name === parsed.name && String(p.data.type) === 'human')
+  return isHuman ? { ok: true } : { ok: false, kind: 'unknown' }
 }

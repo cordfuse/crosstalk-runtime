@@ -20,12 +20,17 @@ const recentlyDispatched = new Map<string, number>();
  * response. Moved into dispatch.ts (from the legacy `writeResponseMessage`
  * in git.ts) because this is protocol formatting, not transport storage.
  *
+ * `fromAddress` is the canonical routable identifier — bare name in
+ * single-operator mode (e.g. `alice`), qualified in multi-operator mode
+ * (e.g. `alice@steve`). It's what other daemons will use for self-loop
+ * detection and for `to:` field resolution on response paths.
+ *
  * `toOverride` and `extraFrontmatter` exist for v0.8.1+ response-in-kind
  * encryption: when the inbound was encrypted, the response routes back
  * to the original sender (`to: <inbound from>`) with `encryption: age` +
  * `encrypted-to:` recipient list as extra frontmatter. */
 function buildResponseFile(
-  actorName: string,
+  fromAddress: string,
   body: string,
   agent?: string,
   model?: string,
@@ -39,7 +44,7 @@ function buildResponseFile(
   const extraLines = extraFrontmatter
     ? Object.entries(extraFrontmatter).map(([k, v]) => `${k}: ${v}\n`).join('')
     : '';
-  return `---\nfrom: ${actorName}\nto: ${toField}\ntimestamp: ${now.toISOString()}\ntype: text\n${agentLine}${modelLine}${extraLines}---\n\n${body}\n`;
+  return `---\nfrom: ${fromAddress}\nto: ${toField}\ntimestamp: ${now.toISOString()}\ntype: text\n${agentLine}${modelLine}${extraLines}---\n\n${body}\n`;
 }
 
 export function isDuplicate(key: string): boolean {
@@ -391,10 +396,15 @@ export async function dispatch(
           }
         }
 
+        // v1.3.0-alpha.4+ — `from:` uses actor.address (qualified in
+        // multi-operator mode, bare in single-op for back-compat). Same
+        // address is the ActorIdentity.name so signing keys, actor clones,
+        // and git author display all stay consistent with the routable
+        // identity that lands in the inbox.
         const responseContent = buildResponseFile(
-          actor.name, body, actor.agent, actor.model, toOverride, extraFrontmatter,
+          actor.address, body, actor.agent, actor.model, toOverride, extraFrontmatter,
         );
-        const identity: ActorIdentity = { name: actor.name, email: gitEmail };
+        const identity: ActorIdentity = { name: actor.address, email: gitEmail };
         await transport.postMessage(channelGuid, identity, responseContent);
         console.log(`[dispatch] ${actor.name} response written`);
       }

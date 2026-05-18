@@ -304,7 +304,7 @@ interface ActorKeyGenerateOptions {
 function registerActorKey(parent: Command): void {
   const key = parent
     .command('key')
-    .description('manage per-actor age keypairs (subcommands: generate)')
+    .description('manage per-actor keypairs (subcommands: generate [age encryption], generate-signing [ed25519 identity, v1.3+])')
 
   key
     .command('generate [name]')
@@ -313,6 +313,15 @@ function registerActorKey(parent: Command): void {
     .option('--print',  'print the new public key to stdout after generating (so operators can copy it to the transport)')
     .action(async (name: string | undefined, opts: ActorKeyGenerateOptions) => {
       await runActorKeyGenerate(name, opts)
+    })
+
+  key
+    .command('generate-signing [address]')
+    .description('generate an ed25519 signing keypair for an actor address; private at ~/.crosstalk/keys/<addr>.sign, public published into the transport (v1.3+)')
+    .option('--rotate', 'overwrite an existing signing key (forfeits old identity — incoming messages signed with the old key will fail verification on other daemons until they pull the new pubkey)')
+    .option('--print',  'print the new public key (PEM) after generating')
+    .action(async (address: string | undefined, opts: ActorKeyGenerateOptions) => {
+      await runActorKeyGenerateSigning(address, opts)
     })
 }
 
@@ -385,6 +394,76 @@ async function runActorKeyGenerate(name: string | undefined, opts: ActorKeyGener
     console.log(``)
     console.log(`Public key (for copy-paste):`)
     console.log(readFileSync(pubPath, 'utf-8').trim())
+  }
+}
+
+// ── actor key generate-signing (v1.3.0-alpha.5+) ────────────────────────
+
+/** ed25519 signing key generation — distinct from `generate` (age
+ * encryption). Two different keys, two different purposes:
+ *
+ *   age key (`generate`)            → per-message body encryption (v0.8+)
+ *   ed25519 key (`generate-signing`) → per-message provenance signature (v1.3+)
+ *
+ * A signing address may be bare (single-op mode: `alice`) or qualified
+ * (multi-op: `alice@steve`). The address parses through src/address.ts;
+ * private goes to ~/.crosstalk/keys/<addr>.sign, public is written
+ * directly into <transport>/manifest/identities/<addr>.pub for other
+ * daemons to pull on `git pull`. */
+async function runActorKeyGenerateSigning(address: string | undefined, opts: ActorKeyGenerateOptions): Promise<void> {
+  const { loadConfig } = await import('../../config.js')
+  const config = await loadConfig()
+
+  // Resolve address: arg > config.defaultHumanActor (bare in either mode) > error
+  const addr = address ?? config.defaultHumanActor
+  if (!addr) {
+    console.error('✗ No actor address provided and no `default-human-actor` set in ~/.crosstalk/config.toml')
+    console.error('  Usage: crosstalk actor key generate-signing <address> [--rotate] [--print]')
+    console.error('  Examples:')
+    console.error('    crosstalk actor key generate-signing steve            # human, bare name')
+    console.error('    crosstalk actor key generate-signing alice@steve      # machine, multi-op')
+    process.exit(1)
+  }
+
+  const { parseAddress, isAddressError, formatAddress } = await import('../../address.js')
+  const parsed = parseAddress(addr)
+  if (isAddressError(parsed)) {
+    console.error(`✗ Invalid address "${addr}": ${parsed.message}`)
+    process.exit(1)
+  }
+  const canonical = formatAddress(parsed)
+
+  const { homedir } = await import('os')
+  const { join } = await import('path')
+  const { existsSync } = await import('fs')
+
+  const privPath = join(homedir(), '.crosstalk', 'keys', `${canonical}.sign`)
+  if (existsSync(privPath) && !opts.rotate) {
+    console.error(`✗ Signing key already exists for '${canonical}':`)
+    console.error(`    ${privPath}`)
+    console.error(`  Pass --rotate to overwrite (other daemons will need to pull the new pubkey before they can verify your messages).`)
+    process.exit(1)
+  }
+
+  const { generateSigningKey, publishPublicKey } = await import('../../signing.js')
+  const { publicKeyPem } = generateSigningKey(canonical)
+  publishPublicKey(config.transport, canonical, publicKeyPem)
+
+  const pubPath = join(config.transport, 'manifest', 'identities', `${canonical}.pub`)
+  console.log(`✓ Generated ed25519 signing key for '${canonical}':`)
+  console.log(`    private: ${privPath}`)
+  console.log(`    public:  ${pubPath}`)
+  console.log(``)
+  console.log(`Next step: commit + push the public key so other daemons can verify your messages.`)
+  console.log(`  cd ${config.transport}`)
+  console.log(`  git add manifest/identities/${canonical}.pub`)
+  console.log(`  git commit -m 'identities: add ${canonical} signing pubkey'`)
+  console.log(`  git push`)
+
+  if (opts.print) {
+    console.log(``)
+    console.log(`Public key (PEM):`)
+    console.log(publicKeyPem)
   }
 }
 

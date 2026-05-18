@@ -30,6 +30,7 @@ import { join } from 'path'
 import { parseFrontmatter } from './frontmatter.js'
 import type { Transport, ActorIdentity } from './transport.js'
 import { MESSAGE_FILE_RE } from './filenames.js'
+import { machineGitEmail } from './transports/git.js'
 
 const YEAR_RE = /^\d{4}$/
 const DD_RE   = /^\d{2}$/
@@ -482,9 +483,14 @@ function matchKeyValue(content: string, key: string): string | null {
 }
 
 /** Helper — build the canonical actor identity used to attribute
- * governance messages. */
+ * governance messages. v1.3.0-alpha.6+ — `fromActor` may be a qualified
+ * multi-operator address (`alice@steve`); email derivation routes through
+ * machineGitEmail so the `@` is sanitised to `.` for the email local
+ * part. The ActorIdentity.name keeps the address as-is so signing,
+ * actor-clone paths, and the message `from:` field all see the canonical
+ * routable identity. */
 function govIdentity(fromActor: string, actorEmailSuffix: string): ActorIdentity {
-  return { name: fromActor, email: `${fromActor}@${actorEmailSuffix}` }
+  return { name: fromActor, email: machineGitEmail(fromActor, actorEmailSuffix) }
 }
 
 /** Post a `type: roe-deadlock-resolution` message via Transport. */
