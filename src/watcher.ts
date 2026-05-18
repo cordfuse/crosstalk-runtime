@@ -48,8 +48,36 @@ export function startWatcher(
   // it's shared between the live processInbound path and replayDeferred.
   const quorumTracker = new QuorumTracker();
 
+  // v1.9.0-alpha.1+ — in-flight dispatch tracking. Per-message Set keyed
+  // on `${channel}/${relPath}`. Added BEFORE dispatch fires; removed when
+  // ALL targets for that message resolve their dispatch promise (which
+  // now includes the cursor write since v1.9 made dispatch await its own
+  // completion). Catches the rescan double-fire case bombproof: while a
+  // dispatch is in-flight, the rescan/fs.watch re-fire skips the message
+  // entirely, regardless of how long the agent takes. v1.8.1 papered
+  // over this with a 10-minute DEDUP_WINDOW_MS in dispatch.ts; this
+  // replaces that workaround (window restored to 2s).
+  const inFlight = new Set<string>();
+
   const processInbound = async (event: MessageEvent): Promise<void> => {
     const { channel: guid, relPath, content } = event;
+
+    // v1.9.0-alpha.1+ — in-flight check FIRST (before any await). Both
+    // the check and the add must be in the same synchronous block —
+    // earlier draft placed the check + add far apart, around several
+    // awaits, allowing two concurrent processInbound calls (one from
+    // fs.watch, one from rescan) to both pass the check before either
+    // added the key. JavaScript's single-threaded execution guarantees
+    // these two Set operations are atomic when no await separates them.
+    // Removal happens in the finally at the bottom.
+    const inFlightKey = `${guid}/${relPath}`;
+    if (inFlight.has(inFlightKey)) {
+      console.log(`[watcher] skip (in-flight) ${relPath}`);
+      return;
+    }
+    inFlight.add(inFlightKey);
+
+    try {
 
     const dedupKey = `${guid}/${relPath}`;
     if (isDuplicate(dedupKey)) return;
@@ -204,8 +232,23 @@ export function startWatcher(
     // self-loop check); see the v1.7.0-alpha.1+ block above. Keeping
     // this anchor comment so the dispatch order stays clear.
 
-    for (const actor of targets) {
-      await dispatch(actor, transport, transportRoot, guid, relPath, actorEmailSuffix, sessionId, defaultHeartbeatInterval, agentEnv);
+    // v1.9.0-alpha.1+ — parallel fanout via Promise.all (was sequential
+    // await loop; the change matters now that dispatch awaits its own
+    // completion, otherwise N pool members would dispatch serially).
+    // In-flight removal happens in the outer finally.
+    await Promise.all(
+      targets.map(actor =>
+        dispatch(actor, transport, transportRoot, guid, relPath, actorEmailSuffix, sessionId, defaultHeartbeatInterval, agentEnv)
+      ),
+    );
+
+    } finally {
+      // v1.9.0-alpha.1+ — paired with the in-flight add at the top of
+      // processInbound. Removed AFTER every code path: early-return
+      // (cursor / self-loop / governance / deferred / empty-targets) and
+      // dispatch-complete. Without removal here those skip paths would
+      // leak inFlight entries until daemon restart.
+      inFlight.delete(inFlightKey);
     }
   };
 
@@ -335,8 +378,13 @@ async function replayDeferredMessages(
 
     const targets = resolveTargets(registry, to);
 
-    for (const actor of targets) {
-      await dispatch(actor, transport, transportRoot, channelGuid, relPath, actorEmailSuffix, sessionId, defaultHeartbeatInterval);
-    }
+    // v1.9.0-alpha.1+ — parallel fanout via Promise.all (matches the
+    // live-watcher path's switch from sequential await). Same agentEnv
+    // propagation as the live path.
+    await Promise.all(
+      targets.map(actor =>
+        dispatch(actor, transport, transportRoot, channelGuid, relPath, actorEmailSuffix, sessionId, defaultHeartbeatInterval, agentEnv)
+      ),
+    );
   }
 }

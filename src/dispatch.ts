@@ -13,18 +13,15 @@ const HOME = homedir();
 const EXTRA_PATH = [join(HOME, '.bun', 'bin'), join(HOME, '.local', 'bin')];
 const augmentedPath = [...EXTRA_PATH, process.env.PATH ?? ''].join(':');
 
-// v1.8.1+ — bumped from 2s to 10min after the concierge UAT surfaced
-// double-dispatches on slow agents. The original 2s window was sized for
-// fs.watch re-fires during git pull rebases (those happen within ms);
-// but it's far shorter than typical LLM agent runtimes (10-60s for
-// claude/gemini, can be minutes for opencode + slow model providers).
-// During the dispatch's in-flight window, the cursor hasn't advanced yet
-// (cursor write happens in the `.then` after the child exits), so the
-// rescan path re-feeds the same message → processInbound calls dispatch
-// → spawns the agent a SECOND time. 10min covers any practical agent
-// runtime; the cursor takes over as the authoritative skip mechanism
-// once dispatch completes.
-const DEDUP_WINDOW_MS = 10 * 60 * 1000;
+// v1.8.1 bumped this 2s → 10min to paper over the rescan double-dispatch
+// surfaced in the concierge UAT (slow agents → cursor not advanced → rescan
+// re-feeds → second spawn). v1.9.0-alpha.1 makes the workaround redundant
+// by adding watcher-side in-flight tracking via a per-message Set: the
+// watcher refuses to call dispatch a second time on the same relPath while
+// the first dispatch is still in-flight. With that in place, this window
+// can return to 2s — its original purpose (catching fs.watch re-fires from
+// git pull rebases) was always millisecond-scale.
+const DEDUP_WINDOW_MS = 2000;
 const recentlyDispatched = new Map<string, number>();
 
 /** Build a complete message file (frontmatter + body) for an actor's
@@ -377,7 +374,17 @@ export async function dispatch(
     await announceTimeout(transport, actor.name, channelGuid);
   }, timeoutMs);
 
-  exited.then(async code => {
+  // v1.9.0-alpha.1+ — was `exited.then(async code => { ... })` (fire-and-
+  // forget). The watcher's `await dispatch(...)` returned BEFORE the agent
+  // finished, which meant the rescan path could re-feed the same message
+  // while the dispatch was in-flight (cursor not yet advanced) and spawn
+  // a SECOND agent. v1.8.1 papered it over with a 10-minute dedup window
+  // in this file; v1.9 fixes it properly by making dispatch await its own
+  // completion. The watcher's call site is now Promise.all so fanout to
+  // multiple pool members stays parallel — each dispatch awaits its own
+  // agent independently.
+  const code = await exited;
+  {
     clearTimeout(timer);
     console.log(`[dispatch] ${actor.name} exited code=${code}`);
 
@@ -463,5 +470,5 @@ export async function dispatch(
     } catch (err) {
       console.error(`[dispatch] ${actor.name} post-exit error: ${err}`);
     }
-  });
+  }
 }
