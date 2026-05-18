@@ -3,7 +3,8 @@ import { parseFrontmatter } from './frontmatter.js';
 import { dispatch, isDuplicate } from './dispatch.js';
 import { readCursor, listMessages, messagesAfterCursor } from './cursor.js';
 import type { Transport, MessageEvent } from './transport.js';
-import type { Registry } from './registry.js';
+import type { ActorConfig, Registry } from './registry.js';
+import { resolveAddress } from './registry.js';
 import {
   ALWAYS_PASS_TYPES, CACHE_INVALIDATING_TYPES, type BootstrapStateCache,
 } from './bootstrap.js';
@@ -109,12 +110,7 @@ export function startWatcher(
       }
     }
 
-    const targets = to === 'all'
-      ? [...registry.values()]
-      : to.split(',')
-          .map(t => t.trim())
-          .filter(t => registry.has(t))
-          .map(t => registry.get(t)!);
+    const targets = resolveTargets(registry, to);
 
     if (targets.length === 0) return;
 
@@ -122,6 +118,38 @@ export function startWatcher(
       await dispatch(actor, transport, transportRoot, guid, relPath, actorEmailSuffix, sessionId, defaultHeartbeatInterval);
     }
   });
+}
+
+/** Expand a message's `to:` field to the actor instances on THIS daemon
+ * that should be dispatched. v1.3.0-alpha.4+ — was previously a CSV-split
+ * + `registry.has(t)` filter that only matched bare names against bare
+ * registry keys. Now uses {@link resolveAddress} so:
+ *
+ *  - `to: all`            → every actor in the local registry (unchanged)
+ *  - `to: alice`          → bare-name lookup (single-op compat)
+ *  - `to: alice@steve`    → exact qualified-address match
+ *  - `to: dart-thrower@steve` → all pool instances of role dart-thrower
+ *  - `to: alice@bob`      → empty on a daemon whose operator != bob
+ *    (bob's daemon will process; this one correctly skips)
+ *  - `to: alice@steve, carol@steve` → both, deduplicated by address
+ *
+ * Cross-operator routing falls out for free: each daemon's registry only
+ * contains actors registered to its own operator handle, so addresses
+ * pointing at another operator's actors resolve to empty and get skipped. */
+export function resolveTargets(registry: Registry, to: string): ActorConfig[] {
+  if (to === 'all') return [...registry.values()];
+
+  const addresses = to.split(',').map(s => s.trim()).filter(Boolean);
+  const matched: ActorConfig[] = [];
+  const seen = new Set<string>();
+  for (const addr of addresses) {
+    for (const actor of resolveAddress(registry, addr)) {
+      if (seen.has(actor.address)) continue;
+      seen.add(actor.address);
+      matched.push(actor);
+    }
+  }
+  return matched;
 }
 
 /** Fired when a channel transitions from 'deferred' → 'open' via session-open
@@ -166,9 +194,7 @@ async function replayDeferredMessages(
       }
     }
 
-    const targets = to === 'all'
-      ? [...registry.values()]
-      : to.split(',').map(t => t.trim()).filter(t => registry.has(t)).map(t => registry.get(t)!);
+    const targets = resolveTargets(registry, to);
 
     for (const actor of targets) {
       await dispatch(actor, transport, transportRoot, channelGuid, relPath, actorEmailSuffix, sessionId, defaultHeartbeatInterval);
