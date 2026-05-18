@@ -49,6 +49,7 @@ interface PostOptions {
   push?:                 boolean   // commander inverts --no-push to push: false
   allowUnknownTargets?:  boolean
   encrypt?:              boolean   // v0.8.0-alpha.5+ — encrypt body to recipients' age pubkeys
+  dispatch?:             string    // v1.5.0-alpha.1+ — pool dispatch policy (fanout|round-robin)
 }
 
 export function registerPostCommand(program: Command): void {
@@ -63,6 +64,7 @@ export function registerPostCommand(program: Command): void {
     .option('--no-push',                             'commit but do not push (leaves the commit local)')
     .option('--allow-unknown-targets',               'do not error when --to actors are missing from the registry')
     .option('--encrypt',                             'encrypt body to each --to actor\'s age pubkey (v0.8+; requires recipients to have keys in manifest/{custom,framework}/keys/<actor>.pub)')
+    .option('--dispatch <policy>',                   'pool dispatch policy: fanout (default — all instances) | round-robin (one instance, rotating) — v1.5+')
     .action(async (options: PostOptions) => {
       await runPost(options)
     })
@@ -199,13 +201,26 @@ async function runPost(opts: PostOptions): Promise<void> {
     console.log(`✓ Encrypted to ${recipientMap.size} recipient(s): ${encryptedToNames.join(', ')}`)
   }
 
+  // v1.5.0-alpha.1+ — sender-side dispatch policy carried as frontmatter.
+  // Validated at parse time on the receiving daemon (parseDispatchPolicy);
+  // we surface obvious typos here so the user finds out before posting.
+  const extraFrontmatter: Record<string, string> = { ...encryptionFields }
+  if (opts.dispatch) {
+    const v = opts.dispatch.trim().toLowerCase()
+    if (v !== 'fanout' && v !== 'round-robin') {
+      console.error(`✗ Unknown --dispatch policy "${opts.dispatch}". Valid: fanout, round-robin.`)
+      process.exit(1)
+    }
+    if (v !== 'fanout') extraFrontmatter.dispatch = v  // skip the field when it'd just restate the default
+  }
+
   let messageContent = composeMessage({
     from,
     to:        toField,
     timestamp: now.toISOString(),
     type:      'text',
     body,
-    extraFrontmatter: encryptionFields,
+    extraFrontmatter,
   })
 
   // v1.3.0-alpha.8+ — sign the message with --from's ed25519 key if one

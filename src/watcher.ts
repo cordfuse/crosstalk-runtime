@@ -10,6 +10,7 @@ import {
   ALWAYS_PASS_TYPES, CACHE_INVALIDATING_TYPES, type BootstrapStateCache,
 } from './bootstrap.js';
 import { verifyMessage } from './signing.js';
+import { applyDispatchPolicy, parseDispatchPolicy } from './dispatch-policy.js';
 
 /**
  * Subscribes to transport events and dispatches messages to actors per
@@ -123,7 +124,28 @@ export function startWatcher(
       return;
     }
 
-    const targets = resolveTargets(registry, to);
+    let targets = resolveTargets(registry, to);
+
+    if (targets.length === 0) return;
+
+    // v1.5.0-alpha.1+ — sender-side dispatch policy. The message frontmatter
+    // can carry `dispatch: <policy>`; we apply it AFTER resolveTargets so
+    // it operates on the expanded pool instances. Default is fanout (v1.4
+    // back-compat). Unknown policies fall back to fanout with a warning.
+    const dispatchRaw = typeof data.dispatch === 'string' ? data.dispatch : undefined;
+    const policy = parseDispatchPolicy(dispatchRaw);
+    if (policy === null) {
+      console.warn(`[watcher] unknown dispatch policy "${dispatchRaw}" on ${guid.slice(0, 8)}/${relPath} — falling back to fanout`);
+    } else if (policy !== 'fanout') {
+      // Only apply when the message addresses a single pool — multi-address CSV
+      // semantics for non-fanout policies aren't defined in alpha.1.
+      const toAddresses = to.split(',').map(s => s.trim()).filter(Boolean);
+      if (toAddresses.length === 1) {
+        targets = await applyDispatchPolicy(targets, policy, sessionId, guid, toAddresses[0]);
+      } else {
+        console.warn(`[watcher] dispatch policy "${policy}" with multi-address \`to:\` (${toAddresses.length} addresses) — applying fanout for the union; per-pool policy lands later`);
+      }
+    }
 
     if (targets.length === 0) return;
 
