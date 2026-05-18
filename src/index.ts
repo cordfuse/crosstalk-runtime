@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { loadConfig } from './config.js';
 import { loadRegistry, watchRegistry } from './registry.js';
-import { startWatcher } from './watcher.js';
+import { startWatcher, resolveTargets } from './watcher.js';
 import { startRelayServer, startRelayClient } from './relay.js';
 import { announceOnline, announceOffline, SESSION_ID, MACHINE_ID } from './system.js';
 import { readCursor, listMessages, messagesAfterCursor, migrateCursorsIfNeeded } from './cursor.js';
@@ -149,14 +149,39 @@ if (config.relay.mode === 'server') {
 
   // MACHINE_ID is stable across restarts — cursors persist so messages are not re-dispatched
   // SESSION_ID is per-boot — used only in announcements
-  startWatcher(transport, config.transport, () => registry, config.actorEmailSuffix, MACHINE_ID, config.defaultHeartbeatInterval, bootstrapCache, config.bootstrap.deferOnNoCoordinator);
+  const watcherHandle = startWatcher(transport, config.transport, () => registry, config.actorEmailSuffix, MACHINE_ID, config.defaultHeartbeatInterval, bootstrapCache, config.bootstrap.deferOnNoCoordinator);
+
+  // v1.3.0-alpha.7+ — bridge polling-mode sync to the watcher's rescan path.
+  // Linux fs.watch.recursive doesn't catch files in subdirectories that
+  // didn't exist at watch-start, so after every `transport.sync()` we walk
+  // channels and feed any new messages through the same dispatch path
+  // fs.watch would have used. Idempotent via cursor + dedup checks inside
+  // the watcher. Relay-mode daemons get the same treatment because the
+  // relay client also calls transport.sync() — wiring there is the small
+  // follow-up; for now the bridge fires only in polling mode where the
+  // bug is most visible.
+  if (config.relay.mode === 'disabled' && pollTimer) {
+    // Re-arm the existing timer to also run rescanAll after sync.
+    clearInterval(pollTimer);
+    const intervalMs = Math.max(1, config.relay.pollIntervalSeconds) * 1000;
+    pollTimer = setInterval(async () => {
+      try {
+        await transport.sync();
+        await watcherHandle.rescanAll();
+      } catch (err) {
+        console.error(`[crosstalk] poll sync+rescan failed: ${err}`);
+      }
+    }, intervalMs);
+    // Also rescan immediately after the initial sync (fired earlier in this block).
+    watcherHandle.rescanAll().catch(err => console.error(`[crosstalk] initial rescan failed: ${err}`));
+  }
 
   // Bootstrap pass — if we host the coordinator, run the opening governance
   // pass: walk each channel for inconsistencies, post `bootstrap-conflict` if
   // any are found, else post `session-open` for any channel currently
   // 'deferred'. This unblocks our own dispatch + signals other daemons
   // watching the same transport to unblock theirs too.
-  const decision = shouldRunBootstrapPass(config.transport, registry);
+  const decision = shouldRunBootstrapPass(config.transport, registry, config.operator);
   console.log(`[bootstrap] coordinator decision: ${decision.reason}`);
   if (decision.should && decision.coordinatorActor) {
     try {
@@ -180,7 +205,7 @@ if (config.relay.mode === 'server') {
         const state = bootstrapCache.get(guid);
         if (state === 'deferred') {
           console.log(`[bootstrap] posting session-open for ${guid.slice(0, 8)} (coordinator: ${decision.coordinatorActor})`);
-          const summary = await buildBootstrapSummary(transport, config.transport, registry, channelDir);
+          const summary = await buildBootstrapSummary(transport, config.transport, registry, channelDir, config.operator);
           await postSessionOpen(transport, guid, decision.coordinatorActor, summary, config.actorEmailSuffix);
           bootstrapCache.invalidate(guid);
         }
@@ -246,26 +271,29 @@ if (config.relay.mode === 'server') {
         const type = String(data.type ?? 'text');
         if (registry.has(from)) continue;
 
+        // v1.3.0-alpha.7+ — governance message types never dispatch to
+        // actors (same rule as watcher.ts processInbound + replay paths).
+        if (ALWAYS_PASS_TYPES.has(type)) continue;
+
         // Bootstrap gate: defer non-always-pass types when channel is in
         // 'deferred' state. In 'conflict' state, only roe-* defer; work
         // continues. Cursor is NOT advanced for deferred messages — they
         // get re-evaluated on next startup or on watcher pickup once the
         // state transitions back to 'open'.
-        if (!ALWAYS_PASS_TYPES.has(type)) {
-          const state = bootstrapCache.get(guid);
-          if (state === 'deferred') {
-            console.log(`[crosstalk] startup scan defer (bootstrap pending) ${guid.slice(0,8)}/${relPath} (type=${type})`);
-            break;  // stop processing this channel — preserve order, retry after session-open
-          }
-          if (state === 'conflict' && type.startsWith('roe-')) {
-            console.log(`[crosstalk] startup scan defer (bootstrap-conflict, governance only) ${guid.slice(0,8)}/${relPath} (type=${type})`);
-            continue;  // skip THIS message but keep walking — work in same channel still dispatches
-          }
+        const state = bootstrapCache.get(guid);
+        if (state === 'deferred') {
+          console.log(`[crosstalk] startup scan defer (bootstrap pending) ${guid.slice(0,8)}/${relPath} (type=${type})`);
+          break;  // stop processing this channel — preserve order, retry after session-open
+        }
+        if (state === 'conflict' && type.startsWith('roe-')) {
+          console.log(`[crosstalk] startup scan defer (bootstrap-conflict, governance only) ${guid.slice(0,8)}/${relPath} (type=${type})`);
+          continue;  // skip THIS message but keep walking — work in same channel still dispatches
         }
 
-        const targets = to === 'all'
-          ? [...registry.values()]
-          : to.split(',').map(t => t.trim()).filter(t => registry.has(t)).map(t => registry.get(t)!);
+        // v1.3.0-alpha.7+ — address-aware target resolution (was previously
+        // a bare-name `registry.has(t)` filter that missed every qualified
+        // address in multi-op mode).
+        const targets = resolveTargets(registry, to);
         for (const actor of targets) {
           await dispatch(actor, transport, config.transport, guid, relPath, config.actorEmailSuffix, MACHINE_ID, config.defaultHeartbeatInterval);
         }

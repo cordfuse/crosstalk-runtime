@@ -1,4 +1,5 @@
 import { join } from 'path';
+import { readdir, readFile } from 'fs/promises';
 import { parseFrontmatter } from './frontmatter.js';
 import { dispatch, isDuplicate } from './dispatch.js';
 import { readCursor, listMessages, messagesAfterCursor } from './cursor.js';
@@ -8,7 +9,6 @@ import { resolveAddress } from './registry.js';
 import {
   ALWAYS_PASS_TYPES, CACHE_INVALIDATING_TYPES, type BootstrapStateCache,
 } from './bootstrap.js';
-import { readFile } from 'fs/promises';
 import { verifyMessage } from './signing.js';
 
 /**
@@ -32,10 +32,10 @@ export function startWatcher(
    * (work + roe-*). When false, only roe-* messages defer (work continues
    * unaffected). False = the safe default for transports without governance. */
   _deferOnNoCoordinator: boolean,
-): void {
+): { rescanAll: () => Promise<void> } {
   console.log(`[watcher] subscribing to transport events`);
 
-  transport.watchMessages(async (event: MessageEvent) => {
+  const processInbound = async (event: MessageEvent): Promise<void> => {
     const { channel: guid, relPath, content } = event;
 
     const dedupKey = `${guid}/${relPath}`;
@@ -108,6 +108,19 @@ export function startWatcher(
         console.log(`[watcher] defer (bootstrap-conflict, governance only) ${guid.slice(0, 8)}/${relPath} (type=${type})`);
         return;
       }
+    } else {
+      // v1.3.0-alpha.7+ — governance message types (session-open,
+      // session-open-deferred, bootstrap-conflict, system) are for the
+      // bootstrap cache + watcher, not for actor dispatch. Pre-v1.3 the
+      // single-operator self-loop check happened to filter these out
+      // because the from: name matched the local registry. In multi-op,
+      // a session-open posted by alice@bob carries `from: alice@bob`
+      // which doesn't match steve's registry (alice@steve), so steve's
+      // actors would dispatch on bob's bootstrap message — a feedback
+      // loop bombing both daemons with cross-op responses. Skip dispatch
+      // explicitly for governance types so the behavior is intentional
+      // rather than accidental.
+      return;
     }
 
     const targets = resolveTargets(registry, to);
@@ -117,7 +130,50 @@ export function startWatcher(
     for (const actor of targets) {
       await dispatch(actor, transport, transportRoot, guid, relPath, actorEmailSuffix, sessionId, defaultHeartbeatInterval);
     }
-  });
+  };
+
+  // Subscribe fs.watch path through processInbound.
+  transport.watchMessages(processInbound);
+
+  // v1.3.0-alpha.7+ — rescan helper for the polling loop.
+  // Linux's fs.watch({recursive:true}) does NOT auto-watch newly-created
+  // subdirectories — so when `transport.sync()` pulls a fresh channel dir
+  // (or a fresh YYYY/MM/DD subdir), messages inside it never trigger the
+  // watcher callback. This walks every channel directory and feeds any
+  // file past the cursor through the same processInbound pipeline that
+  // fs.watch would have used. Idempotent: the per-message cursor + dedup
+  // checks inside processInbound filter out already-processed files.
+  const rescanAll = async (): Promise<void> => {
+    const channelsDir = join(transportRoot, 'channels');
+    let channelGuids: string[];
+    try {
+      channelGuids = await readdir(channelsDir);
+    } catch {
+      return;  // channels/ doesn't exist yet
+    }
+    for (const guid of channelGuids) {
+      const channelDir = join(channelsDir, guid);
+      let messages: string[];
+      try {
+        messages = await listMessages(channelDir);
+      } catch {
+        continue;
+      }
+      for (const relPath of messages) {
+        let content: string;
+        try {
+          content = await (await import('fs/promises')).readFile(join(channelDir, relPath), 'utf-8');
+        } catch {
+          continue;
+        }
+        // processInbound's own cursor + dedup checks will skip already-dispatched
+        // messages. No need to filter here.
+        await processInbound({ channel: guid, relPath, content });
+      }
+    }
+  };
+
+  return { rescanAll };
 }
 
 /** Expand a message's `to:` field to the actor instances on THIS daemon
@@ -185,6 +241,11 @@ async function replayDeferredMessages(
     const type = String(data.type ?? 'text');
 
     if (registry.has(from)) continue;
+
+    // v1.3.0-alpha.7+ — same governance-type dispatch skip as the live
+    // watcher path. Governance messages flow through to the bootstrap
+    // cache, never to actor dispatch.
+    if (ALWAYS_PASS_TYPES.has(type)) continue;
 
     if (!ALWAYS_PASS_TYPES.has(type)) {
       const state = bootstrapCache.get(channelGuid);
