@@ -11,7 +11,7 @@ import {
 } from './bootstrap.js';
 import { verifyMessage } from './signing.js';
 import { applyDispatchPolicy, parseDispatchPolicy } from './dispatch-policy.js';
-import { QuorumTracker, emitPoolQuorumReached } from './quorum-tracker.js';
+import { QuorumTracker, emitPoolQuorumReached, emitPoolQuorumFailed } from './quorum-tracker.js';
 import { WATCHER_IDENTITY } from './system.js';
 
 /**
@@ -50,7 +50,17 @@ export function startWatcher(
   // daemon process; state lives in memory and is lost on restart (real
   // pool responses remain durable in the transport). Construct here so
   // it's shared between the live processInbound path and replayDeferred.
-  const quorumTracker = new QuorumTracker();
+  // v1.10.0-alpha.1+ — onExpired callback emits pool-quorum-failed when
+  // the sweep purges an entry that never reached K. Symmetric with the
+  // success path (pool-quorum-reached fires inline on K-th responder).
+  const quorumTracker = new QuorumTracker({
+    onExpired: (state) => {
+      emitPoolQuorumFailed(transport, transportRoot, state, WATCHER_IDENTITY).catch(err => {
+        console.error(`[watcher] failed to emit pool-quorum-failed for ${state.originRelPath}: ${err}`);
+      });
+      console.log(`[watcher] pool-quorum-failed emitted for ${state.poolAddress} (${state.responders.size}/${state.k})`);
+    },
+  });
 
   // v1.9.0-alpha.1+ — in-flight dispatch tracking. Per-message Set keyed
   // on `${channel}/${relPath}`. Added BEFORE dispatch fires; removed when
