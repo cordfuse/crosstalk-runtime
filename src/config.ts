@@ -99,6 +99,23 @@ export interface Config {
    * defaults (claude/gemini/codex/qwen/opencode) at use site — operator
    * entries win on name collision, and operator-only names extend the map. */
   agents: Record<string, AgentSpawn>;
+  /** v1.6.0-alpha.1+ — extra environment variables forwarded to agent
+   * child processes (claude/gemini/qwen/opencode and custom commands).
+   * Loaded from the optional `[agent-environment]` TOML table.
+   *
+   * Primary use case: multi-operator-on-one-machine deployments where
+   * the daemon's HOME is sandboxed (per-operator `~/.crosstalk/` state)
+   * but agent CLIs need their auth credentials (`~/.claude/`, `~/.gemini/`)
+   * in the operator's real home. Setting `HOME = "/home/<real-user>"`
+   * here makes the agent spawns find credentials while the daemon's own
+   * state stays partitioned per operator. See TODO #35 for the deeper
+   * design discussion.
+   *
+   * Merged into env AFTER the daemon's `process.env`, so values here
+   * override any inherited values. PATH augmentation (the ~/.bun/bin +
+   * ~/.local/bin prepend) happens first; if `PATH` is set here it wins
+   * over the augmentation. */
+  agentEnv: Record<string, string>;
   /** Bootstrap Coordinator settings (v0.7.0-alpha.2+). Loaded from the
    * optional `[bootstrap]` table in config.toml. */
   bootstrap: BootstrapConfig;
@@ -144,6 +161,7 @@ export async function loadConfig(): Promise<Config> {
         ...(process.env.WEBHOOK_SECRET ? { webhookSecret: process.env.WEBHOOK_SECRET } : {}),
       },
       agents: {},
+      agentEnv: {},
       bootstrap: { ...DEFAULTS.bootstrap, decayCheckIntervalMs: DEFAULTS.bootstrap.decayCheckIntervalMs },
     };
   }
@@ -228,6 +246,29 @@ export async function loadConfig(): Promise<Config> {
     }
   }
 
+  // [agent-environment] table — optional. v1.6.0-alpha.1+. Plain KEY = "value"
+  // entries; all values must be strings (TOML doesn't auto-coerce env vars,
+  // and stringly-typed env is what child_process.spawn expects). Non-string
+  // entries get skipped with a warning rather than crashing config load.
+  const agentEnv: Record<string, string> = {};
+  const agentEnvTable = data['agent-environment'];
+  if (typeof agentEnvTable === 'object' && agentEnvTable !== null && !Array.isArray(agentEnvTable)) {
+    for (const [key, value] of Object.entries(agentEnvTable)) {
+      if (typeof value !== 'string') {
+        console.warn(`[config] [agent-environment].${key} must be a string (got ${typeof value}) — skipping`);
+        continue;
+      }
+      // Values are taken literally — NO `~` expansion. `homedir()` reads
+      // the daemon process's `$HOME` (snapshotted at start), which in
+      // sandboxed multi-operator deployments is the OPERATOR'S sandbox,
+      // NOT their real home. Expanding `~` would give the wrong path
+      // for the primary use case. Operators spell out absolute paths
+      // (e.g. `HOME = "/home/stevekrisjanovs"`) so the override is
+      // unambiguous.
+      agentEnv[key] = value;
+    }
+  }
+
   // [bootstrap] table — optional. Operators who don't use governance can
   // omit it entirely; defaults preserve pre-v0.7.0-alpha.2 behaviour.
   const bootstrapTable = (data.bootstrap ?? {}) as Record<string, unknown>;
@@ -246,5 +287,5 @@ export async function loadConfig(): Promise<Config> {
       : {}),
   };
 
-  return { transport, actorEmailSuffix, defaultHeartbeatInterval, defaultHumanActor, operator, relay, agents, bootstrap };
+  return { transport, actorEmailSuffix, defaultHeartbeatInterval, defaultHumanActor, operator, relay, agents, agentEnv, bootstrap };
 }
