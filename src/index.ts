@@ -110,11 +110,11 @@ if (config.relay.mode === 'server') {
   // genuinely-fresh installs and steady-state operation.
   await migrateCursorsIfNeeded(MACHINE_ID);
 
-  let registry = await loadRegistry(config.transport);
+  let registry = await loadRegistry(config.transport, config.operator);
   console.log(`[crosstalk] actors: ${[...registry.keys()].join(', ') || 'none'}`);
 
   watchRegistry(config.transport, async () => {
-    registry = await loadRegistry(config.transport);
+    registry = await loadRegistry(config.transport, config.operator);
     console.log(`[crosstalk] registry reloaded: ${[...registry.keys()].join(', ') || 'none'}`);
   });
 

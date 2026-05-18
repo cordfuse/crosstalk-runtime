@@ -72,6 +72,14 @@ export interface Config {
    * is omitted. Optional — operators with multiple human profiles must
    * pass --from explicitly. Forward-compat with TODO #23 (human-actor spec). */
   defaultHumanActor?: string;
+  /** v1.3.0-alpha.3+ — operator handle for the multi-operator design
+   * (TODO.md #34). When set, all actor profiles on this daemon are
+   * registered under qualified addresses (e.g. `alice@steve` instead
+   * of bare `alice`). When undefined, the daemon operates in
+   * single-operator mode and uses bare-name addresses (v1.2 behavior
+   * preserved). Pick a kebab-case handle that's unique on the transport;
+   * mismatch with your signing-key fingerprint is allowed but discouraged. */
+  operator?: string;
   relay: RelayConfig;
   /** Operator-defined agent invocation map for `crosstalk channel join --agent <name>`.
    * Loaded from `[agents.X]` tables in config.toml. Merged with the built-in
@@ -181,6 +189,11 @@ export async function loadConfig(): Promise<Config> {
     ? data['default-human-actor'] as string
     : undefined;
 
+  // v1.3.0-alpha.3+ — operator handle. Optional. When set, daemon enters
+  // multi-operator mode (qualified actor addresses). When undefined, the
+  // daemon stays in single-operator mode (bare-name addresses, v1.2 behavior).
+  const operator = typeof data.operator === 'string' ? data.operator : undefined;
+
   // [agents.X] tables — operator-defined invocation registry.
   // Each table must have `spawn = ["binary", "arg", ...]` (string array, ≥1 elem).
   // Skipped (with warning) if malformed; that lets the rest of the config
@@ -217,5 +230,5 @@ export async function loadConfig(): Promise<Config> {
       : DEFAULTS.bootstrap.decayCheckIntervalMs,
   };
 
-  return { transport, actorEmailSuffix, defaultHeartbeatInterval, defaultHumanActor, relay, agents, bootstrap };
+  return { transport, actorEmailSuffix, defaultHeartbeatInterval, defaultHumanActor, operator, relay, agents, bootstrap };
 }
