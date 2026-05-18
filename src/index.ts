@@ -116,7 +116,7 @@ if (config.relay.mode === 'server') {
   watchRegistry(config.transport, async () => {
     registry = await loadRegistry(config.transport, config.operator);
     console.log(`[crosstalk] registry reloaded: ${[...registry.keys()].join(', ') || 'none'}`);
-  });
+  }, config.operator);
 
   // v1.2.0+ — polling fallback when no relay. Calls transport.sync() on a
   // timer so commits from other machines / PR merges / external pushes get

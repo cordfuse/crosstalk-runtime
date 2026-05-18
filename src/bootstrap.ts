@@ -338,8 +338,15 @@ export function listAllActorProfiles(
   const dirs = [
     join(transportRoot, 'manifest', 'framework', 'actors'),
     join(transportRoot, 'manifest', 'custom', 'actors'),
-    join(homedir(), '.crosstalk', 'actors'),
   ]
+  // v1.4.0-alpha.1+ — operator-scoped layer. Only consulted when this
+  // daemon has an operator handle, matching the same gating as
+  // registry.ts loadRegistry so the governance lens stays in sync with
+  // the dispatch lens.
+  if (operator) {
+    dirs.push(join(transportRoot, 'manifest', 'operators', operator, 'actors'))
+  }
+  dirs.push(join(homedir(), '.crosstalk', 'actors'))
   for (const dir of dirs) {
     if (!existsSync(dir)) continue
     let files: string[] = []

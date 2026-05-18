@@ -48,7 +48,7 @@ function registerActorList(parent: Command): void {
   parent
     .command('list')
     .description('list actors — by default merged across framework + custom + local layers')
-    .option('--registry <layer>', 'framework | custom | local | all (default: all, merged with last-wins)', 'all')
+    .option('--registry <layer>', 'framework | custom | operator | local | all (default: all, merged with last-wins; "operator" = v1.4+ per-operator layer at manifest/operators/<handle>/actors/)', 'all')
     .option('--json',             'machine-readable JSON output')
     .action(async (opts: ActorListOptions) => {
       await runActorList(opts)
@@ -61,9 +61,9 @@ async function runActorList(opts: ActorListOptions): Promise<void> {
 
   let entries: ActorEntry[]
   if (layer === 'all') {
-    entries = scanAllLayers(config.transport)
-  } else if (layer === 'framework' || layer === 'custom' || layer === 'local') {
-    entries = scanActorLayer(config.transport, layer as ActorLayer)
+    entries = scanAllLayers(config.transport, config.operator)
+  } else if (layer === 'framework' || layer === 'custom' || layer === 'operator' || layer === 'local') {
+    entries = scanActorLayer(config.transport, layer as ActorLayer, config.operator)
   } else {
     console.error(`✗ Unknown --registry value: ${layer}`)
     console.error(`  Valid: framework, custom, local, all`)
@@ -138,7 +138,7 @@ function registerActorValidate(parent: Command): void {
   parent
     .command('validate [name]')
     .description('validate actor profile(s) against the framework spec — exits non-zero on any error')
-    .option('--registry <layer>', 'framework | custom | local | all (default: all)', 'all')
+    .option('--registry <layer>', 'framework | custom | operator | local | all (default: all)', 'all')
     .action(async (name: string | undefined, opts: ActorValidateOptions) => {
       await runActorValidate(name, opts)
     })
@@ -150,15 +150,15 @@ async function runActorValidate(name: string | undefined, opts: ActorValidateOpt
 
   // Always build the full merged registry — needed for parent-chain cycle
   // detection even when validating only one layer.
-  const allEntries = scanAllLayers(config.transport)
+  const allEntries = scanAllLayers(config.transport, config.operator)
   const registry = new Map<string, ActorEntry>()
   for (const e of allEntries) registry.set(e.name, e)
 
   let entries: ActorEntry[]
   if (layer === 'all') {
     entries = allEntries
-  } else if (layer === 'framework' || layer === 'custom' || layer === 'local') {
-    entries = scanActorLayer(config.transport, layer as ActorLayer)
+  } else if (layer === 'framework' || layer === 'custom' || layer === 'operator' || layer === 'local') {
+    entries = scanActorLayer(config.transport, layer as ActorLayer, config.operator)
   } else {
     console.error(`✗ Unknown --registry value: ${layer}`)
     process.exit(1)
