@@ -49,6 +49,8 @@ interface PostOptions {
   push?:                 boolean   // commander inverts --no-push to push: false
   allowUnknownTargets?:  boolean
   encrypt?:              boolean   // v0.8.0-alpha.5+ — encrypt body to recipients' age pubkeys
+  dispatch?:             string    // v1.5.0-alpha.1+ — pool dispatch policy (fanout|round-robin|random|broadcast-with-quorum)
+  quorum?:               string    // v1.5.0-alpha.2+ — required when --dispatch broadcast-with-quorum; integer K-of-N threshold
 }
 
 export function registerPostCommand(program: Command): void {
@@ -63,6 +65,8 @@ export function registerPostCommand(program: Command): void {
     .option('--no-push',                             'commit but do not push (leaves the commit local)')
     .option('--allow-unknown-targets',               'do not error when --to actors are missing from the registry')
     .option('--encrypt',                             'encrypt body to each --to actor\'s age pubkey (v0.8+; requires recipients to have keys in manifest/{custom,framework}/keys/<actor>.pub)')
+    .option('--dispatch <policy>',                   'pool dispatch policy: fanout (default — all instances) | round-robin (one instance, rotating) | random (one instance, random) | broadcast-with-quorum (fanout; v1.6 adds quorum-reached event)')
+    .option('--quorum <k>',                          'required with --dispatch broadcast-with-quorum: K-of-N response threshold (integer ≥1; runtime emit lands v1.6)')
     .action(async (options: PostOptions) => {
       await runPost(options)
     })
@@ -199,13 +203,46 @@ async function runPost(opts: PostOptions): Promise<void> {
     console.log(`✓ Encrypted to ${recipientMap.size} recipient(s): ${encryptedToNames.join(', ')}`)
   }
 
+  // v1.5.0-alpha.1+ — sender-side dispatch policy carried as frontmatter.
+  // v1.5.0-alpha.2+ — broadcast-with-quorum policy requires `--quorum <K>`
+  // (K-of-N response threshold). The runtime quorum tracker that emits
+  // pool-quorum-reached lands in v1.6; alpha.2 just carries the frontmatter
+  // shape end-to-end so downstream actors (or v1.6 runtime) can act on it.
+  const extraFrontmatter: Record<string, string> = { ...encryptionFields }
+  const KNOWN_POLICIES = ['fanout', 'round-robin', 'random', 'broadcast-with-quorum']
+  if (opts.dispatch) {
+    const v = opts.dispatch.trim().toLowerCase()
+    if (!KNOWN_POLICIES.includes(v)) {
+      console.error(`✗ Unknown --dispatch policy "${opts.dispatch}". Valid: ${KNOWN_POLICIES.join(', ')}.`)
+      process.exit(1)
+    }
+    if (v !== 'fanout') extraFrontmatter.dispatch = v  // skip the field when it'd just restate the default
+
+    if (v === 'broadcast-with-quorum') {
+      if (!opts.quorum) {
+        console.error(`✗ --dispatch broadcast-with-quorum requires --quorum <K> (K-of-N response threshold, integer ≥1).`)
+        process.exit(1)
+      }
+      const k = parseInt(opts.quorum, 10)
+      if (!Number.isFinite(k) || k < 1) {
+        console.error(`✗ --quorum must be a positive integer, got "${opts.quorum}".`)
+        process.exit(1)
+      }
+      extraFrontmatter.quorum = String(k)
+    } else if (opts.quorum) {
+      console.warn(`⚠ --quorum is only meaningful with --dispatch broadcast-with-quorum; ignoring.`)
+    }
+  } else if (opts.quorum) {
+    console.warn(`⚠ --quorum is only meaningful with --dispatch broadcast-with-quorum; ignoring.`)
+  }
+
   let messageContent = composeMessage({
     from,
     to:        toField,
     timestamp: now.toISOString(),
     type:      'text',
     body,
-    extraFrontmatter: encryptionFields,
+    extraFrontmatter,
   })
 
   // v1.3.0-alpha.8+ — sign the message with --from's ed25519 key if one
