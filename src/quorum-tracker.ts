@@ -69,6 +69,55 @@ function key(channel: string, originRelPath: string): string {
  * at startup and passes it into processInbound. */
 export class QuorumTracker {
   private states = new Map<string, QuorumState>()
+  private sweepTimer: NodeJS.Timeout | null = null
+  private readonly ttlMs: number
+  private readonly sweepIntervalMs: number
+
+  /** v1.9.0-alpha.2+ — configurable TTL + GC sweep. K-never-reached
+   * entries used to leak in memory until daemon restart. Defaults
+   * (10-minute TTL, 60-second sweep) are sized for typical workloads
+   * where quorum requests resolve in seconds. Override for tests or
+   * for unusual deployments where K-of-N agreement legitimately takes
+   * minutes (e.g. human-in-loop coordinator chains). */
+  constructor(opts?: { ttlMs?: number; sweepIntervalMs?: number; autoStart?: boolean }) {
+    this.ttlMs = opts?.ttlMs ?? 10 * 60 * 1000
+    this.sweepIntervalMs = opts?.sweepIntervalMs ?? 60 * 1000
+    if (opts?.autoStart !== false) this.startSweep()
+  }
+
+  /** Begin the periodic sweep. Auto-called by the constructor unless
+   * `autoStart: false` is passed (tests do this to keep the event loop
+   * clean). Idempotent — safe to call multiple times. */
+  startSweep(): void {
+    if (this.sweepTimer) return
+    this.sweepTimer = setInterval(() => this.sweepExpired(), this.sweepIntervalMs)
+    // Don't keep the process alive for sweeps alone.
+    if (typeof this.sweepTimer.unref === 'function') this.sweepTimer.unref()
+  }
+
+  /** Stop the periodic sweep. Call during daemon shutdown so node can
+   * exit cleanly. Safe to call when sweep wasn't started. */
+  stopSweep(): void {
+    if (this.sweepTimer) {
+      clearInterval(this.sweepTimer)
+      this.sweepTimer = null
+    }
+  }
+
+  /** Walk the state map and remove entries past their TTL. Public so
+   * tests can trigger it without waiting on the timer. Returns the
+   * number of entries swept (useful for logging / metrics). */
+  sweepExpired(now: number = Date.now()): number {
+    let swept = 0
+    for (const [id, state] of this.states.entries()) {
+      if (now - state.registeredAt > this.ttlMs) {
+        this.states.delete(id)
+        swept++
+      }
+    }
+    if (swept > 0) console.log(`[quorum] swept ${swept} expired entr${swept === 1 ? 'y' : 'ies'}`)
+    return swept
+  }
 
   /** Register a new quorum request. Called from the watcher right after
    * resolveTargets returns N pool instances and dispatch fires.

@@ -101,6 +101,57 @@ describe('QuorumTracker — close', () => {
   })
 })
 
+describe('QuorumTracker — TTL + sweep (v1.9.0-alpha.2)', () => {
+  it('entries older than TTL get swept', () => {
+    // 1ms TTL so we can advance Date.now() trivially
+    const t = new QuorumTracker({ ttlMs: 1, autoStart: false })
+    t.register('ch1', 'rel1', 'alice@steve', 2, 3)
+    t.register('ch1', 'rel2', 'bob@steve', 1, 2)
+    assert.equal(t.size(), 2)
+    // Pretend 1 hour passed
+    const swept = t.sweepExpired(Date.now() + 60 * 60 * 1000)
+    assert.equal(swept, 2)
+    assert.equal(t.size(), 0)
+  })
+
+  it('entries within TTL are preserved', () => {
+    const t = new QuorumTracker({ ttlMs: 10 * 60 * 1000, autoStart: false })
+    t.register('ch1', 'rel1', 'alice@steve', 2, 3)
+    // Pretend 1 second passed — well within 10 minutes
+    const swept = t.sweepExpired(Date.now() + 1000)
+    assert.equal(swept, 0)
+    assert.equal(t.size(), 1)
+  })
+
+  it('sweepExpired is a no-op on empty tracker', () => {
+    const t = new QuorumTracker({ autoStart: false })
+    assert.equal(t.sweepExpired(), 0)
+  })
+
+  it('startSweep is idempotent', () => {
+    const t = new QuorumTracker({ ttlMs: 1, sweepIntervalMs: 100, autoStart: false })
+    t.startSweep()
+    t.startSweep()  // should not double-register interval
+    t.stopSweep()
+    // No assertion crash = pass
+  })
+
+  it('stopSweep is safe when never started', () => {
+    const t = new QuorumTracker({ autoStart: false })
+    t.stopSweep()
+    // No crash = pass
+  })
+
+  it('default TTL is 10 minutes', () => {
+    const t = new QuorumTracker({ autoStart: false })
+    t.register('ch1', 'rel1', 'alice@steve', 2, 3)
+    // 9 minutes — still alive
+    assert.equal(t.sweepExpired(Date.now() + 9 * 60 * 1000), 0)
+    // 11 minutes — swept
+    assert.equal(t.sweepExpired(Date.now() + 11 * 60 * 1000), 1)
+  })
+})
+
 describe('buildQuorumReachedMessage', () => {
   it('emits well-formed pool-quorum-reached frontmatter + body', () => {
     const t = new QuorumTracker()
