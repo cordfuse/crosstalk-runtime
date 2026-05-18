@@ -16,7 +16,7 @@
     "prepare": "npm run build",
     "start": "node dist/index.js",
     "dev": "node --watch --experimental-strip-types src/index.ts",
-    "test": "bun test src/*.test.ts"
+    "test": "bun test src/*.test.ts src/cli/commands/*.test.ts"
   },
   "files": [
     "dist",
