@@ -13,7 +13,18 @@ const HOME = homedir();
 const EXTRA_PATH = [join(HOME, '.bun', 'bin'), join(HOME, '.local', 'bin')];
 const augmentedPath = [...EXTRA_PATH, process.env.PATH ?? ''].join(':');
 
-const DEDUP_WINDOW_MS = 2000;
+// v1.8.1+ — bumped from 2s to 10min after the concierge UAT surfaced
+// double-dispatches on slow agents. The original 2s window was sized for
+// fs.watch re-fires during git pull rebases (those happen within ms);
+// but it's far shorter than typical LLM agent runtimes (10-60s for
+// claude/gemini, can be minutes for opencode + slow model providers).
+// During the dispatch's in-flight window, the cursor hasn't advanced yet
+// (cursor write happens in the `.then` after the child exits), so the
+// rescan path re-feeds the same message → processInbound calls dispatch
+// → spawns the agent a SECOND time. 10min covers any practical agent
+// runtime; the cursor takes over as the authoritative skip mechanism
+// once dispatch completes.
+const DEDUP_WINDOW_MS = 10 * 60 * 1000;
 const recentlyDispatched = new Map<string, number>();
 
 /** Build a complete message file (frontmatter + body) for an actor's

@@ -85,6 +85,12 @@ export interface Config {
    * is omitted. Optional — operators with multiple human profiles must
    * pass --from explicitly. Forward-compat with TODO #23 (human-actor spec). */
   defaultHumanActor?: string;
+  /** v1.8.1+ — default channel for `crosstalk ask` when --channel is
+   * omitted. Lets operators set up a permanent "concierge inbox" channel
+   * once and just type `crosstalk ask "..."` without channel arg.
+   * Other commands (post/show/tail/etc.) still require explicit channel
+   * because their typical usage targets specific named channels. */
+  defaultChannel?: string;
   /** v1.3.0-alpha.3+ — operator handle for the multi-operator design
    * (TODO.md #34). When set, all actor profiles on this daemon are
    * registered under qualified addresses (e.g. `alice@steve` instead
@@ -220,6 +226,11 @@ export async function loadConfig(): Promise<Config> {
     ? data['default-human-actor'] as string
     : undefined;
 
+  // v1.8.1+ — optional default channel for `crosstalk ask`.
+  const defaultChannel = typeof data['default-channel'] === 'string'
+    ? data['default-channel'] as string
+    : undefined;
+
   // v1.3.0-alpha.3+ — operator handle. Optional. When set, daemon enters
   // multi-operator mode (qualified actor addresses). When undefined, the
   // daemon stays in single-operator mode (bare-name addresses, v1.2 behavior).
@@ -287,5 +298,5 @@ export async function loadConfig(): Promise<Config> {
       : {}),
   };
 
-  return { transport, actorEmailSuffix, defaultHeartbeatInterval, defaultHumanActor, operator, relay, agents, agentEnv, bootstrap };
+  return { transport, actorEmailSuffix, defaultHeartbeatInterval, defaultHumanActor, defaultChannel, operator, relay, agents, agentEnv, bootstrap };
 }
