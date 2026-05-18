@@ -384,9 +384,17 @@ async function walkChannelMessages(channelDir: string): Promise<string[]> {
 
 /** Convenience derivation: actor email from name + suffix. Pure utility;
  * not transport-specific but kept here since `commitAndPush` is the
- * primary consumer. */
+ * primary consumer.
+ *
+ * v1.3.0-alpha.6+ — sanitises `@` in addresses to `.` so qualified
+ * multi-operator addresses (`alice@steve`) produce legal email local
+ * parts (`alice.steve@<suffix>`). Without this, the natural string
+ * interpolation builds `alice@steve@<suffix>` which is malformed and
+ * gets git CLI rejection on commit. Bare names (single-op) pass
+ * through unchanged. */
 export function machineGitEmail(actorName: string, suffix: string): string {
-  return `${actorName}@${suffix}`
+  const localPart = actorName.includes('@') ? actorName.replace('@', '.') : actorName
+  return `${localPart}@${suffix}`
 }
 
 /** Existence check — does this transport's working tree look like a git

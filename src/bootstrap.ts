@@ -66,6 +66,7 @@ import type { Transport, ActorIdentity } from './transport.js'
 import { MESSAGE_FILE_RE } from './filenames.js'
 import type { Registry } from './registry.js'
 import { MACHINE_ID } from './system.js'
+import { machineGitEmail } from './transports/git.js'
 
 const YEAR_RE = /^\d{4}$/
 const DD_RE = /^\d{2}$/
@@ -551,9 +552,14 @@ export async function postSessionOpen(
     `## Pending amendments\n\n` +
     `${pendingSection}\n`
 
+  // v1.3.0-alpha.6+ — `coordinatorActor` may be a qualified multi-operator
+  // address (`alice@steve`) when the daemon is in multi-op mode and the
+  // ROE coordinator field designates a qualified actor. machineGitEmail
+  // sanitises the `@` to `.` for the email local part; the ActorIdentity
+  // name stays as the canonical address.
   const identity: ActorIdentity = {
     name: coordinatorActor,
-    email: `${coordinatorActor}@${actorEmailSuffix}`,
+    email: machineGitEmail(coordinatorActor, actorEmailSuffix),
   }
 
   try {
