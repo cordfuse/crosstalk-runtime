@@ -134,12 +134,13 @@ async function runChannelNew(topic: string, opts: ChannelNewOptions): Promise<vo
 
   if (opts.push !== false) {
     // v1.10.0-alpha.2+ — pushWithRetry handles CLI/daemon push contention.
-    const pushed = await pushWithRetry(config.transport, 5)
-    if (!pushed) {
+    const result = await pushWithRetry(config.transport, 5)
+    if (result === 'failed') {
       console.error(`✗ Push failed after retries — commit is local. Run \`git -C ${config.transport} pull --rebase && git push\` to recover.`)
       process.exit(1)
     }
-    console.log(`✓ Pushed`)
+    if (result === 'no-remote') console.log(`  (no remote configured — commit is local-only)`)
+    else                        console.log(`✓ Pushed`)
   } else {
     console.log(`  (skipped push — --no-push)`)
   }

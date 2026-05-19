@@ -12,12 +12,16 @@
  * (bootstrap, dispatch, watcher, system, relay, registry, index) all use
  * `Transport` instead.
  */
-import { pushWithRetryQueued } from './transports/git.js'
+import { pushWithRetryQueued, type PushResult } from './transports/git.js'
+
+export type { PushResult } from './transports/git.js'
 
 /** @deprecated v1.1.0+ — use `Transport.postMessage()` instead. Kept as a
  * compatibility shim for `crosstalk channel join` which still commits
  * directly. Will be removed in v1.2.0 when CLI subcommands migrate to
- * the Transport interface. */
-export async function pushWithRetry(repoPath: string, maxAttempts = 20): Promise<boolean> {
+ * the Transport interface. v1.13+ returns the tri-state `PushResult`
+ * ('pushed' | 'no-remote' | 'failed') so callers can avoid printing
+ * `✓ Pushed` on a transport with no `origin`. */
+export async function pushWithRetry(repoPath: string, maxAttempts = 20): Promise<PushResult> {
   return pushWithRetryQueued(repoPath, maxAttempts)
 }

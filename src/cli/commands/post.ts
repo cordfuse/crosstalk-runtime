@@ -285,12 +285,13 @@ export async function runPost(opts: PostOptions): Promise<void> {
     // push to the same bare repo and the loser gets non-fast-forward
     // rejected. pushWithRetry rebases + retries (5 attempts is enough
     // for CLI use; daemon uses 20 for sustained contention).
-    const pushed = await pushWithRetry(config.transport, 5)
-    if (!pushed) {
+    const result = await pushWithRetry(config.transport, 5)
+    if (result === 'failed') {
       console.error(`✗ Push failed after retries — commit is local. Run \`git -C ${config.transport} pull --rebase && git push\` to recover.`)
       process.exit(1)
     }
-    console.log(`✓ Pushed`)
+    if (result === 'no-remote') console.log(`  (no remote configured — commit is local-only)`)
+    else                        console.log(`✓ Pushed`)
   } else {
     console.log(`  (skipped push — --no-push)`)
   }

@@ -93,18 +93,24 @@ async function pushWithRetryRaw(repoPath: string, maxAttempts: number): Promise<
   return false
 }
 
+/** Outcome of a push attempt. v1.13+ — explicit `no-remote` distinguishes
+ * the "succeeded because nothing to do" case from a real network push, so
+ * callers can avoid emitting `✓ Pushed` on a transport with no `origin`
+ * (which was the v1.10 UAT false-positive on offline/local setups). */
+export type PushResult = 'pushed' | 'no-remote' | 'failed'
+
 /** Push with rebase-and-retry, serialized per remote URL. Exported as a
  * module-level function so the legacy `src/git.ts` shim can re-export it
  * for the one remaining CLI caller (channel-join). */
-export async function pushWithRetryQueued(repoPath: string, maxAttempts = 20): Promise<boolean> {
+export async function pushWithRetryQueued(repoPath: string, maxAttempts = 20): Promise<PushResult> {
   const remoteUrl = await getRemoteUrl(repoPath)
-  if (!remoteUrl) return true
+  if (!remoteUrl) return 'no-remote'
 
   const prev = transportPushQueues.get(remoteUrl) ?? Promise.resolve()
-  let result = false
+  let ok = false
   const next = prev
-    .then(async () => { result = await pushWithRetryRaw(repoPath, maxAttempts) })
-    .catch(() => { result = false })
+    .then(async () => { ok = await pushWithRetryRaw(repoPath, maxAttempts) })
+    .catch(() => { ok = false })
 
   transportPushQueues.set(remoteUrl, next)
   await next
@@ -112,7 +118,7 @@ export async function pushWithRetryQueued(repoPath: string, maxAttempts = 20): P
   if (transportPushQueues.get(remoteUrl) === next) {
     transportPushQueues.delete(remoteUrl)
   }
-  return result
+  return ok ? 'pushed' : 'failed'
 }
 
 // ── GitTransport ──────────────────────────────────────────────────────────
