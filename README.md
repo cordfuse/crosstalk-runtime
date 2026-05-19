@@ -27,7 +27,7 @@ Plus the operator CLI surface: `init`, `post`, `channel new/list/show/tail/join`
 | Provider | CLI binary | Native flags | Model format |
 |----------|-----------|--------------|--------------|
 | Claude | `claude` | `--print --dangerously-skip-permissions --model <m> --system-prompt <p> --no-session-persistence` | `claude-sonnet-4-6`, etc. |
-| Gemini | `gemini` | `-m <model> -y --output-format text` | `gemini-2.5-flash`, etc. Personality baked into prompt body (no `--system-prompt` flag in Gemini CLI). |
+| Gemini | `gemini` | `-m <model> -y --output-format text` | `gemini-2.5-flash`, etc. Personality baked into prompt body (no `--system-prompt` flag in Gemini CLI). **Headless dispatch requires `GEMINI_API_KEY`** — the Gemini CLI's OAuth login flow is interactive and cannot complete inside a non-TTY daemon child. Set the key under `[agents.env]` in `~/.crosstalk/config.toml`, in `~/.gemini/.env`, or in the daemon's shell env. If only OAuth credentials exist (`~/.gemini/oauth_creds.json`), spawned dispatches will hang on a login prompt. Interactive `channel join --agent gemini` is unaffected — it inherits the parent TTY and can drive OAuth normally. |
 | Qwen Code | `qwen` | `--system-prompt <p> --model <m> -y --output-format text --no-chat-recording` | `qwen-plus`, etc. |
 | OpenCode | `opencode` | `run "<p>" -m <model> --dangerously-skip-permissions --format json` | `ollama/<name>:<tag>` for local models via Ollama. JSONL output parsed. |
 | Custom (`command` set, no `agent`) | any binary | `command` + `args` array with `{variable}` substitution | — |

@@ -492,11 +492,14 @@ async function postSystemMessage(args: PostSystemArgs): Promise<boolean> {
   // pushWithRetry is the same battle-tested pattern dispatch.ts uses for
   // actor-response commits.
   if (args.push) {
-    const ok = await pushWithRetry(args.transport)
-    if (!ok) {
+    const result = await pushWithRetry(args.transport)
+    if (result === 'failed') {
       console.error(`✗ Push failed for ${args.reason} message after retries — commit is local. Run \`git -C ${args.transport} pull --rebase && git push\` to recover.`)
       return false
     }
+    // 'no-remote' is silently fine here — join/leave lifecycle messages
+    // commit locally and the next post will surface the no-remote state
+    // to the operator.
   }
   return true
 }

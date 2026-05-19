@@ -48,6 +48,7 @@ async function runConfigShow(opts: ConfigShowOptions): Promise<void> {
     actorEmailSuffix:           config.actorEmailSuffix,
     defaultHeartbeatInterval:   config.defaultHeartbeatInterval,
     defaultHumanActor:          config.defaultHumanActor ?? null,
+    defaultChannel:             config.defaultChannel ?? null,       // v1.8.1+
     relay: {
       mode:   config.relay.mode,
       url:    config.relay.url,
@@ -79,6 +80,9 @@ async function runConfigShow(opts: ConfigShowOptions): Promise<void> {
   console.log(`default-heartbeat-interval = ${safe.defaultHeartbeatInterval}`)
   if (safe.defaultHumanActor) {
     console.log(`default-human-actor = "${safe.defaultHumanActor}"`)
+  }
+  if (safe.defaultChannel) {
+    console.log(`default-channel = "${safe.defaultChannel}"`)
   }
   // v1.9.0-alpha.3+ — show signature-mode only when non-default (strict).
   // Permissive is the v1.3+ default; printing it adds noise to ordinary

@@ -28,6 +28,15 @@
  *     the post still lands and the message just sits unanswered. (The
  *     usual post-validation surfaces this via "unknown target" unless
  *     --allow-unknown-targets — see the resolve flow in post.ts.)
+ *
+ * Realistic timing (v1.13+ note): a single `ask` round-trip is typically
+ * 30–60 seconds — the concierge personality has to read the full tool
+ * manifest, pick a tool, and run a CLI subprocess on top of the normal
+ * agent latency. This is structurally heavier than a plain agent reply
+ * (which is closer to 5–15s). The default heartbeat-interval on the
+ * framework concierge.md is sized for this; if you swap in a custom
+ * concierge under manifest/custom/actors/, keep heartbeat-interval at
+ * 90+ seconds so a slower-than-average run doesn't get SIGTERM'd.
  */
 import type { Command } from 'commander'
 import { loadConfig } from '../../config.js'

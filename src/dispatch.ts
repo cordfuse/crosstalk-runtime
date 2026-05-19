@@ -117,9 +117,20 @@ function spawnGemini(actor: ActorConfig, messageContent: string, agentEnv?: Reco
   // Gemini has no --system-prompt flag; bake personality into the prompt body
   const prompt = `${personality}\n\n---\n\nThe following message arrived in your channel:\n\n${messageContent}\n\nRespond in character. Write only your response.`;
 
+  // v1.13+ — surface the headless-OAuth gotcha as a one-time hint per dispatch.
+  // Gemini CLI's OAuth flow is interactive; daemon children have no TTY, so
+  // a Gemini actor with only ~/.gemini/oauth_creds.json (no GEMINI_API_KEY)
+  // hangs on a login prompt until the dispatch timeout. The variable can be
+  // injected via process.env, [agents.env] in config.toml, or ~/.gemini/.env
+  // — checking the merged env catches all three.
+  const mergedEnv = buildAgentEnv(agentEnv);
+  if (!mergedEnv.GEMINI_API_KEY) {
+    console.log(`[dispatch] HINT: gemini actor "${actor.name}" has no GEMINI_API_KEY in env — headless dispatch may hang on OAuth prompt. Set the key in [agents.env] of config.toml or in ~/.gemini/.env.`);
+  }
+
   return spawn('gemini', ['-m', model, '-p', prompt, '-y', '--output-format', 'text'], {
     stdio: [...AGENT_STDIO],
-    env: buildAgentEnv(agentEnv),
+    env: mergedEnv,
     detached: true,  // see spawnClaude comment — process-group leader for kill-on-timeout
   });
 }
