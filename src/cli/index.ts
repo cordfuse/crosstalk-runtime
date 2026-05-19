@@ -35,6 +35,17 @@ export async function runCLI(argv: string[]): Promise<void> {
     )
     .version(pkg.version, '-v, --version', 'print runtime version')
     .helpOption('-h, --help', 'show help')
+    // v1.13+ — `--config` / `-c` is actually parsed in src/index.ts before
+    // commander runs (so it works for daemon mode too). Declaring it here
+    // is purely for `--help` discoverability — by the time commander sees
+    // argv the flag has already been stripped. `-c` is documented as the
+    // long-form `--config` only: the short form collides with `--channel`
+    // in the post/channel subcommands and the upstream parser surfaces
+    // that ambiguity at runtime. Use `--config` to be unambiguous.
+    .option(
+      '--config <path>',
+      'path to config.toml (overrides default ~/.crosstalk/config.toml; also honors CROSSTALK_CONFIG env)'
+    )
 
   registerVersionCommand(program)
   registerInitCommand(program)
