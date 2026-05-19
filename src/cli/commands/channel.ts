@@ -234,8 +234,7 @@ function registerChannelShow(parent: Command): void {
 
 async function runChannelShow(query: string, opts: ChannelShowOptions): Promise<void> {
   const config = await loadConfig()
-  const guid = resolveChannelOrSystem(config.transport, query)
-  const channelDir = join(config.transport, 'channels', guid)
+  const channelDir = resolveChannelDir(config.transport, query)
 
   let messages = readChannelMessages(channelDir)
   const limit = opts.last ? parseInt(opts.last, 10) : undefined
@@ -344,8 +343,7 @@ function registerChannelTail(parent: Command): void {
 
 async function runChannelTail(query: string, opts: ChannelTailOptions): Promise<void> {
   const config = await loadConfig()
-  const guid = resolveChannelOrSystem(config.transport, query)
-  const channelDir = join(config.transport, 'channels', guid)
+  const channelDir = resolveChannelDir(config.transport, query)
 
   // v0.8.1+ decrypt-on-read setup. opts.decrypt defaults to true; --no-decrypt sets it to false.
   const shouldDecrypt = opts.decrypt !== false
@@ -400,27 +398,35 @@ function globMatch(name: string, pattern: string): boolean {
 }
 
 /**
- * v1.13+ — channel resolver that accepts the reserved `_`-prefixed
- * system channels (`_system`, etc.) as literal directory names.
+ * v1.13+ — resolve a user-typed channel reference to an absolute channel
+ * directory path. Handles both ordinary user channels (under
+ * `channels/<guid>/`) and the reserved `_`-prefixed system channels.
+ *
+ * v1.13.1+ — system channels live at the TRANSPORT ROOT (`<root>/_system/`),
+ * not under `channels/`. GitTransport.postMessage routes SYSTEM_CHANNEL
+ * writes there directly (see src/transports/git.ts `isSystem` branch).
+ * The original v1.13 fix looked under `channels/_system/` which never
+ * exists, so `channel show _system` failed with a "directory not found"
+ * error against a transport that DID have system events written. Caught
+ * in cachy-side v1.13 UAT before mac picked it up.
  *
  * `resolveChannel` (in cli/lib/channel.ts) routes through `listChannels`
- * which hides `_`-prefixed entries by default, so `channel show _system`
- * printed "No channel matches" even though the daemon writes presence,
- * bootstrap, and quorum-failed events there. This wrapper carves out the
- * underscore prefix — reserved per transport.ts SYSTEM_CHANNEL — and
+ * which hides `_`-prefixed entries by default. This wrapper carves out
+ * the underscore prefix — reserved per transport.ts SYSTEM_CHANNEL — and
  * passes everything else through unchanged.
  */
-function resolveChannelOrSystem(transport: string, query: string): string {
+function resolveChannelDir(transport: string, query: string): string {
   if (query.startsWith('_')) {
-    const systemDir = join(transport, 'channels', query)
+    const systemDir = join(transport, query)
     if (!existsSync(systemDir)) {
       console.error(`✗ System channel '${query}' has no directory at ${systemDir}`)
       console.error(`  (Nothing has been written there yet — system channels are created on first write.)`)
       process.exit(1)
     }
-    return query
+    return systemDir
   }
-  return resolveChannel(transport, query)
+  const guid = resolveChannel(transport, query)
+  return join(transport, 'channels', guid)
 }
 
 // Filename + datePath helpers extracted to src/filenames.ts in v0.7.x
