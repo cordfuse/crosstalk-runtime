@@ -64,6 +64,10 @@ Each `agent` value maps to a specific spawner in `dispatch.ts`. Exact CLI contra
 - **`agent: gemini`**
   `gemini -m <model> -p "<personality>\n\n---\n\n<prompt>" -y --output-format text`
   No `--system-prompt` flag in Gemini CLI. Personality baked into prompt body, separated from the message by `---`.
+  **⚠ Sunsets 2026-06-18** — Google retires the Gemini CLI on that date. See `agent: antigravity` below for the successor and the in-flight integration work.
+
+- **`agent: antigravity`** — _native dispatch integration planned for v1.14+, not yet implemented_
+  Binary: `agy`. Google's official Gemini CLI successor ([antigravity-cli](https://github.com/google-antigravity/antigravity-cli)). Go-based, shares an agent engine with the Antigravity 2.0 desktop app. The CLI exposes a `-p / --prompt` headless flag, but the daemon-friendly auth path (no Google-Sign-In browser flow, no TTY for keyring unlock) is not documented yet — until Google publishes the headless reference, daemon dispatch can't be wired safely. **Contributor work item when the spec lands:** add `spawnAntigravity` to `src/dispatch.ts` mirroring `spawnGemini`'s shape (personality folded into prompt body unless `agy` exposes a system-prompt flag), thread `antigravity` through the agent allow-list in `src/cli/commands/actor.ts`, add to the interactive `channel join` map in `src/cli/commands/channel-join.ts`. Interactive use (`channel join --agent agy`) is already viable today — the operator's TTY drives Google Sign-In.
 
 - **`agent: qwen`**
   `qwen <prompt> --system-prompt <personality> --model <model> -y --output-format text --no-chat-recording`
@@ -116,7 +120,7 @@ Runtime-owned frontmatter fields:
 
 ```yaml
 ---
-agent: claude         # claude | gemini | qwen | opencode | (omit for custom command)
+agent: claude         # claude | gemini | qwen | opencode | antigravity (v1.14+, planned) | (omit for custom command)
 model: claude-sonnet-4-6
 heartbeat-interval: 120          # seconds; default 30
 git-email: actor@example.com     # optional; default: <name>@<actor-email-suffix>
