@@ -230,12 +230,25 @@ function validateActor(e: ActorEntry, registry: Map<string, ActorEntry>): Valida
     out.push(issue('error', `name '${e.name}' is not kebab-case (must match /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/)`))
   }
 
-  // name field must equal the filename-derived name
-  const declaredName = e.data.name == null ? '' : String(e.data.name)
-  if (!declaredName) {
-    out.push(issue('error', `missing 'name' field — must equal filename '${e.name}'`))
-  } else if (declaredName !== e.name) {
-    out.push(issue('error', `name mismatch — frontmatter says 'name: ${declaredName}' but filename is '${e.name}.md'`))
+  // v1.11.0-alpha.1+ — frontmatter `name:` is authoritative. Pre-v1.11
+  // the validator required frontmatter `name:` to MATCH the filename
+  // (and rejected on absence). Now:
+  //   - frontmatter name present + valid → that's the authoritative name;
+  //     filename is cosmetic. Different filename is fine.
+  //   - frontmatter name absent → filename used as fallback (must be valid
+  //     kebab — same as the v1.0 baseline behavior).
+  //   - frontmatter name present but invalid kebab → error.
+  // The `e.name` field (set in scanActorLayer) already follows the
+  // authoritative rule, so we mostly validate the EXPLICIT `data.name`
+  // string here (the actual frontmatter content the operator wrote).
+  const declaredName = e.data.name == null ? '' : String(e.data.name).trim()
+  if (declaredName && !/^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.test(declaredName)) {
+    out.push(issue('error', `frontmatter 'name: ${declaredName}' is not kebab-case (must match /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/)`))
+  }
+  // No declared name + filename invalid? — the entry will have failed
+  // validKebabName above; this branch just adds a hint about the fix.
+  if (!declaredName && !e.validKebabName) {
+    out.push(issue('error', `no valid name source — add \`name: <kebab-case>\` to frontmatter (filename "${e.file.split('/').pop()}" is not kebab-case)`))
   }
 
   // role required (short Title-Case label per PROFILES.md)

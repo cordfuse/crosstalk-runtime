@@ -251,6 +251,112 @@ describe('loadRegistry — three-layer merging', () => {
   })
 })
 
+describe('loadRegistry — frontmatter name authoritative (v1.11.0-alpha.1+)', () => {
+  it('UPPERCASE filename + frontmatter name → actor loads under frontmatter name', async () => {
+    // The exact Mac UAT case: filename violates kebab grammar but
+    // frontmatter `name:` is valid. Pre-v1.11 this was silently skipped;
+    // post-v1.11 the frontmatter name wins, filename is cosmetic.
+    const root = mkdtempSync(join(tmpdir(), 'crosstalk-reg-frontmatter-'))
+    mkdirSync(join(root, 'manifest', 'custom', 'actors'), { recursive: true })
+    mkdirSync(join(root, 'empty-local'), { recursive: true })
+    const content = `---
+name: alice-1
+type: machine
+role: test
+agent: claude
+---
+
+Test
+`
+    writeFileSync(join(root, 'manifest', 'custom', 'actors', 'ALICE-1.md'), content)
+    const registry = await loadRegistry(root, undefined, root + '/empty-local')
+    assert.ok(registry.has('alice-1'), 'frontmatter name should win over UPPERCASE filename')
+    assert.equal(registry.get('alice-1')!.name, 'alice-1')
+  })
+
+  it('frontmatter name takes precedence over filename when they disagree', async () => {
+    const t = freshTransport()
+    const content = `---
+name: alice
+type: machine
+role: test
+agent: claude
+---
+
+Body
+`
+    writeFileSync(join(t.root, 'manifest', 'custom', 'actors', 'something-else.md'), content)
+    const registry = await loadRegistry(t.root, undefined, t.root + '/empty-local')
+    assert.ok(registry.has('alice'), 'frontmatter name="alice" should win over filename "something-else"')
+    assert.equal(registry.has('something-else'), false, 'filename should NOT be the registry key when frontmatter overrides')
+  })
+
+  it('no frontmatter name → filename is fallback (v1.10 back-compat)', async () => {
+    const t = freshTransport()
+    // Don't include `name:` field
+    const content = `---
+type: machine
+role: test
+agent: claude
+---
+
+Body
+`
+    writeFileSync(join(t.root, 'manifest', 'custom', 'actors', 'fallback-name.md'), content)
+    const registry = await loadRegistry(t.root, undefined, t.root + '/empty-local')
+    assert.ok(registry.has('fallback-name'))
+  })
+
+  it('invalid frontmatter name (UPPERCASE) → skipped with error (no silent fallback to filename)', async () => {
+    const t = freshTransport()
+    const content = `---
+name: ALICE-1
+type: machine
+role: test
+agent: claude
+---
+`
+    // Filename is valid; frontmatter is not. Frontmatter is authoritative
+    // when present — invalid frontmatter rejects rather than silently
+    // demoting to filename (otherwise operators who typo'd would see
+    // unexpected actor names appear).
+    writeFileSync(join(t.root, 'manifest', 'custom', 'actors', 'alice-1.md'), content)
+    const registry = await loadRegistry(t.root, undefined, t.root + '/empty-local')
+    assert.equal(registry.has('alice-1'), false, 'invalid frontmatter name should NOT silent-demote to filename')
+    assert.equal(registry.has('ALICE-1'), false, 'invalid frontmatter name should also not be registered')
+  })
+
+  it('multi-op: UPPERCASE filename + frontmatter name → qualified canonical address', async () => {
+    const t = freshTransport()
+    const content = `---
+name: dart-thrower-7
+type: machine
+role: test
+agent: opencode
+---
+`
+    writeFileSync(join(t.root, 'manifest', 'custom', 'actors', 'DART-THROWER-07.md'), content)
+    const registry = await loadRegistry(t.root, 'steve', t.root + '/empty-local')
+    assert.ok(registry.has('dart-thrower-7@steve'), 'frontmatter name canonicalises to dart-thrower-7@steve')
+    assert.equal(registry.get('dart-thrower-7@steve')!.role, 'dart-thrower')
+    assert.equal(registry.get('dart-thrower-7@steve')!.instance, 7)
+  })
+
+  it('empty frontmatter name (just whitespace) → filename fallback', async () => {
+    const t = freshTransport()
+    const content = `---
+name: "  "
+type: machine
+role: test
+agent: claude
+---
+`
+    writeFileSync(join(t.root, 'manifest', 'custom', 'actors', 'fall-back.md'), content)
+    const registry = await loadRegistry(t.root, undefined, t.root + '/empty-local')
+    assert.ok(registry.has('fall-back'))
+  })
+})
+
 describe('loadRegistry — operator-scoped layer (v1.4.0-alpha.1+)', () => {
   it('operator-scoped profiles load when operator handle matches', async () => {
     const t = freshTransport()
