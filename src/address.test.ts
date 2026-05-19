@@ -17,10 +17,24 @@ describe('parseAddress — human form (bare name)', () => {
     assert.match(r.message, /reserved for pool instances/)
   })
 
-  it('rejects a bare name with invalid characters', () => {
+  it('case-insensitive (v1.12+): uppercase folds to lowercase', () => {
+    // v1.12.0+ — canonicalize-on-parse. UPPERCASE is no longer a failure;
+    // any case folds to the canonical lowercase form. The NAME_TOKEN regex
+    // still rejects truly-invalid characters (spaces, underscores,
+    // leading digits) — see the next test.
     const r = parseAddress('Steve')
-    assert.ok(isAddressError(r))
-    assert.match(r.message, /kebab-case/)
+    assert.ok(!isAddressError(r))
+    assert.deepEqual(r, { kind: 'human', name: 'steve' })
+    assert.deepEqual(parseAddress('STEVE'), { kind: 'human', name: 'steve' })
+    assert.deepEqual(parseAddress('StEvE'), { kind: 'human', name: 'steve' })
+  })
+
+  it('still rejects bare names with genuinely invalid characters', () => {
+    // Spaces, underscores, leading digits — actually invalid grammar,
+    // not just non-lowercase. v1.12 case-folding does not soften these.
+    assert.ok(isAddressError(parseAddress('two words')))
+    assert.ok(isAddressError(parseAddress('snake_case')))
+    assert.ok(isAddressError(parseAddress('1leading-digit')))
   })
 
   it('rejects empty input', () => {
@@ -78,10 +92,18 @@ describe('parseAddress — machine form (role@operator)', () => {
     assert.match(r.message, /multiple "@"/)
   })
 
-  it('rejects invalid operator handle', () => {
-    const r = parseAddress('alice@Steve')
-    assert.ok(isAddressError(r))
-    assert.match(r.message, /invalid operator/)
+  it('uppercase operator folds to lowercase (v1.12+)', () => {
+    // Pre-v1.12 this rejected; post-v1.12 case is case-folded everywhere.
+    assert.deepEqual(parseAddress('alice@Steve'), {
+      kind: 'machine',
+      role: 'alice',
+      operator: 'steve',
+    })
+  })
+
+  it('still rejects truly invalid operator handles', () => {
+    assert.ok(isAddressError(parseAddress('alice@two words')))
+    assert.ok(isAddressError(parseAddress('alice@snake_case')))
   })
 })
 
@@ -148,10 +170,18 @@ describe('parseAddress — instance tag (role@operator/tag)', () => {
     assert.match(r.message, /invalid instance tag/)
   })
 
-  it('rejects invalid tag', () => {
-    const r = parseAddress('alice@steve/CACHY')
-    assert.ok(isAddressError(r))
-    assert.match(r.message, /invalid instance tag/)
+  it('uppercase tag folds to lowercase (v1.12+)', () => {
+    assert.deepEqual(parseAddress('alice@steve/CACHY'), {
+      kind: 'machine',
+      role: 'alice',
+      operator: 'steve',
+      instance: { kind: 'tag', tag: 'cachy' },
+    })
+  })
+
+  it('still rejects truly invalid tags', () => {
+    assert.ok(isAddressError(parseAddress('alice@steve/two words')))
+    assert.ok(isAddressError(parseAddress('alice@steve/snake_case')))
   })
 
   it('rejects combining -N and /tag on same address', () => {

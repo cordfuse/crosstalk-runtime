@@ -95,9 +95,20 @@ describe('validateTarget — invalid grammar', () => {
     if (r.ok === false) assert.equal(r.kind, 'invalid')
   })
 
-  it('flags upper-case names', () => {
+  it('upper-case names are case-folded (v1.12+); rejected only as unknown if missing from profiles', () => {
+    // Pre-v1.12: "Alice" was 'invalid' (grammar). Post-v1.12: folds to
+    // "alice" — valid grammar, so the verdict is 'unknown' only if
+    // there's no `alice` profile (no longer an address-shape rejection).
     const r = validateTarget('Alice', [], undefined)
     assert.equal(r.ok, false)
-    if (r.ok === false) assert.equal(r.kind, 'invalid')
+    if (r.ok === false) assert.equal(r.kind, 'unknown',
+      'upper-case is no longer an invalid-grammar rejection in v1.12+; it folds to lowercase and resolves like any bare name')
+  })
+
+  it('case-folded name MATCHES a profile by canonical equality', () => {
+    // The directive in action: typing "ALICE" should resolve to the
+    // profile registered as "alice".
+    const r = validateTarget('ALICE', [entry('alice', 'machine')], undefined)
+    assert.equal(r.ok, true, 'ALICE case-folds to alice and matches the profile')
   })
 })

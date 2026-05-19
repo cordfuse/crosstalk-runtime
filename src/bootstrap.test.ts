@@ -68,11 +68,22 @@ describe('shouldRunBootstrapPass — designated coordinator (v1.4.0-alpha.2+)', 
   })
 
   describe('invalid address', () => {
-    it('rejects malformed coordinator-address with explanation', () => {
+    it('rejects truly malformed coordinator-address with explanation', () => {
+      // v1.12+: UPPER@steve folds to upper@steve and parses cleanly. The
+      // malformed-address path now exercises a genuinely-broken grammar.
       const root = emptyTransport()
-      const decision = shouldRunBootstrapPass(root, emptyRegistry, 'steve', 'UPPER@steve', undefined)
+      const decision = shouldRunBootstrapPass(root, emptyRegistry, 'steve', 'two words@steve', undefined)
       assert.equal(decision.should, false)
       assert.match(decision.reason, /malformed/)
+    })
+
+    it('uppercase coordinator-address folds and matches case-insensitively (v1.12+)', () => {
+      // The directive: actors fully case-agnostic. `UPPER@STEVE` in config
+      // should match a daemon whose operator handle is `steve`.
+      const root = emptyTransport()
+      const decision = shouldRunBootstrapPass(root, emptyRegistry, 'steve', 'UPPER@STEVE', undefined)
+      assert.equal(decision.should, true, 'case-folded operator should match this daemon')
+      assert.equal(decision.coordinatorActor, 'upper@steve', 'coordinator addr stored as canonical lowercase')
     })
 
   })

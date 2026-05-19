@@ -126,9 +126,13 @@ describe('generateSigningKey + loadPrivateSigningKey', () => {
     assert.equal(mode, 0o600, 'private key should be mode 600')
   })
 
-  it('rejects invalid addresses', () => {
-    assert.throws(() => generateSigningKey('Invalid'), /invalid address/)
+  it('rejects truly invalid addresses (genuine grammar errors)', () => {
+    // v1.12+: 'Invalid' (uppercase) is now case-folded to 'invalid' and accepted.
+    // Pool-instance-as-human is still rejected (the address grammar reserves
+    // trailing `-<int>` for pool instances; humans aren't pools).
     assert.throws(() => generateSigningKey('alice-1'), /reserved for pool instances/)
+    assert.throws(() => generateSigningKey('two words'), /invalid address/)
+    assert.throws(() => generateSigningKey('snake_case'), /invalid address/)
   })
 
   it('returns null when loading a non-existent key', () => {

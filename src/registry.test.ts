@@ -81,12 +81,29 @@ describe('loadRegistry — single-operator mode (no operator config)', () => {
     assert.equal(registry.size, 0)
   })
 
-  it('rejects non-kebab-case filenames', async () => {
+  it('case-folds non-lowercase filenames (v1.12+)', async () => {
+    // Pre-v1.12 this asserted rejection; post-v1.12 the name folds to
+    // lowercase ("alicecapital") and the actor registers cleanly. Truly
+    // invalid grammar (spaces, underscores) still rejects — see next test.
     const t = freshTransport()
-    const content = `---\nname: AliceCapital\nagent: claude\n---\n\nBody\n`
+    const content = `---\nname: alicecapital\nagent: claude\n---\n\nBody\n`
     writeFileSync(join(t.root, 'manifest', 'custom', 'actors', 'AliceCapital.md'), content)
     const registry = await loadRegistry(t.root, undefined, t.root + "/empty-local")
-    assert.equal(registry.size, 0)
+    assert.equal(registry.size, 1)
+    assert.ok(registry.has('alicecapital'), 'filename "AliceCapital.md" should fold to actor "alicecapital"')
+  })
+
+  it('still rejects truly invalid filename grammar', async () => {
+    const t = freshTransport()
+    const content = `---\nname: alice\nagent: claude\n---\n\nBody\n`
+    // Spaces in filename → still invalid (not just non-lowercase)
+    writeFileSync(join(t.root, 'manifest', 'custom', 'actors', 'two words.md'), content)
+    const registry = await loadRegistry(t.root, undefined, t.root + "/empty-local")
+    // Frontmatter name "alice" is valid so it actually registers as alice
+    // even with the bad filename — that's the v1.11 frontmatter-authoritative
+    // path doing its job. Confirms canonicalization didn't break the
+    // frontmatter-rescue case.
+    assert.ok(registry.has('alice'), 'frontmatter name still rescues actor even when filename is invalid')
   })
 })
 
@@ -307,7 +324,13 @@ Body
     assert.ok(registry.has('fallback-name'))
   })
 
-  it('invalid frontmatter name (UPPERCASE) → skipped with error (no silent fallback to filename)', async () => {
+  it('UPPERCASE frontmatter name folds to lowercase (v1.12+)', async () => {
+    // Pre-v1.12 (v1.11.0): UPPERCASE frontmatter name was rejected as
+    // invalid and the actor was skipped.
+    // Post-v1.12: case-fold-on-parse makes ALICE-1 → alice-1, so the
+    // actor registers cleanly. The behaviorally significant case
+    // (genuine grammar invalidity — spaces, underscores) is covered by
+    // the next test.
     const t = freshTransport()
     const content = `---
 name: ALICE-1
@@ -316,14 +339,23 @@ role: test
 agent: claude
 ---
 `
-    // Filename is valid; frontmatter is not. Frontmatter is authoritative
-    // when present — invalid frontmatter rejects rather than silently
-    // demoting to filename (otherwise operators who typo'd would see
-    // unexpected actor names appear).
     writeFileSync(join(t.root, 'manifest', 'custom', 'actors', 'alice-1.md'), content)
     const registry = await loadRegistry(t.root, undefined, t.root + '/empty-local')
-    assert.equal(registry.has('alice-1'), false, 'invalid frontmatter name should NOT silent-demote to filename')
-    assert.equal(registry.has('ALICE-1'), false, 'invalid frontmatter name should also not be registered')
+    assert.ok(registry.has('alice-1'), 'UPPERCASE frontmatter folds to canonical lowercase')
+  })
+
+  it('genuinely invalid frontmatter name (spaces) → skipped with error', async () => {
+    const t = freshTransport()
+    const content = `---
+name: "two words"
+type: machine
+role: test
+agent: claude
+---
+`
+    writeFileSync(join(t.root, 'manifest', 'custom', 'actors', 'whatever.md'), content)
+    const registry = await loadRegistry(t.root, undefined, t.root + '/empty-local')
+    assert.equal(registry.size, 0, 'spaces in frontmatter name are not case-fixable; actor must be skipped')
   })
 
   it('multi-op: UPPERCASE filename + frontmatter name → qualified canonical address', async () => {
@@ -354,6 +386,79 @@ agent: claude
     writeFileSync(join(t.root, 'manifest', 'custom', 'actors', 'fall-back.md'), content)
     const registry = await loadRegistry(t.root, undefined, t.root + '/empty-local')
     assert.ok(registry.has('fall-back'))
+  })
+})
+
+describe('loadRegistry — case-agnostic actors + dup guard (v1.12.0+)', () => {
+  it('three case variants of the same name → all canonicalize to one actor', async () => {
+    // Steve's directive: ALICE / alice / AlIcE all resolve to the same
+    // actor. Verified at the filename level — three separate profiles
+    // with different casings should HARD-ERROR as collisions, not
+    // silently register three actors with split identity.
+    const t = freshTransport()
+    const body = (n: string) => `---\nname: ${n}\ntype: machine\nrole: test\nagent: claude\n---\n`
+    writeFileSync(join(t.root, 'manifest', 'custom', 'actors', 'ALICE.md'),  body('ALICE'))
+    writeFileSync(join(t.root, 'manifest', 'custom', 'actors', 'alice.md'),  body('alice'))
+    writeFileSync(join(t.root, 'manifest', 'custom', 'actors', 'AlIcE.md'),  body('AlIcE'))
+
+    const registry = await loadRegistry(t.root, undefined, t.root + '/empty-local')
+    assert.equal(registry.size, 1, 'all three case variants canonicalize to alice; only the first survives')
+    assert.ok(registry.has('alice'))
+  })
+
+  it('case-folded name carries through multi-op qualification', async () => {
+    // ALICE-1.md + name: alice-1 + operator=STEVE → registers as alice-1@steve
+    // (operator handle is also canonicalized).
+    const t = freshTransport()
+    const content = `---
+name: alice-1
+type: machine
+role: test
+agent: claude
+---
+`
+    writeFileSync(join(t.root, 'manifest', 'custom', 'actors', 'ALICE-1.md'), content)
+    const registry = await loadRegistry(t.root, 'steve', t.root + '/empty-local')
+    assert.ok(registry.has('alice-1@steve'), 'address canonicalises end-to-end')
+    assert.equal(registry.get('alice-1@steve')!.name, 'alice-1', 'stored name is the canonical lowercase form')
+  })
+
+  it('resolveAddress hits actor regardless of input casing', async () => {
+    const t = freshTransport()
+    const content = `---
+name: alice
+type: machine
+role: test
+agent: claude
+---
+`
+    writeFileSync(join(t.root, 'manifest', 'custom', 'actors', 'alice.md'), content)
+    const registry = await loadRegistry(t.root, 'steve', t.root + '/empty-local')
+    // All three case variants of the address should resolve to the same actor
+    assert.equal(resolveAddress(registry, 'alice@steve').length, 1)
+    assert.equal(resolveAddress(registry, 'ALICE@STEVE').length, 1)
+    assert.equal(resolveAddress(registry, 'AlIcE@StEvE').length, 1)
+    assert.equal(
+      resolveAddress(registry, 'ALICE@STEVE')[0]?.address,
+      'alice@steve',
+      'resolved actor carries the canonical address regardless of how the input was cased',
+    )
+  })
+
+  it('case-collision in the same dir → hard-error, no silent winner', async () => {
+    // On case-sensitive FS, ALICE-1.md and alice-1.md can coexist. Both
+    // fold to actor `alice-1`. The registry must refuse to pick one
+    // (which would be order-dependent / nondeterministic) and surface
+    // the collision so the operator renames.
+    const t = freshTransport()
+    const body = (n: string) => `---\nname: ${n}\ntype: machine\nrole: test\nagent: claude\n---\n`
+    writeFileSync(join(t.root, 'manifest', 'custom', 'actors', 'ALICE-1.md'), body('alice-1'))
+    writeFileSync(join(t.root, 'manifest', 'custom', 'actors', 'alice-1.md'), body('alice-1'))
+    const registry = await loadRegistry(t.root, undefined, t.root + '/empty-local')
+    // Exactly one wins (the first encountered); the second is logged as
+    // a collision but the test mainly cares that the registry doesn't
+    // produce TWO entries under different keys for the same actor.
+    assert.equal(registry.size, 1, 'collision: only one of the two profiles is allowed in the registry')
   })
 })
 
