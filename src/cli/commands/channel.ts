@@ -233,7 +233,7 @@ function registerChannelShow(parent: Command): void {
 
 async function runChannelShow(query: string, opts: ChannelShowOptions): Promise<void> {
   const config = await loadConfig()
-  const guid = resolveChannel(config.transport, query)
+  const guid = resolveChannelOrSystem(config.transport, query)
   const channelDir = join(config.transport, 'channels', guid)
 
   let messages = readChannelMessages(channelDir)
@@ -343,7 +343,7 @@ function registerChannelTail(parent: Command): void {
 
 async function runChannelTail(query: string, opts: ChannelTailOptions): Promise<void> {
   const config = await loadConfig()
-  const guid = resolveChannel(config.transport, query)
+  const guid = resolveChannelOrSystem(config.transport, query)
   const channelDir = join(config.transport, 'channels', guid)
 
   // v0.8.1+ decrypt-on-read setup. opts.decrypt defaults to true; --no-decrypt sets it to false.
@@ -396,6 +396,30 @@ function globMatch(name: string, pattern: string): boolean {
     'i'
   )
   return re.test(name)
+}
+
+/**
+ * v1.13+ — channel resolver that accepts the reserved `_`-prefixed
+ * system channels (`_system`, etc.) as literal directory names.
+ *
+ * `resolveChannel` (in cli/lib/channel.ts) routes through `listChannels`
+ * which hides `_`-prefixed entries by default, so `channel show _system`
+ * printed "No channel matches" even though the daemon writes presence,
+ * bootstrap, and quorum-failed events there. This wrapper carves out the
+ * underscore prefix — reserved per transport.ts SYSTEM_CHANNEL — and
+ * passes everything else through unchanged.
+ */
+function resolveChannelOrSystem(transport: string, query: string): string {
+  if (query.startsWith('_')) {
+    const systemDir = join(transport, 'channels', query)
+    if (!existsSync(systemDir)) {
+      console.error(`✗ System channel '${query}' has no directory at ${systemDir}`)
+      console.error(`  (Nothing has been written there yet — system channels are created on first write.)`)
+      process.exit(1)
+    }
+    return query
+  }
+  return resolveChannel(transport, query)
 }
 
 // Filename + datePath helpers extracted to src/filenames.ts in v0.7.x
