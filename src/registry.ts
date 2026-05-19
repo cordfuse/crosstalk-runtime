@@ -129,22 +129,53 @@ async function loadActorsFromDir(
 
   for (const file of files) {
     if (!file.endsWith('.md')) continue;
-    const name = file.slice(0, -3);
+    const filenameStem = file.slice(0, -3);
+
+    // v1.11.0-alpha.1+ — frontmatter `name:` is AUTHORITATIVE over the
+    // filename when present and valid. Filename becomes cosmetic; lets
+    // operators run any filename convention (e.g. UPPERCASE.md as part
+    // of an operator's repo-wide style) while the actor's name + address
+    // stay kebab-grammar-clean. Pre-v1.11 the filename was the source of
+    // truth, which meant a profile written as `ALICE-1.md` + `name: alice-1`
+    // got silently skipped (filename failed isKebabCase) even though
+    // operators reasonably expected `name:` to do what its name implies.
+    //
+    // Need to read the file BEFORE we know the real name (frontmatter
+    // contains the name). That's a minor perf change — pre-v1.11 we
+    // could skip the read on filename-grammar failure. With frontmatter
+    // as fallback, the read happens unconditionally per .md file. Cheap.
+    let content: string;
+    try {
+      content = await readFile(join(dir, file), 'utf-8');
+    } catch {
+      continue;
+    }
+    const { data } = parseFrontmatter(content);
+
+    const frontmatterName = typeof data.name === 'string' ? data.name.trim() : '';
+    const name = frontmatterName || filenameStem;
 
     const parsed = parseActorFilename(name);
     if (!parsed) {
-      console.error(`[registry] "${name}" is not a valid actor name — actor skipped. Rename the file to use kebab-case alphanumeric.`);
+      const src = frontmatterName
+        ? `frontmatter \`name: ${name}\` in ${file}`
+        : `filename "${file}"`;
+      console.error(`[registry] ${src} is not a valid actor name — actor skipped. Add \`name: <kebab-case>\` to frontmatter or rename the file.`);
       continue;
     }
-
-    const content = await readFile(join(dir, file), 'utf-8');
-    const { data } = parseFrontmatter(content);
 
     const agent = typeof data.agent === 'string' ? data.agent : undefined;
     const command = typeof data.command === 'string' ? data.command : undefined;
 
     // Must have either agent (native invocation) or command (custom adapter)
     if (!agent && !command) continue;
+
+    // Heads-up for operators using a non-kebab filename: log once at load
+    // so a `crosstalk channel show` or `actor list` followup makes sense
+    // (registry sees `alice-1`, filename on disk is `ALICE-1.md`).
+    if (frontmatterName && filenameStem !== frontmatterName) {
+      console.log(`[registry] ${file}: filename is cosmetic — using frontmatter \`name: ${frontmatterName}\` as actor identity`);
+    }
 
     warnUnprefixedCustomFields(name, data);
 

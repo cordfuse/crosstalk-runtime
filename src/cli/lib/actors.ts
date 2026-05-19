@@ -48,22 +48,33 @@ export function scanActorLayer(transport: string, layer: ActorLayer, operator?: 
   const out: ActorEntry[] = []
   for (const file of readdirSync(dir)) {
     if (!file.endsWith('.md')) continue
-    const name = file.slice(0, -3)
+    const filenameStem = file.slice(0, -3)
     const fullPath = join(dir, file)
+    // v1.11.0-alpha.1+ — frontmatter `name:` is authoritative when present
+    // and valid; matches the runtime registry's resolution. Pre-v1.11 the
+    // CLI scanner used filename as the authoritative name, which meant
+    // `actor list` could show an actor that the runtime registry refused
+    // to load (filename invalid grammar) — the "actor list shows it but
+    // dispatch doesn't fire it" divergence Mac flagged during UAT.
+    let data: Record<string, unknown> = {}
+    let parseError: string | undefined
+    try {
+      const content = readFileSync(fullPath, 'utf-8')
+      data = parseFrontmatter(content).data
+    } catch (err) {
+      parseError = err instanceof Error ? err.message : String(err)
+    }
+    const frontmatterName = typeof data.name === 'string' ? data.name.trim() : ''
+    const name = frontmatterName || filenameStem
+
     const entry: ActorEntry = {
       name,
       layer,
       file: fullPath,
       validKebabName: isKebabCase(name),
-      data: {},
+      data,
     }
-    try {
-      const content = readFileSync(fullPath, 'utf-8')
-      const { data } = parseFrontmatter(content)
-      entry.data = data
-    } catch (err) {
-      entry.parseError = err instanceof Error ? err.message : String(err)
-    }
+    if (parseError) entry.parseError = parseError
     out.push(entry)
   }
   return out
