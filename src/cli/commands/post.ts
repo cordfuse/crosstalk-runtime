@@ -38,7 +38,7 @@ import { loadConfig } from '../../config.js'
 import { messageDatePath, messageFilename } from '../../filenames.js'
 import { resolveChannel } from '../lib/channel.js'
 import { scanAllLayers, type ActorEntry } from '../lib/actors.js'
-import { parseAddress, isAddressError } from '../../address.js'
+import { parseAddress, isAddressError, formatAddress, canonicalizeActorName } from '../../address.js'
 import { pushWithRetry } from '../../git.js'
 
 export interface PostOptions {
@@ -171,7 +171,20 @@ export async function runPost(opts: PostOptions): Promise<void> {
   const datePath  = messageDatePath(now)
   const targetDir = join(config.transport, 'channels', channelGuid, datePath)
   const targetFile = join(targetDir, filename)
-  const toField   = targets === 'all' ? 'all' : (targets as string[]).join(', ')
+  // v1.13+ — fold the persisted `to:` field to the canonical address form.
+  // Mac's v1.12 verify caught `post --to ALICE@MAC` writing `to: ALICE@MAC`
+  // into the message frontmatter, even though every identity-bearing path
+  // (dispatch target, response `from:`, registry lookup, ed25519 signing)
+  // had already been canonicalised by v1.11/v1.12. parseAddress already
+  // lowercases on entry, so round-tripping through formatAddress yields
+  // the canonical lower-case string. Parse failures fall back to the raw
+  // target (it was either `all` or already accepted by --allow-unknown-
+  // targets), and `from` is folded with the bare canonicalizer since it
+  // may be a human bare-name like "Steve".
+  const fromCanonical = canonicalizeActorName(from)
+  const toField   = targets === 'all'
+    ? 'all'
+    : (targets as string[]).map(canonicalizeTargetForFrontmatter).join(', ')
 
   // v0.8.0-alpha.5+ encryption path
   let body = opts.body
@@ -238,7 +251,7 @@ export async function runPost(opts: PostOptions): Promise<void> {
   }
 
   let messageContent = composeMessage({
-    from,
+    from:      fromCanonical,
     to:        toField,
     timestamp: now.toISOString(),
     type:      'text',
@@ -273,7 +286,7 @@ export async function runPost(opts: PostOptions): Promise<void> {
   const relPath = `channels/${channelGuid}/${datePath}/${filename}`
   if (!gitCmd(config.transport, ['add', relPath]))                        process.exit(1)
 
-  const commitMsg = `msg: ${from} → ${toField}`
+  const commitMsg = `msg: ${fromCanonical} → ${toField}`
   if (!gitCmd(config.transport, ['commit', '-m', commitMsg]))             process.exit(1)
   console.log(`✓ Committed: ${commitMsg}`)
 
@@ -335,6 +348,23 @@ function composeMessage(m: MessageInputs): string {
 function gitCmd(cwd: string, args: string[]): boolean {
   const result = spawnSync('git', args, { cwd, stdio: 'inherit' })
   return result.status === 0
+}
+
+/**
+ * v1.13+ — fold a single `--to` target to its canonical wire form.
+ *
+ * parseAddress lowercases on entry, so a successful parse can be round-
+ * tripped through formatAddress to get the canonical lower-case string.
+ * If parse fails (e.g. --allow-unknown-targets is in play and the value
+ * is structurally invalid as an address), we fall back to a bare
+ * lower-case fold to preserve the message's record-of-intent without
+ * leaking raw case into the frontmatter that the identity-bearing path
+ * already canonicalises.
+ */
+function canonicalizeTargetForFrontmatter(target: string): string {
+  const parsed = parseAddress(target)
+  if (isAddressError(parsed)) return canonicalizeActorName(target)
+  return formatAddress(parsed)
 }
 
 /** Validate a single `--to` target against the local profile set + this
