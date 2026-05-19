@@ -54,13 +54,39 @@ const NAME_TOKEN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
  * role. Captures: role-without-suffix, integer. */
 const INSTANCE_INDEX_SUFFIX = /^(.+)-(\d+)$/;
 
+/** v1.12.0+ — canonical lowercase form of an actor name. The single
+ * source of truth for case-folding. Use this anywhere an actor name
+ * enters the system from operator-controlled input (filename,
+ * frontmatter `name:`, CLI args, message `from:`/`to:` fields). After
+ * canonicalization, every downstream consumer (dispatch keys, cursor
+ * paths, ed25519 identity, pool stems, ROE refs, quorum responders)
+ * sees the same canonical form and equality holds by construction.
+ *
+ * Steve's directive: actors fully case-agnostic — ALICE, alice, AlIcE
+ * all resolve to the same actor. NOT done via case-insensitive regex
+ * (which would leave non-folded casing in dispatch keys, splitting
+ * identity). Done by folding at the parse chokepoint instead. */
+export function canonicalizeActorName(raw: string): string {
+  return raw.toLowerCase();
+}
+
 /** Parse an actor address. Returns a ParsedAddress on success or
- * AddressParseError on failure. Never throws. */
+ * AddressParseError on failure. Never throws.
+ *
+ * v1.12.0+ — input is lowercased before grammar validation. The
+ * `NAME_TOKEN` regex still requires `^[a-z]…` (genuinely-invalid forms
+ * like spaces / underscores / leading-digit names still reject); casing
+ * just stops being a failure mode. `ALICE@MAC` → `alice@mac`,
+ * `AlIcE@Mac` → `alice@mac`. */
 export function parseAddress(input: string): ParsedAddress | AddressParseError {
   if (typeof input !== 'string') {
     return { kind: 'error', input: String(input), message: 'address must be a string' };
   }
-  const raw = input.trim();
+  // v1.12.0+ — fold to canonical lowercase FIRST. Everything downstream
+  // sees only canonical input, including the NAME_TOKEN regex (which
+  // still requires `^[a-z]…` and now passes for any case the operator
+  // typed).
+  const raw = canonicalizeActorName(input.trim());
   if (!raw) {
     return { kind: 'error', input, message: 'address is empty' };
   }

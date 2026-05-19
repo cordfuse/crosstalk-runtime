@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { parseFrontmatter } from '../../frontmatter.js'
 import { isKebabCase } from '../../registry.js'
+import { canonicalizeActorName } from '../../address.js'
 
 export type ActorLayer = 'framework' | 'custom' | 'operator' | 'local'
 
@@ -64,8 +65,9 @@ export function scanActorLayer(transport: string, layer: ActorLayer, operator?: 
     } catch (err) {
       parseError = err instanceof Error ? err.message : String(err)
     }
+    // v1.11+ frontmatter authoritative; v1.12+ also canonicalized lowercase.
     const frontmatterName = typeof data.name === 'string' ? data.name.trim() : ''
-    const name = frontmatterName || filenameStem
+    const name = canonicalizeActorName(frontmatterName || filenameStem)
 
     const entry: ActorEntry = {
       name,

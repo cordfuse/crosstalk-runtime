@@ -67,7 +67,7 @@ import { MESSAGE_FILE_RE } from './filenames.js'
 import type { Registry } from './registry.js'
 import { MACHINE_ID } from './system.js'
 import { machineGitEmail } from './transports/git.js'
-import { parseAddress, isAddressError } from './address.js'
+import { parseAddress, isAddressError, canonicalizeActorName, formatAddress } from './address.js'
 
 const YEAR_RE = /^\d{4}$/
 const DD_RE = /^\d{2}$/
@@ -354,11 +354,19 @@ export function listAllActorProfiles(
     try { files = readdirSync(dir) } catch { continue }
     for (const f of files) {
       if (!f.endsWith('.md') || f.startsWith('_')) continue
-      const name = f.slice(0, -3)
+      const filenameStem = f.slice(0, -3)
       let content: string
       try { content = readFileSync(join(dir, f), 'utf-8') } catch { continue }
       try {
         const { data } = parseFrontmatter(content)
+        // v1.11+ frontmatter name authoritative; v1.12+ also canonicalized
+        // lowercase. This is the 4th lens mac flagged in the v1.11 UAT
+        // (bootstrap.ts was deriving coordinator names from raw filenames
+        // while the other three lenses had been fixed). Routing through
+        // the same canonicalizeActorName ensures session-open coordinator
+        // identity matches dispatch registry identity exactly.
+        const frontmatterNameRaw = typeof data.name === 'string' ? data.name.trim() : ''
+        const name = canonicalizeActorName(frontmatterNameRaw || filenameStem)
         const isHuman = String(data.type ?? '') === 'human'
         // Machine actors get @operator qualification in multi-op mode;
         // humans always stay bare; single-op mode (no operator) keeps
@@ -436,9 +444,16 @@ export function shouldRunBootstrapPass(
       }
       return { should: false, reason: `config bootstrap.coordinator-address designates human '${parsed.name}'; this daemon's default-human-actor (${defaultHumanActor ?? 'unset'}) does not match — another machine coordinates` }
     }
-    // machine address — operator part must match
-    if (parsed.operator === operator) {
-      return { should: true, coordinatorActor: coordinatorAddress, reason: `config bootstrap.coordinator-address designates '${coordinatorAddress}' and this daemon's operator handle matches` }
+    // machine address — operator part must match (parseAddress already
+    // canonicalized both `parsed.operator` and our `operator` via the
+    // address-grammar v1.12+ fold; comparison is safe).
+    if (parsed.operator === canonicalizeActorName(operator ?? '')) {
+      // v1.12+ — return the CANONICAL form via formatAddress so downstream
+      // (session-open `from:` field, signed identity, log lines) uses the
+      // lowercased address regardless of how the operator typed it in
+      // config.toml. formatAddress handles pool-instance suffix correctly.
+      const canonical = formatAddress(parsed)
+      return { should: true, coordinatorActor: canonical, reason: `config bootstrap.coordinator-address designates '${coordinatorAddress}' and this daemon's operator handle matches` }
     }
     return { should: false, reason: `config bootstrap.coordinator-address designates '${coordinatorAddress}'; this daemon's operator ('${operator ?? 'unset'}') does not match — another machine coordinates` }
   }

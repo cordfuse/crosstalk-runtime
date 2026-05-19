@@ -3,7 +3,7 @@ import { homedir } from 'os';
 import { readdir, readFile } from 'fs/promises';
 import { watch } from 'fs';
 import { parseFrontmatter } from './frontmatter.js';
-import { parseAddress, isAddressError, formatAddress, validateBareRoleName } from './address.js';
+import { parseAddress, isAddressError, formatAddress, validateBareRoleName, canonicalizeActorName } from './address.js';
 
 const LOCAL_ACTORS_DIR = join(homedir(), '.crosstalk', 'actors');
 const FRAMEWORK_ACTORS_SUBPATH = join('manifest', 'framework', 'actors');
@@ -127,23 +127,24 @@ async function loadActorsFromDir(
     return;
   }
 
+  // v1.12.0+ — track canonical names registered from THIS directory so
+  // we can hard-error on case-collision (e.g. on case-sensitive FS,
+  // `ALICE-1.md` + `alice-1.md` both fold to `alice-1` — ambiguous,
+  // operator must rename one).
+  const registeredInDir = new Map<string, string>();  // canonicalName → originating file
+
   for (const file of files) {
     if (!file.endsWith('.md')) continue;
     const filenameStem = file.slice(0, -3);
 
-    // v1.11.0-alpha.1+ — frontmatter `name:` is AUTHORITATIVE over the
-    // filename when present and valid. Filename becomes cosmetic; lets
-    // operators run any filename convention (e.g. UPPERCASE.md as part
-    // of an operator's repo-wide style) while the actor's name + address
-    // stay kebab-grammar-clean. Pre-v1.11 the filename was the source of
-    // truth, which meant a profile written as `ALICE-1.md` + `name: alice-1`
-    // got silently skipped (filename failed isKebabCase) even though
-    // operators reasonably expected `name:` to do what its name implies.
-    //
-    // Need to read the file BEFORE we know the real name (frontmatter
-    // contains the name). That's a minor perf change — pre-v1.11 we
-    // could skip the read on filename-grammar failure. With frontmatter
-    // as fallback, the read happens unconditionally per .md file. Cheap.
+    // v1.11.0-alpha.1+ — frontmatter `name:` authoritative over filename.
+    // v1.12.0+ — name is also CANONICALIZED to lowercase at this entry
+    // point. `ALICE-1.md` → registry key `alice-1` (or `alice-1@op` in
+    // multi-op). Steve's directive: actors fully case-agnostic, every
+    // case-variant resolves to the same identity. Canonicalize-at-parse
+    // means every downstream consumer (dispatch keys, cursor paths,
+    // ed25519 identity, pool stems, ROE refs) sees the same form by
+    // construction — no per-lens case-handling needed.
     let content: string;
     try {
       content = await readFile(join(dir, file), 'utf-8');
@@ -152,17 +153,29 @@ async function loadActorsFromDir(
     }
     const { data } = parseFrontmatter(content);
 
-    const frontmatterName = typeof data.name === 'string' ? data.name.trim() : '';
-    const name = frontmatterName || filenameStem;
+    const frontmatterNameRaw = typeof data.name === 'string' ? data.name.trim() : '';
+    const rawName = frontmatterNameRaw || filenameStem;
+    const name = canonicalizeActorName(rawName);
 
     const parsed = parseActorFilename(name);
     if (!parsed) {
-      const src = frontmatterName
-        ? `frontmatter \`name: ${name}\` in ${file}`
+      const src = frontmatterNameRaw
+        ? `frontmatter \`name: ${rawName}\` in ${file}`
         : `filename "${file}"`;
-      console.error(`[registry] ${src} is not a valid actor name — actor skipped. Add \`name: <kebab-case>\` to frontmatter or rename the file.`);
+      console.error(`[registry] ${src} is not a valid actor name — actor skipped. Names must be kebab-case alphanumeric (any case in the source is folded to lowercase).`);
       continue;
     }
+
+    // v1.12.0+ dup-collision guard. On case-sensitive FS two profiles
+    // can canonicalize to the same name; refuse to register either
+    // until the operator picks one. Skipping silently would make
+    // dispatch nondeterministic depending on directory walk order.
+    const prevFile = registeredInDir.get(name);
+    if (prevFile) {
+      console.error(`[registry] case-collision: "${file}" and "${prevFile}" both canonicalize to actor "${name}". Rename one (or set explicit frontmatter \`name:\` on one) so the canonical names differ.`);
+      continue;
+    }
+    registeredInDir.set(name, file);
 
     const agent = typeof data.agent === 'string' ? data.agent : undefined;
     const command = typeof data.command === 'string' ? data.command : undefined;
@@ -170,11 +183,15 @@ async function loadActorsFromDir(
     // Must have either agent (native invocation) or command (custom adapter)
     if (!agent && !command) continue;
 
-    // Heads-up for operators using a non-kebab filename: log once at load
-    // so a `crosstalk channel show` or `actor list` followup makes sense
-    // (registry sees `alice-1`, filename on disk is `ALICE-1.md`).
-    if (frontmatterName && filenameStem !== frontmatterName) {
-      console.log(`[registry] ${file}: filename is cosmetic — using frontmatter \`name: ${frontmatterName}\` as actor identity`);
+    // Heads-up for operators using a non-canonical filename: log once at
+    // load so a `crosstalk channel show` or `actor list` followup makes
+    // sense (registry sees `alice-1`, filename on disk is `ALICE-1.md`).
+    // Compare against the canonical name, since v1.12+ folds the
+    // filename too — `ALICE-1.md` vs canonical `alice-1` is a real
+    // divergence to surface; `alice-1.md` vs `alice-1` is not.
+    if (filenameStem !== name) {
+      const source = frontmatterNameRaw ? `frontmatter \`name: ${rawName}\`` : `filename folded to lowercase`;
+      console.log(`[registry] ${file}: actor identity is "${name}" (${source})`);
     }
 
     warnUnprefixedCustomFields(name, data);
