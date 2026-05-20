@@ -117,21 +117,49 @@ function spawnGemini(actor: ActorConfig, messageContent: string, agentEnv?: Reco
   // Gemini has no --system-prompt flag; bake personality into the prompt body
   const prompt = `${personality}\n\n---\n\nThe following message arrived in your channel:\n\n${messageContent}\n\nRespond in character. Write only your response.`;
 
-  // v1.13+ — surface the headless-OAuth gotcha as a one-time hint per dispatch.
-  // Gemini CLI's OAuth flow is interactive; daemon children have no TTY, so
-  // a Gemini actor with only ~/.gemini/oauth_creds.json (no GEMINI_API_KEY)
-  // hangs on a login prompt until the dispatch timeout. The variable can be
-  // injected via process.env, [agents.env] in config.toml, or ~/.gemini/.env
-  // — checking the merged env catches all three.
-  const mergedEnv = buildAgentEnv(agentEnv);
-  if (!mergedEnv.GEMINI_API_KEY) {
-    console.log(`[dispatch] HINT: gemini actor "${actor.name}" has no GEMINI_API_KEY in env — headless dispatch may hang on OAuth prompt. Set the key in [agents.env] of config.toml or in ~/.gemini/.env.`);
-  }
+  // v1.14+ — the v1.13 [dispatch] HINT for missing GEMINI_API_KEY has been
+  // removed. The headless-OAuth claim it was warning about turned out to be
+  // wrong on closer inspection: `gemini -p` works fine on an OAuth'd account
+  // without an API key. The HINT was firing every dispatch on properly-
+  // configured machines, surfacing a non-problem as if it were one. Real
+  // misconfigs (no auth at all) still surface as normal dispatch failure in
+  // the daemon log via the agent's own error output.
 
   return spawn('gemini', ['-m', model, '-p', prompt, '-y', '--output-format', 'text'], {
     stdio: [...AGENT_STDIO],
-    env: mergedEnv,
+    env: buildAgentEnv(agentEnv),
     detached: true,  // see spawnClaude comment — process-group leader for kill-on-timeout
+  });
+}
+
+function spawnAntigravity(actor: ActorConfig, messageContent: string, agentEnv?: Record<string, string>): ChildProcess {
+  const personality = actor.personality ?? `You are ${actor.name}.`;
+  // agy 1.0 doesn't accept `-m <model>` — model is backend-selected per the
+  // user's Google account configuration. Personality folds into the prompt
+  // body (no --system-prompt flag); same shape as gemini/opencode.
+  const prompt = `${personality}\n\n---\n\nThe following message arrived in your channel:\n\n${messageContent}\n\nRespond in character. Write only your response.`;
+
+  // Antigravity CLI (`agy`) is Google's official Gemini CLI successor.
+  // Released 2026-05-19; standalone Gemini CLI's OAuth/unpaid tier sunsets
+  // 2026-06-18. Paid `GEMINI_API_KEY` / Vertex Gemini stays alive past that
+  // date; the unpaid OAuth path that most cortex/crosstalk operators use
+  // does not. Adding agy as a co-equal dispatch path here lets operators
+  // migrate before the sunset.
+  //
+  // Auth: agy authenticates via Google Sign-In stored in the system keyring
+  // on first interactive run. The daemon inherits the operator's env, so the
+  // keyring is reachable from spawned children when the operator has
+  // authenticated `agy` once on this machine. (`agy --print` returns the
+  // model's response in plain text — no `--output-format` flag, no
+  // structured event stream. The watcher reads whatever stdout produces.)
+  // `--dangerously-skip-permissions` is always passed (parallel to spawnClaude
+  // / spawnOpenCode which do the same): the daemon is non-interactive, so any
+  // tool-permission prompt would hang until SIGTERM. Google adopted the
+  // Anthropic flag name verbatim.
+  return spawn('agy', ['--print', prompt, '--dangerously-skip-permissions'], {
+    stdio: [...AGENT_STDIO],
+    env: buildAgentEnv(agentEnv),
+    detached: true,  // process-group leader for kill-on-timeout (see spawnClaude)
   });
 }
 
@@ -339,6 +367,7 @@ export async function dispatch(
   try {
     proc = actor.agent === 'claude' ? spawnClaude(actor, messageContent, agentEnv)
       : actor.agent === 'gemini' ? spawnGemini(actor, messageContent, agentEnv)
+      : actor.agent === 'antigravity' ? spawnAntigravity(actor, messageContent, agentEnv)
       : actor.agent === 'qwen' ? spawnQwen(actor, messageContent, agentEnv)
       : actor.agent === 'opencode' ? spawnOpenCode(actor, messageContent, agentEnv)
       : spawnCustom(actor, vars, agentEnv);
