@@ -270,7 +270,7 @@ function validateActor(e: ActorEntry, registry: Map<string, ActorEntry>): Valida
 
   if (type === 'machine') {
     if (!agent && !command) {
-      out.push(issue('error', `machine actor missing 'agent' (claude|gemini|qwen|opencode) or 'command' (custom)`))
+      out.push(issue('error', `machine actor missing 'agent' (claude|gemini|antigravity|qwen|opencode) or 'command' (custom)`))
     }
     if (agent && !model) {
       out.push(issue('warn', `'agent: ${agent}' set but no 'model' — runtime will use the agent's default`))

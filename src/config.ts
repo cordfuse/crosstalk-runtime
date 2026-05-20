@@ -112,11 +112,11 @@ export interface Config {
   relay: RelayConfig;
   /** Operator-defined agent invocation map for `crosstalk channel join --agent <name>`.
    * Loaded from `[agents.X]` tables in config.toml. Merged with the built-in
-   * defaults (claude/gemini/codex/qwen/opencode) at use site — operator
+   * defaults (claude/gemini/antigravity/codex/qwen/opencode) at use site — operator
    * entries win on name collision, and operator-only names extend the map. */
   agents: Record<string, AgentSpawn>;
   /** v1.6.0-alpha.1+ — extra environment variables forwarded to agent
-   * child processes (claude/gemini/qwen/opencode and custom commands).
+   * child processes (claude/gemini/antigravity/qwen/opencode and custom commands).
    * Loaded from the optional `[agent-environment]` TOML table.
    *
    * Primary use case: multi-operator-on-one-machine deployments where

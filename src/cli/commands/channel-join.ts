@@ -68,11 +68,14 @@ interface JoinOptions {
  * Operator entries win on name collision and operator-only names extend
  * the map. Resolution happens at use site via {@link resolveAgentMap}. */
 const DEFAULT_AGENTS: Record<string, string[]> = {
-  claude:   ['claude'],
-  gemini:   ['gemini', '-i'],
-  codex:    ['codex'],
-  qwen:     ['qwen'],
-  opencode: ['opencode'],
+  claude:      ['claude'],
+  gemini:      ['gemini', '-i'],
+  // v1.14+ — Antigravity CLI (`agy`), Google's official Gemini CLI successor.
+  // `-i` is the interactive seed flag (parallel to gemini's `-i`).
+  antigravity: ['agy', '-i'],
+  codex:       ['codex'],
+  qwen:        ['qwen'],
+  opencode:    ['opencode'],
 }
 
 /** Merge built-in defaults with operator-defined `[agents.X]` config entries.
