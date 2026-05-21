@@ -65,6 +65,41 @@ export async function announceOffline(transport: Transport): Promise<void> {
   await transport.postMessage(SYSTEM_CHANNEL, WATCHER_IDENTITY, content);
 }
 
+export async function announceRegistryReload(
+  transport: Transport,
+  actorNames: string[],
+): Promise<void> {
+  const body =
+    `registry reloaded — ${actorNames.length} actors now registered\n\n` +
+    `actors:\n${actorNames.map(a => `  - ${a}`).join('\n')}`;
+  const content = buildSystemMessage('registry-reload', {}, body);
+  await transport.postMessage(SYSTEM_CHANNEL, WATCHER_IDENTITY, content);
+}
+
+export async function announceAway(
+  transport: Transport,
+  actorAddr: string,
+): Promise<void> {
+  const content = buildSystemMessage(
+    'away',
+    { actor: actorAddr },
+    `${actorAddr} is away`,
+  );
+  await transport.postMessage(SYSTEM_CHANNEL, WATCHER_IDENTITY, content);
+}
+
+export async function announceBack(
+  transport: Transport,
+  actorAddr: string,
+): Promise<void> {
+  const content = buildSystemMessage(
+    'back',
+    { actor: actorAddr },
+    `${actorAddr} is back`,
+  );
+  await transport.postMessage(SYSTEM_CHANNEL, WATCHER_IDENTITY, content);
+}
+
 export async function announceTimeout(
   transport: Transport,
   actorName: string,

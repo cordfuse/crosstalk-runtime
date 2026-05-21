@@ -3,7 +3,7 @@ import { loadConfig } from './config.js';
 import { loadRegistry, watchRegistry } from './registry.js';
 import { startWatcher, resolveTargets } from './watcher.js';
 import { startRelayServer, startRelayClient } from './relay.js';
-import { announceOnline, announceOffline, SESSION_ID, MACHINE_ID } from './system.js';
+import { announceOnline, announceOffline, announceRegistryReload, SESSION_ID, MACHINE_ID } from './system.js';
 import { readCursor, listMessages, messagesAfterCursor, migrateCursorsIfNeeded } from './cursor.js';
 import { dispatch } from './dispatch.js';
 import {
@@ -135,6 +135,9 @@ if (config.relay.mode === 'server') {
   watchRegistry(config.transport, async () => {
     registry = await loadRegistry(config.transport, config.operator);
     console.log(`[crosstalk] registry reloaded: ${[...registry.keys()].join(', ') || 'none'}`);
+    announceRegistryReload(transport, [...registry.keys()]).catch(err =>
+      console.error(`[crosstalk] registry-reload announce failed: ${err}`)
+    );
   }, config.operator);
 
   // v1.2.0+ — polling fallback when no relay. Calls transport.sync() on a
