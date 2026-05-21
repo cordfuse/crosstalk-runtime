@@ -35,6 +35,8 @@ export function registerActorCommand(program: Command): void {
   registerActorList(actor)
   registerActorValidate(actor)
   registerActorKey(actor)
+  registerActorAway(actor)
+  registerActorBack(actor)
 }
 
 // ── actor list ──────────────────────────────────────────────────────────
@@ -507,6 +509,57 @@ async function runActorKeyGenerateSigning(address: string | undefined, opts: Act
     console.log(`Public key (PEM):`)
     console.log(publicKeyPem)
   }
+}
+
+// ── actor away / back (v1.16.0-alpha.1+) ───────────────────────────────────
+
+function registerActorAway(parent: Command): void {
+  parent
+    .command('away [address]')
+    .description('signal that an actor is away — posts a presence message to _system (defaults to the operator\'s human actor)')
+    .action(async (address: string | undefined) => {
+      await runActorPresence('away', address)
+    })
+}
+
+function registerActorBack(parent: Command): void {
+  parent
+    .command('back [address]')
+    .description('signal that an actor is back — posts a presence message to _system (defaults to the operator\'s human actor)')
+    .action(async (address: string | undefined) => {
+      await runActorPresence('back', address)
+    })
+}
+
+async function runActorPresence(state: 'away' | 'back', address: string | undefined): Promise<void> {
+  const config = await loadConfig()
+
+  // Resolve address: arg > operator handle (human actor) > error
+  const addr = address ?? config.operator ?? config.defaultHumanActor
+  if (!addr) {
+    console.error(`✗ No actor address provided and no operator handle or default-human-actor in config.`)
+    console.error(`  Usage: crosstalk actor ${state} [address]`)
+    process.exit(1)
+  }
+
+  const { parseAddress, isAddressError, formatAddress } = await import('../../address.js')
+  const parsed = parseAddress(addr)
+  if (isAddressError(parsed)) {
+    console.error(`✗ Invalid address "${addr}": ${parsed.message}`)
+    process.exit(1)
+  }
+  const canonical = formatAddress(parsed)
+
+  const { GitTransport } = await import('../../transports/git.js')
+  const transport = new GitTransport({ root: config.transport })
+  await transport.init()
+
+  const { announceAway, announceBack } = await import('../../system.js')
+  const fn = state === 'away' ? announceAway : announceBack
+  await fn(transport, canonical)
+  await transport.close()
+
+  console.log(`✓ ${canonical} marked as ${state}`)
 }
 
 // ── actor key generate-signing --all (v1.15.0-alpha.2+) ────────────────────
