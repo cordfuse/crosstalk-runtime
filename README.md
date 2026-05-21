@@ -83,6 +83,19 @@ src/
 
 ---
 
+## What's supported today
+
+| Capability | Status |
+|---|---|
+| One operator, N machines | ✓ Supported — one operator runs daemons across as many machines as they like |
+| Multiple operators on one transport | ✓ Supported (v1.15+) — each operator has a handle (`alice@steve`, `bob@alice`), messages are ed25519-signed, attribution is verifiable |
+| Actor presence (away/back/online/offline) | ✓ Supported (v1.16+) — `crosstalk actor away/back`, daemon announces on startup/shutdown/registry change |
+| Docker sandboxing | Not yet — Docker deploy path is post-v1.x |
+| Native Windows | Not yet — WSL works; native Win32 support is post-v1.x |
+| Standalone binary (no npm) | Not yet — gated on PTY-layer rewrite; npm tarball is the canonical distribution |
+
+---
+
 ## Dispatch flow
 
 ```

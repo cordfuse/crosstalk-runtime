@@ -30,11 +30,7 @@ announcement push:
 
 ### Solo-launch (crosstalk alone, technical audience: HN, dev-tools twitter)
 
-- [ ] **Honest scope statement** in README — "single-operator supported"
-      gap should be explicit on the front page so first-comment readers
-      don't have to dig. Spell out: works for one operator running daemons
-      across N machines; multi-operator (multiple humans collaborating on
-      one transport) needs the actor-identity work below.
+- [x] **Honest scope statement** in README — shipped v1.16.0. Multi-operator IS supported (v1.15+ operator namespace + ed25519 signing); statement reflects actual shipped state. Unsupported: Docker, native Windows, standalone binary.
 - [ ] **Dependabot pass** across runtime + framework repos.
 - [ ] **FilesystemTransport** (v1.x candidate below) — would dramatically
       widen the audience to "I just want a local AI swarm on one box, no
