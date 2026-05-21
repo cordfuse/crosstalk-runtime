@@ -125,7 +125,7 @@ function spawnGemini(actor: ActorConfig, messageContent: string, agentEnv?: Reco
   // misconfigs (no auth at all) still surface as normal dispatch failure in
   // the daemon log via the agent's own error output.
 
-  return spawn('gemini', ['-m', model, '-p', prompt, '-y', '--output-format', 'text'], {
+  return spawn('gemini', ['-m', model, '-p', prompt, '-y', '--skip-trust', '--output-format', 'text'], {
     stdio: [...AGENT_STDIO],
     env: buildAgentEnv(agentEnv),
     detached: true,  // see spawnClaude comment — process-group leader for kill-on-timeout
