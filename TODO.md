@@ -31,7 +31,7 @@ announcement push:
 ### Solo-launch (crosstalk alone, technical audience: HN, dev-tools twitter)
 
 - [x] **Honest scope statement** in README — shipped v1.16.0. Multi-operator IS supported (v1.15+ operator namespace + ed25519 signing); statement reflects actual shipped state. Unsupported: Docker, native Windows, standalone binary.
-- [ ] **Dependabot pass** across runtime + framework repos.
+- [x] **Dependabot pass** across runtime + framework repos — `.github/dependabot.yml` added to both, weekly npm + actions cadence.
 - [ ] **FilesystemTransport** (v1.x candidate below) — would dramatically
       widen the audience to "I just want a local AI swarm on one box, no
       git, no GitHub" which is the largest segment of dev-tool users.
