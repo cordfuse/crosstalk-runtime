@@ -36,6 +36,7 @@ interface InitOptions {
   actorEmailSuffix?:     string
   heartbeatInterval?:    string
   skipSmoke?:            boolean
+  operator?:             string
 }
 
 interface ResolvedConfig {
@@ -45,6 +46,7 @@ interface ResolvedConfig {
   relaySecret?:        string
   actorEmailSuffix:    string
   heartbeatInterval:   number
+  operator:            string
 }
 
 export function registerInitCommand(program: Command): void {
@@ -58,6 +60,7 @@ export function registerInitCommand(program: Command): void {
     .option('--actor-email-suffix <domain>',      'non-interactive: actor email suffix')
     .option('--heartbeat-interval <seconds>',     'non-interactive: heartbeat interval (default 120)')
     .option('--skip-smoke',                       'skip the post-config relay smoke test')
+    .option('--operator <handle>',                'non-interactive: operator handle (kebab-case, e.g. "steve")')
     .action(async (options: InitOptions) => {
       await runInit(options)
     })
@@ -85,6 +88,7 @@ async function runInit(options: InitOptions): Promise<void> {
   }
 
   writeConfigAtomic(config)
+  await generateOperatorSigningKey(config)
   printNextSteps(config)
 
   // v0.9.0-alpha.2+: offer to install the user-level service unit (systemd
@@ -103,10 +107,21 @@ async function runInteractive(): Promise<ResolvedConfig> {
 
   const transport          = await pickTransport()
   const { relayMode, relayUrl, relaySecret } = await pickRelay()
+  const operator           = await pickOperatorHandle()
   const actorEmailSuffix   = await pickActorEmailSuffix()
   const heartbeatInterval  = await pickHeartbeatInterval()
 
-  return { transport, relayMode, relayUrl, relaySecret, actorEmailSuffix, heartbeatInterval }
+  return { transport, relayMode, relayUrl, relaySecret, operator, actorEmailSuffix, heartbeatInterval }
+}
+
+async function pickOperatorHandle(): Promise<string> {
+  return await input({
+    message: 'Operator handle (your identity on this transport — kebab-case, e.g. "steve"):',
+    default: guessOperatorHandleFromGitConfig(),
+    validate: (v) => /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(v)
+      ? true
+      : 'Use lowercase letters, numbers, and hyphens only (kebab-case)',
+  })
 }
 
 async function pickTransport(): Promise<string> {
@@ -225,11 +240,17 @@ function runNonInteractive(options: InitOptions): ResolvedConfig {
     console.error(`✗ ${validation}`)
     process.exit(1)
   }
+  const operator = options.operator ?? guessOperatorHandleFromGitConfig()
+  if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(operator)) {
+    console.error(`✗ Invalid operator handle "${operator}" — use kebab-case (e.g. "steve"). Pass --operator <handle> to set it.`)
+    process.exit(1)
+  }
   return {
     transport,
     relayMode:          'client',  // non-interactive defaults to client; explicit --relay-mode flag would override (not yet wired)
     relayUrl:           options.relayUrl ?? PUBLIC_RELAY,
     relaySecret:        options.relaySecret,
+    operator,
     actorEmailSuffix:   options.actorEmailSuffix ?? guessEmailSuffixFromGitConfig(),
     heartbeatInterval:  options.heartbeatInterval ? parseInt(options.heartbeatInterval) : 120,
   }
@@ -266,6 +287,7 @@ async function smokeRelay(relayUrl: string): Promise<void> {
 function writeConfigAtomic(config: ResolvedConfig): void {
   const lines: string[] = [
     `transport = "${config.transport}"`,
+    `operator = "${config.operator}"`,
     `actor-email-suffix = "${config.actorEmailSuffix}"`,
     `default-heartbeat-interval = ${config.heartbeatInterval}`,
     ``,
@@ -313,9 +335,45 @@ function printNextSteps(config: ResolvedConfig): void {
     console.log(`  • Sync the transport yourself — \`git pull\` on a cron, rsync, NAS sync, etc.`)
     console.log(`    The daemon's fs watcher will pick up changes once they land in the transport dir.`)
   }
+  console.log(`  • Commit your signing public key so other operators can verify your messages:`)
+  console.log(`      cd ${config.transport} && git add manifest/identities/${config.operator}.pub && git commit -m "identity: publish signing key for ${config.operator}" && git push`)
   console.log(`  • Run \`crosstalk\` to start the daemon (or accept the next prompt to install it as a user-level service)`)
   console.log('')
   console.log('Full setup walkthrough: https://github.com/cordfuse/crosstalk#quickstart')
+}
+
+async function generateOperatorSigningKey(config: ResolvedConfig): Promise<void> {
+  const { generateSigningKey, publishPublicKey } = await import('../../signing.js')
+  const addr = config.operator
+  try {
+    const { publicKeyPem } = generateSigningKey(addr)
+    publishPublicKey(config.transport, addr, publicKeyPem)
+    console.log(`\n✓ Generated ed25519 signing key for "${addr}"`)
+    console.log(`  Private: ~/.crosstalk/keys/${addr}.sign  (machine-local, never committed)`)
+    console.log(`  Public:  ${config.transport}/manifest/identities/${addr}.pub  (commit + push this)`)
+  } catch (err: unknown) {
+    // Key already exists — skip silently; operator re-ran init after initial setup.
+    if (err instanceof Error && err.message.includes('refusing to overwrite')) {
+      console.log(`\n  (signing key for "${addr}" already exists — skipped)`)
+      return
+    }
+    console.warn(`\n⚠ Could not generate signing key for "${addr}": ${err instanceof Error ? err.message : String(err)}`)
+    console.warn(`  Run 'crosstalk actor key generate-signing ${addr}' manually to set it up.`)
+  }
+}
+
+function guessOperatorHandleFromGitConfig(): string {
+  try {
+    const result = spawnSync('git', ['config', '--get', 'user.name'], { encoding: 'utf-8' })
+    if (result.status === 0 && result.stdout.trim()) {
+      // Slugify: lowercase, replace spaces/underscores with hyphens, strip non-alphanumeric
+      const slug = result.stdout.trim().toLowerCase().replace(/[\s_]+/g, '-').replace(/[^a-z0-9-]/g, '').replace(/^-+|-+$/g, '')
+      if (/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(slug)) return slug
+    }
+  } catch {
+    // fall through
+  }
+  return 'operator'
 }
 
 function guessEmailSuffixFromGitConfig(): string {

@@ -335,6 +335,7 @@ function validateActor(e: ActorEntry, registry: Map<string, ActorEntry>): Valida
 interface ActorKeyGenerateOptions {
   rotate?: boolean
   print?:  boolean
+  all?:    boolean
 }
 
 function registerActorKey(parent: Command): void {
@@ -356,8 +357,13 @@ function registerActorKey(parent: Command): void {
     .description('generate an ed25519 signing keypair for an actor address; private at ~/.crosstalk/keys/<addr>.sign, public published into the transport (v1.3+)')
     .option('--rotate', 'overwrite an existing signing key (forfeits old identity — incoming messages signed with the old key will fail verification on other daemons until they pull the new pubkey)')
     .option('--print',  'print the new public key (PEM) after generating')
+    .option('--all',    'generate signing keys for all registered actors in the operator namespace that do not already have one')
     .action(async (address: string | undefined, opts: ActorKeyGenerateOptions) => {
-      await runActorKeyGenerateSigning(address, opts)
+      if (opts.all) {
+        await runActorKeyGenerateSigningAll()
+      } else {
+        await runActorKeyGenerateSigning(address, opts)
+      }
     })
 }
 
@@ -500,6 +506,75 @@ async function runActorKeyGenerateSigning(address: string | undefined, opts: Act
     console.log(``)
     console.log(`Public key (PEM):`)
     console.log(publicKeyPem)
+  }
+}
+
+// ── actor key generate-signing --all (v1.15.0-alpha.2+) ────────────────────
+
+/** Bulk-generate ed25519 signing keys for every registered actor in the
+ * operator's namespace that doesn't already have a private key locally.
+ * Skips actors that already have a key (no --rotate for bulk — rotation is
+ * a deliberate per-actor act). Reports generated / skipped / failed. */
+async function runActorKeyGenerateSigningAll(): Promise<void> {
+  const config = await loadConfig()
+  if (!config.operator) {
+    console.error('✗ No operator handle set in ~/.crosstalk/config.toml')
+    console.error('  Add `operator = "your-handle"` or re-run `crosstalk init` to set it up.')
+    process.exit(1)
+  }
+
+  const { loadRegistry } = await import('../../registry.js')
+  const registry = await loadRegistry(config.transport, config.operator)
+
+  if (registry.size === 0) {
+    console.log(`No actors registered for operator "${config.operator}". Nothing to do.`)
+    return
+  }
+
+  const { homedir } = await import('os')
+  const { join } = await import('path')
+  const { existsSync } = await import('fs')
+  const { generateSigningKey, publishPublicKey } = await import('../../signing.js')
+
+  const keysDir = join(homedir(), '.crosstalk', 'keys')
+  const generated: string[] = []
+  const skipped:   string[] = []
+  const failed:    string[] = []
+
+  for (const [address] of registry) {
+    const privPath = join(keysDir, `${address}.sign`)
+    if (existsSync(privPath)) {
+      skipped.push(address)
+      continue
+    }
+    try {
+      const { publicKeyPem } = generateSigningKey(address)
+      publishPublicKey(config.transport, address, publicKeyPem)
+      generated.push(address)
+    } catch (err) {
+      failed.push(`${address} (${err instanceof Error ? err.message : String(err)})`)
+    }
+  }
+
+  if (generated.length > 0) {
+    console.log(`\n✓ Generated signing keys (${generated.length}):`)
+    for (const a of generated) console.log(`    ${a}`)
+    console.log(`\nNext step: commit + push the public keys:`)
+    console.log(`  cd ${config.transport}`)
+    console.log(`  git add manifest/identities/`)
+    console.log(`  git commit -m "identities: add signing keys for ${config.operator}"`)
+    console.log(`  git push`)
+  }
+  if (skipped.length > 0) {
+    console.log(`\n  Already had keys (skipped): ${skipped.join(', ')}`)
+  }
+  if (failed.length > 0) {
+    console.error(`\n✗ Failed:`)
+    for (const f of failed) console.error(`    ${f}`)
+    process.exit(1)
+  }
+  if (generated.length === 0 && failed.length === 0) {
+    console.log(`All ${skipped.length} actor(s) already have signing keys. Nothing to do.`)
   }
 }
 
