@@ -145,9 +145,10 @@ async function runWatchStop(opts: { force?: boolean }): Promise<void> {
     process.exit(1)
   }
 
-  // Wait up to 3s for clean exit
+  // Wait up to 10s for clean exit — the shutdown path includes an
+  // announceOffline git push which can take several seconds on slow networks.
   const startMs = Date.now()
-  while (Date.now() - startMs < 3000) {
+  while (Date.now() - startMs < 10000) {
     await new Promise(r => setTimeout(r, 100))
     if (!processAlive(pid)) {
       try { unlinkSync(PID_PATH) } catch { /* ignore */ }
@@ -157,7 +158,7 @@ async function runWatchStop(opts: { force?: boolean }): Promise<void> {
   }
 
   if (opts.force) {
-    console.warn(`⚠ Daemon didn't exit on SIGTERM after 3s. Sending SIGKILL.`)
+    console.warn(`⚠ Daemon didn't exit on SIGTERM after 10s. Sending SIGKILL.`)
     try { process.kill(pid, 'SIGKILL') } catch { /* ignore */ }
     await new Promise(r => setTimeout(r, 200))
     try { unlinkSync(PID_PATH) } catch { /* ignore */ }
@@ -165,7 +166,7 @@ async function runWatchStop(opts: { force?: boolean }): Promise<void> {
     return
   }
 
-  console.error(`✗ Daemon didn't exit on SIGTERM after 3s. Re-run with --force to SIGKILL.`)
+  console.error(`✗ Daemon didn't exit on SIGTERM after 10s. Re-run with --force to SIGKILL.`)
   process.exit(1)
 }
 

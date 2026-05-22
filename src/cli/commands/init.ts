@@ -18,13 +18,19 @@
  * scripting or CI use.
  */
 import { input, select, confirm, password } from '@inquirer/prompts'
-import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir, platform } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import type { Command } from 'commander'
 
-const CONFIG_PATH = join(homedir(), '.crosstalk', 'config.toml')
+// v1.16.1+ — honor CROSSTALK_CONFIG env var / --config flag (set in index.ts
+// argv pre-processing before CLI dispatch). Previously a module-level constant
+// caused init to always write ~/.crosstalk/config.toml regardless of the env var.
+function getConfigPath(): string {
+  return process.env.CROSSTALK_CONFIG ?? join(homedir(), '.crosstalk', 'config.toml')
+}
+
 const PUBLIC_RELAY = 'wss://relay.crosstalk.sh'
 const TEMPLATE_REPO = 'cordfuse/crosstalk'
 
@@ -68,8 +74,9 @@ export function registerInitCommand(program: Command): void {
 
 async function runInit(options: InitOptions): Promise<void> {
   // Refuse to overwrite an existing config without --force.
-  if (existsSync(CONFIG_PATH) && !options.force) {
-    console.error(`✗ ${CONFIG_PATH} already exists.`)
+  const configPath = getConfigPath()
+  if (existsSync(configPath) && !options.force) {
+    console.error(`✗ ${configPath} already exists.`)
     console.error(`  Re-run with --force to overwrite, or edit the file by hand.`)
     process.exit(1)
   }
@@ -285,15 +292,30 @@ async function smokeRelay(relayUrl: string): Promise<void> {
 }
 
 function writeConfigAtomic(config: ResolvedConfig): void {
+  // v1.16.1+ — preserve fields that init doesn't manage (default-human-actor,
+  // default-channel) when overwriting an existing config with --force. Without
+  // this, --force silently drops any field not in the init flag surface.
+  const configPath = getConfigPath()
+  let preservedHumanActor: string | undefined
+  let preservedDefaultChannel: string | undefined
+  if (existsSync(configPath)) {
+    for (const line of readFileSync(configPath, 'utf-8').split('\n')) {
+      const m = line.match(/^(default-human-actor|default-channel)\s*=\s*"(.+)"/)
+      if (!m) continue
+      if (m[1] === 'default-human-actor') preservedHumanActor = m[2]
+      if (m[1] === 'default-channel')      preservedDefaultChannel = m[2]
+    }
+  }
+
   const lines: string[] = [
     `transport = "${config.transport}"`,
     `operator = "${config.operator}"`,
     `actor-email-suffix = "${config.actorEmailSuffix}"`,
     `default-heartbeat-interval = ${config.heartbeatInterval}`,
-    ``,
-    `[relay]`,
-    `mode = "${config.relayMode}"`,
   ]
+  if (preservedHumanActor)    lines.push(`default-human-actor = "${preservedHumanActor}"`)
+  if (preservedDefaultChannel) lines.push(`default-channel = "${preservedDefaultChannel}"`)
+  lines.push(``, `[relay]`, `mode = "${config.relayMode}"`)
   if (config.relayMode === 'disabled') {
     lines.push(`# Offline mode — daemon does not connect to a relay.`)
     lines.push(`# You're responsible for transport sync (git pull, rsync, NAS, etc.).`)
@@ -317,11 +339,11 @@ function writeConfigAtomic(config: ResolvedConfig): void {
 
   const tmpFile = join(configDir, `.config.toml.tmp.${process.pid}`)
   writeFileSync(tmpFile, content)
-  renameSync(tmpFile, CONFIG_PATH)
+  renameSync(tmpFile, configPath)
 }
 
 function printNextSteps(config: ResolvedConfig): void {
-  console.log(`\n✓ Wrote ${CONFIG_PATH}`)
+  console.log(`\n✓ Wrote ${getConfigPath()}`)
   console.log('')
   console.log('Next steps:')
   if (config.relayMode === 'client') {

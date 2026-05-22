@@ -40,6 +40,7 @@
  */
 import type { Command } from 'commander'
 import { loadConfig } from '../../config.js'
+import { listChannels } from '../lib/channel.js'
 import { runPost, type PostOptions } from './post.js'
 
 interface AskOptions {
@@ -60,17 +61,23 @@ export function registerAskCommand(program: Command): void {
       const conciergeAddress = config.operator ? `concierge@${config.operator}` : 'concierge'
 
       // v1.8.1+ — `default-channel` config supplies the channel when
-      // `--channel` is omitted. Operators set up a permanent concierge
-      // inbox channel once and `crosstalk ask "..."` just works.
-      const channel = opts.channel ?? config.defaultChannel
+      // `--channel` is omitted. v1.16.1+ — also auto-detects when exactly
+      // one non-system channel exists.
+      let channel = opts.channel ?? config.defaultChannel
       if (!channel) {
-        console.error(`✗ --channel is required when no \`default-channel\` is set in ~/.crosstalk/config.toml.`)
-        console.error(`  Either pass --channel <name>, or add to config.toml:`)
-        console.error(``)
-        console.error(`    default-channel = "concierge"`)
-        console.error(``)
-        console.error(`  Then \`crosstalk ask "..."\` will route there without --channel.`)
-        process.exit(1)
+        const available = listChannels(config.transport)
+        if (available.length === 1) {
+          channel = available[0]!.name
+          console.log(`  (using channel "${channel}" — set default-channel = "${channel}" in config.toml to suppress this hint)`)
+        } else if (available.length === 0) {
+          console.error(`✗ No channels found in transport. Create one with: crosstalk channel new <name>`)
+          process.exit(1)
+        } else {
+          console.error(`✗ --channel is required when multiple channels exist.`)
+          console.error(`  Available: ${available.map(c => c.name).join(', ')}`)
+          console.error(`  Or set default-channel = "<name>" in ~/.crosstalk/config.toml.`)
+          process.exit(1)
+        }
       }
 
       const postOpts: PostOptions = {

@@ -36,13 +36,13 @@ import type { Command } from 'commander'
 
 import { loadConfig } from '../../config.js'
 import { messageDatePath, messageFilename } from '../../filenames.js'
-import { resolveChannel } from '../lib/channel.js'
+import { listChannels, resolveChannel } from '../lib/channel.js'
 import { scanAllLayers, type ActorEntry } from '../lib/actors.js'
 import { parseAddress, isAddressError, formatAddress, canonicalizeActorName } from '../../address.js'
 import { pushWithRetry } from '../../git.js'
 
 export interface PostOptions {
-  channel:               string
+  channel?:              string  // v1.16.1+ — optional; falls back to default-channel config or single-channel auto-detect
   to:                    string
   body:                  string
   from?:                 string
@@ -58,7 +58,7 @@ export function registerPostCommand(program: Command): void {
   program
     .command('post')
     .description('post a message to a channel — writes the file with proper frontmatter, commits, and pushes')
-    .requiredOption('-c, --channel <name-or-guid>',  'channel to post into (friendly name from _header.md, or full GUID)')
+    .option('-c, --channel <name-or-guid>',  'channel to post into (friendly name or GUID; optional when default-channel is set in config or exactly one channel exists)')
     .requiredOption('-t, --to <actor[,actor]>',      'comma-separated targets, or "all"')
     .requiredOption('-b, --body <text>',             'message body text')
     .option('-f, --from <actor>',                    'sender identity (defaults to default-human-actor in config.toml)')
@@ -82,8 +82,30 @@ export async function runPost(opts: PostOptions): Promise<void> {
 
   const config = await loadConfig()
 
+  // v1.16.1+ — channel resolution with fallbacks:
+  //   1. --channel flag
+  //   2. default-channel in config.toml
+  //   3. single channel auto-detect (if exactly one non-system channel exists)
+  let channelRef = opts.channel ?? config.defaultChannel
+  if (!channelRef) {
+    const available = listChannels(config.transport)
+    if (available.length === 1) {
+      channelRef = available[0]!.name
+      console.log(`  (using channel "${channelRef}" — set default-channel = "${channelRef}" in config.toml to suppress this hint)`)
+    } else if (available.length === 0) {
+      console.error(`✗ No channels found in transport.`)
+      console.error(`  Create one first: crosstalk channel new <name>`)
+      process.exit(1)
+    } else {
+      console.error(`✗ --channel is required when multiple channels exist.`)
+      console.error(`  Available: ${available.map(c => c.name).join(', ')}`)
+      console.error(`  Pass --channel <name>, or set default-channel = "<name>" in ~/.crosstalk/config.toml.`)
+      process.exit(1)
+    }
+  }
+
   // Resolve channel name → GUID
-  const channelGuid = resolveChannel(config.transport, opts.channel)
+  const channelGuid = resolveChannel(config.transport, channelRef)
 
   // Validate targets against the FULL actor profile set, not the dispatch
   // registry. v0.9.0+ fix: previously used loadRegistry() which filters to

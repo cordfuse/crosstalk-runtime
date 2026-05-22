@@ -483,6 +483,20 @@ async function runActorKeyGenerateSigning(address: string | undefined, opts: Act
 
   const privPath = join(homedir(), '.crosstalk', 'keys', `${canonical}.sign`)
   if (existsSync(privPath) && !opts.rotate) {
+    // v1.16.1+ — if key exists and --print is passed (without --rotate),
+    // print the existing pubkey instead of erroring. Useful for copying the
+    // public key to a new transport without regenerating.
+    if (opts.print) {
+      const pubPath = join(config.transport, 'manifest', 'identities', `${canonical}.pub`)
+      const { readFileSync: readFile } = await import('fs')
+      if (!existsSync(pubPath)) {
+        console.error(`✗ Signing key exists at ${privPath} but no pubkey at ${pubPath}.`)
+        console.error(`  Run without --print to re-publish the pubkey.`)
+        process.exit(1)
+      }
+      console.log(readFile(pubPath, 'utf-8'))
+      return
+    }
     console.error(`✗ Signing key already exists for '${canonical}':`)
     console.error(`    ${privPath}`)
     console.error(`  Pass --rotate to overwrite (other daemons will need to pull the new pubkey before they can verify your messages).`)

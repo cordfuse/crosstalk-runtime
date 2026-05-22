@@ -135,6 +135,18 @@ export function runInstall(): void {
   for (const line of cfg.activateInstructions) console.log(line ? `  ${line}` : '')
 }
 
+function runStatus(): void {
+  const cfg = getPlatformConfig(detectPlatform())
+  if (existsSync(cfg.destPath)) {
+    console.log(`✓ Service installed: ${cfg.destPath}`)
+    process.exit(0)
+  } else {
+    console.log(`✗ Service not installed (${cfg.destPath} does not exist)`)
+    console.log(`  Run \`crosstalk service install\` to set it up.`)
+    process.exit(1)
+  }
+}
+
 function runUninstall(): void {
   const cfg = getPlatformConfig(detectPlatform())
   if (!existsSync(cfg.destPath)) {
@@ -165,6 +177,11 @@ export function registerServiceCommand(program: Command): void {
     .command('install')
     .description(`install the user-level unit for this platform (writes to ${platform() === 'darwin' ? '~/Library/LaunchAgents/' : '~/.config/systemd/user/'})`)
     .action(() => runInstall())
+
+  service
+    .command('status')
+    .description('check whether the user-level service unit is installed (exits 0 if installed, 1 if not)')
+    .action(() => runStatus())
 
   service
     .command('uninstall')
