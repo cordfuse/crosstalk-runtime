@@ -304,6 +304,14 @@ export async function runPost(opts: PostOptions): Promise<void> {
   renameSync(tmpFile, targetFile)
   console.log(`✓ Wrote channels/${channelGuid}/${datePath}/${filename}`)
 
+  // v1.17.0+ — skip git operations for filesystem transports (no .git dir).
+  // The file is already written above; a filesystem transport doesn't commit.
+  const isGit = existsSync(join(config.transport, '.git'))
+  if (!isGit) {
+    console.log(`✓ Written (filesystem transport — no git commit)`)
+    return
+  }
+
   // Git operations
   const relPath = `channels/${channelGuid}/${datePath}/${filename}`
   if (!gitCmd(config.transport, ['add', relPath]))                        process.exit(1)

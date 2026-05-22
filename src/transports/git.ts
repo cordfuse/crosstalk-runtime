@@ -367,8 +367,8 @@ export class GitTransport implements Transport {
 // ── Channel-history walker (shared utility) ───────────────────────────────
 
 /** Walk a channel directory and return all message relPaths sorted ascending.
- * Used by listMessages on both GitTransport and (when it lands) FilesystemTransport. */
-async function walkChannelMessages(channelDir: string): Promise<string[]> {
+ * Shared between GitTransport and FilesystemTransport. */
+export async function walkChannelMessages(channelDir: string): Promise<string[]> {
   const paths: string[] = []
   try {
     const years = await readdir(channelDir)

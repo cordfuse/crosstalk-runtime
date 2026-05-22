@@ -15,6 +15,7 @@ import { readFile } from 'fs/promises';
 import { parseFrontmatter } from './frontmatter.js';
 import { acquireSingleInstanceLock } from './single-instance.js';
 import { GitTransport } from './transports/git.js';
+import { FilesystemTransport } from './transports/filesystem.js';
 
 // v1.0.5+ — extract `--config <path>` / `-c <path>` from argv. Works for
 // both daemon mode AND CLI subcommands (so e.g. `crosstalk --config foo`
@@ -117,10 +118,18 @@ if (config.relay.mode === 'server') {
   }
 
   // v1.1.0+ — instantiate the Transport before any other transport-touching
-  // work. GitTransport encapsulates all the v1.0.x git-management fixes
-  // (push queue, pre-pull-rebase, retry budget, actor clone routing, etc.)
-  // behind a clean interface.
-  const transport = new GitTransport({ root: config.transport });
+  // work. v1.17.0+ — auto-detect git vs plain filesystem: if the transport
+  // directory has a .git/ subdirectory it's a git repo → GitTransport (full
+  // push/pull/clone semantics). Otherwise → FilesystemTransport (local-only,
+  // no git required). Same interface, operator-transparent.
+  const { existsSync } = await import('node:fs');
+  const isGitTransport = existsSync(join(config.transport, '.git'));
+  const transport = isGitTransport
+    ? new GitTransport({ root: config.transport })
+    : new FilesystemTransport({ root: config.transport });
+  if (!isGitTransport) {
+    console.log('[crosstalk] transport: filesystem (no git)');
+  }
   await transport.init();
 
   // One-shot cursor migration: if this is the first run after upgrading past

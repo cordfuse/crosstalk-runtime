@@ -19,7 +19,7 @@
  */
 import { input, select, confirm, password } from '@inquirer/prompts'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { homedir, platform } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import type { Command } from 'commander'
@@ -53,6 +53,7 @@ interface ResolvedConfig {
   actorEmailSuffix:    string
   heartbeatInterval:   number
   operator:            string
+  defaultChannel?:     string  // v1.17.0+ — written when scaffolding a new filesystem transport
 }
 
 export function registerInitCommand(program: Command): void {
@@ -112,13 +113,19 @@ async function runInit(options: InitOptions): Promise<void> {
 async function runInteractive(): Promise<ResolvedConfig> {
   console.log('Welcome to Crosstalk. Let\'s get you set up.\n')
 
-  const transport          = await pickTransport()
-  const { relayMode, relayUrl, relaySecret } = await pickRelay()
+  const { path: transport, isNewFs } = await pickTransport()
+  // New filesystem transports default to disabled relay (local-only); operator
+  // can still change it in the relay prompt.
+  const { relayMode, relayUrl, relaySecret } = await pickRelay(isNewFs ? 'disabled' : undefined)
   const operator           = await pickOperatorHandle()
   const actorEmailSuffix   = await pickActorEmailSuffix()
   const heartbeatInterval  = await pickHeartbeatInterval()
 
-  return { transport, relayMode, relayUrl, relaySecret, operator, actorEmailSuffix, heartbeatInterval }
+  // For a freshly scaffolded transport, set default-channel = "ops" so post/ask
+  // work out of the box without --channel.
+  const defaultChannel = isNewFs ? 'ops' : undefined
+
+  return { transport, relayMode, relayUrl, relaySecret, operator, actorEmailSuffix, heartbeatInterval, defaultChannel }
 }
 
 async function pickOperatorHandle(): Promise<string> {
@@ -131,21 +138,33 @@ async function pickOperatorHandle(): Promise<string> {
   })
 }
 
-async function pickTransport(): Promise<string> {
+async function pickTransport(): Promise<{ path: string; isNewFs?: boolean }> {
   const choice = await select({
-    message: 'Where is your transport repo?',
+    message: 'Where is your transport?',
     choices: [
-      { name: 'I have an existing local clone',                                     value: 'local' },
-      { name: 'Clone an existing repo from a URL',                                  value: 'clone' },
-      { name: `Create a new transport from ${TEMPLATE_REPO} template (uses gh CLI)`, value: 'template' },
+      { name: 'I have an existing local clone or directory',                          value: 'local' },
+      { name: 'Create a new local filesystem transport (no git, no GitHub required)', value: 'newfs' },
+      { name: 'Clone an existing git repo from a URL',                                value: 'clone' },
+      { name: `Create a new git transport from ${TEMPLATE_REPO} template (uses gh CLI)`, value: 'template' },
     ],
   })
 
   if (choice === 'local') {
-    return await input({
-      message: 'Path to your cloned transport:',
-      validate: validateTransportPath,
+    return {
+      path: await input({
+        message: 'Path to your transport:',
+        validate: validateTransportPath,
+      }),
+    }
+  }
+
+  if (choice === 'newfs') {
+    const target = await input({
+      message: 'Directory to create (will be scaffolded):',
+      default: join(homedir(), 'crosstalk-transport'),
     })
+    await scaffoldFilesystemTransport(target)
+    return { path: target, isNewFs: true }
   }
 
   if (choice === 'clone') {
@@ -158,7 +177,7 @@ async function pickTransport(): Promise<string> {
       default: join(homedir(), 'crosstalk-transport'),
     })
     runOrExit(['git', 'clone', url, target], `Cloning ${url} → ${target}`)
-    return target
+    return { path: target }
   }
 
   // template
@@ -185,17 +204,59 @@ async function pickTransport(): Promise<string> {
     '--clone', target,
   ], `Creating ${repoName} from ${TEMPLATE_REPO} template`)
 
-  return target
+  return { path: target }
 }
 
-async function pickRelay(): Promise<{ relayMode: 'client' | 'disabled'; relayUrl: string; relaySecret?: string }> {
+// ── Filesystem transport scaffolding (v1.17.0+) ────────────────────────────
+
+async function scaffoldFilesystemTransport(dir: string): Promise<void> {
+  console.log(`\nScaffolding filesystem transport at ${dir}...`)
+
+  const dirs = [
+    'channels',
+    '_system',
+    'manifest/framework/actors',
+    'manifest/custom/actors',
+    'manifest/operators',
+  ]
+  for (const d of dirs) {
+    mkdirSync(join(dir, d), { recursive: true })
+  }
+
+  // Default "ops" channel
+  const opsGuid = crypto.randomUUID()
+  mkdirSync(join(dir, 'channels', opsGuid), { recursive: true })
+  writeFileSync(join(dir, 'channels', opsGuid, '_header.md'), [
+    '---',
+    'name: ops',
+    'description: Main operations channel',
+    '---',
+    '',
+  ].join('\n'))
+
+  // Protocol version marker
+  writeFileSync(join(dir, 'CROSSTALK-VERSION'), '0.4.0\n')
+
+  console.log(`  ✓ channels/ops  (${opsGuid})`)
+  console.log(`  ✓ manifest/framework/actors/  (empty — add actor profiles here)`)
+  console.log(`  ✓ manifest/custom/actors/     (empty — or put custom actors here)`)
+  console.log(`  ✓ CROSSTALK-VERSION  (0.4.0)`)
+  console.log(``)
+  console.log(`  Note: framework actors (concierge, senior-engineer, etc.) are not included.`)
+  console.log(`  To add them: clone cordfuse/crosstalk and copy its manifest/framework/ directory here.`)
+  console.log(`  Custom actors in ~/.crosstalk/actors/ work without any manifest files.`)
+}
+
+async function pickRelay(suggestedDefault?: 'disabled'): Promise<{ relayMode: 'client' | 'disabled'; relayUrl: string; relaySecret?: string }> {
+  const choices = [
+    { name: `Cordfuse public — ${PUBLIC_RELAY} (free, no auth required)`,  value: 'public' },
+    { name: 'Self-hosted (you provide URL + optional secret)',              value: 'self' },
+    { name: 'Disabled — local-only (no relay, no real-time cross-machine dispatch)', value: 'disabled' },
+  ]
   const choice = await select({
     message: 'Which relay should runtimes connect to?',
-    choices: [
-      { name: `Cordfuse public — ${PUBLIC_RELAY} (free, no auth required)`,  value: 'public' },
-      { name: 'Self-hosted (you provide URL + optional secret)',              value: 'self' },
-      { name: 'Disabled — offline mode (you sync the transport via git/rsync/NAS yourself; no real-time dispatch)', value: 'disabled' },
-    ],
+    choices,
+    default: suggestedDefault === 'disabled' ? 'disabled' : 'public',
   })
 
   if (choice === 'disabled') {
@@ -266,10 +327,16 @@ function runNonInteractive(options: InitOptions): ResolvedConfig {
 // ── Validation, smoke, write, helpers ───────────────────────────────────────
 
 function validateTransportPath(value: string): true | string {
-  if (!value)                                       return 'Path required'
-  if (!existsSync(value))                           return `Path does not exist: ${value}`
-  if (!existsSync(join(value, 'channels')))         return `${value} doesn't look like a Crosstalk transport (no channels/ subdirectory)`
-  if (!existsSync(join(value, 'manifest')))         return `${value} doesn't look like a Crosstalk transport (no manifest/ subdirectory)`
+  if (!value)           return 'Path required'
+  if (!existsSync(value)) return `Path does not exist: ${value}`
+  // Accept both fully-scaffolded transports and bare directories that the
+  // FilesystemTransport.init() will create structure in on first daemon start.
+  const hasChannels  = existsSync(join(value, 'channels'))
+  const hasManifest  = existsSync(join(value, 'manifest'))
+  if (!hasChannels && !hasManifest) {
+    return `${value} doesn't look like a Crosstalk transport (no channels/ or manifest/ subdirectory). ` +
+           `Use "Create a new local filesystem transport" to scaffold a new one.`
+  }
   return true
 }
 
@@ -313,8 +380,9 @@ function writeConfigAtomic(config: ResolvedConfig): void {
     `actor-email-suffix = "${config.actorEmailSuffix}"`,
     `default-heartbeat-interval = ${config.heartbeatInterval}`,
   ]
-  if (preservedHumanActor)    lines.push(`default-human-actor = "${preservedHumanActor}"`)
-  if (preservedDefaultChannel) lines.push(`default-channel = "${preservedDefaultChannel}"`)
+  if (preservedHumanActor)                       lines.push(`default-human-actor = "${preservedHumanActor}"`)
+  const effectiveDefaultChannel = config.defaultChannel ?? preservedDefaultChannel
+  if (effectiveDefaultChannel)                   lines.push(`default-channel = "${effectiveDefaultChannel}"`)
   lines.push(``, `[relay]`, `mode = "${config.relayMode}"`)
   if (config.relayMode === 'disabled') {
     lines.push(`# Offline mode — daemon does not connect to a relay.`)
@@ -332,9 +400,10 @@ function writeConfigAtomic(config: ResolvedConfig): void {
   const content = lines.join('\n') + '\n'
 
   // Atomic write: temp file in the SAME directory as the destination, then
-  // rename. Cross-filesystem rename() throws EXDEV on Linux (e.g. when /tmp
-  // is tmpfs and $HOME is on disk), so the temp must live next to the target.
-  const configDir = join(homedir(), '.crosstalk')
+  // rename. Cross-filesystem rename() throws EXDEV (e.g. /tmp on tmpfs and
+  // $HOME on disk), so the temp must live next to the target — derive dir
+  // from configPath, not from the hardcoded ~/.crosstalk.
+  const configDir = dirname(configPath)
   if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true })
 
   const tmpFile = join(configDir, `.config.toml.tmp.${process.pid}`)
