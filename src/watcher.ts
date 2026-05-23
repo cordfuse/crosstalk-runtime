@@ -160,7 +160,7 @@ export function startWatcher(
       // v1.18.0-alpha.3+ — synthesizer invocation on join.
       const threadIdField = typeof data['thread-id'] === 'string' ? data['thread-id'] : null;
       if (threadIdField && from && type !== 'spawn') {
-        recordThreadResponse(transportRoot, guid, threadIdField, relPath, from)
+        recordThreadResponse(transport, transportRoot, guid, threadIdField, relPath, from)
           .then(async result => {
             if (!result) return;
             if (result.joined) {
@@ -472,7 +472,7 @@ async function handleSpawn(
     ? Math.floor(expectsRaw)
     : childRelPaths.length;
   try {
-    await createThreadState(transportRoot, channel, threadId, relPath, expects, childRelPaths, synthesizer);
+    await createThreadState(transport, transportRoot, channel, threadId, relPath, expects, childRelPaths, synthesizer);
     console.log(`[spawn] thread ${threadId} created — expects ${expects}/${childRelPaths.length} response(s)`);
   } catch (err) {
     console.error(`[spawn] thread state write failed for ${threadId}: ${err}`);

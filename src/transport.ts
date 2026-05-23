@@ -100,6 +100,13 @@ export interface Transport {
   /** Read the full content of a specific message. Throws on not-found. */
   readMessage(ref: MessageRef): Promise<string>
 
+  /** Commit and push a file that has already been written to the transport
+   * working tree. `relPath` is relative to the transport root.
+   * For GitTransport: stages, commits with `message`, and pushes.
+   * For FilesystemTransport: no-op (file is already durable on local disk).
+   * Used by the orchestration layer to persist thread state durably. */
+  commitFile(relPath: string, message: string): Promise<void>
+
   /** Subscribe to new messages as they arrive. Callback fires once per
    * new message after subscription, in arrival order. Returns an
    * unsubscribe function (idempotent). Implementations are responsible

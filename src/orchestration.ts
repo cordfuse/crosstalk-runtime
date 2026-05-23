@@ -40,8 +40,15 @@ function threadsDir(transportRoot: string, channel: string): string {
   return join(transportRoot, 'channels', channel, '_threads');
 }
 
+/** Path relative to the transport root — used as the git relPath for
+ * `transport.commitFile`. Must match the absolute path produced by
+ * `threadFile` when prefixed with `transportRoot`. */
+export function threadFileRelPath(channel: string, threadId: string): string {
+  const safeId = threadId.replace(/[^a-zA-Z0-9._-]/g, '_');
+  return `channels/${channel}/_threads/${safeId}.json`;
+}
+
 function threadFile(transportRoot: string, channel: string, threadId: string): string {
-  // Sanitise for use as a filename: allow alphanum, dot, dash, underscore.
   const safeId = threadId.replace(/[^a-zA-Z0-9._-]/g, '_');
   return join(threadsDir(transportRoot, channel), `${safeId}.json`);
 }
@@ -62,8 +69,10 @@ export async function readThreadState(
 }
 
 async function writeThreadState(
+  transport: Transport,
   transportRoot: string,
   state: ThreadState,
+  commitMessage: string,
 ): Promise<void> {
   const dir = threadsDir(transportRoot, state.channel);
   await mkdir(dir, { recursive: true });
@@ -72,6 +81,8 @@ async function writeThreadState(
     JSON.stringify(state, null, 2),
     'utf-8',
   );
+  const relPath = threadFileRelPath(state.channel, state.threadId);
+  await transport.commitFile(relPath, commitMessage);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────
@@ -79,6 +90,7 @@ async function writeThreadState(
 /** Create and persist a new thread state when a spawn message is processed.
  * `expects` defaults to `children.length` if not provided (all must respond). */
 export async function createThreadState(
+  transport: Transport,
   transportRoot: string,
   channel: string,
   threadId: string,
@@ -99,7 +111,7 @@ export async function createThreadState(
     state: 'pending',
     createdAt: new Date().toISOString(),
   };
-  await writeThreadState(transportRoot, state);
+  await writeThreadState(transport, transportRoot, state, `thread: create ${threadId}`);
   return state;
 }
 
@@ -108,6 +120,7 @@ export async function createThreadState(
  * response completed the thread (`joined: true`), or null if the thread
  * doesn't exist / is already complete. */
 export async function recordThreadResponse(
+  transport: Transport,
   transportRoot: string,
   channel: string,
   threadId: string,
@@ -132,7 +145,10 @@ export async function recordThreadResponse(
     state.completedAt = new Date().toISOString();
   }
 
-  await writeThreadState(transportRoot, state);
+  const msg = joined
+    ? `thread: join ${threadId} (${state.responses.length}/${state.expects})`
+    : `thread: response ${state.responses.length}/${state.expects} on ${threadId}`;
+  await writeThreadState(transport, transportRoot, state, msg);
   return { state, joined };
 }
 
