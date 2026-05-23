@@ -1,5 +1,6 @@
 import { join } from 'path';
 import { readdir, readFile } from 'fs/promises';
+import { parse as parseYaml } from 'yaml';
 import { parseFrontmatter } from './frontmatter.js';
 import { dispatch, isDuplicate } from './dispatch.js';
 import { readCursor, listMessages, messagesAfterCursor } from './cursor.js';
@@ -102,7 +103,7 @@ export function startWatcher(
     const cursor = await readCursor(sessionId, guid);
     if (cursor && relPath <= cursor) return;
 
-    const { data } = parseFrontmatter(content);
+    const { data, body } = parseFrontmatter(content);
     const from = String(data.from ?? '');
     const to = String(data.to ?? '');
     const type = String(data.type ?? 'text');
@@ -151,7 +152,10 @@ export function startWatcher(
       }
     }
 
-    if (registry.has(from)) {
+    // v1.18.0-alpha.1+ — spawn messages from local actors must still be
+    // processed (watcher consumes them, not actors). All other own-actor
+    // messages skip as before to prevent dispatch loops.
+    if (registry.has(from) && type !== 'spawn') {
       console.log(`[watcher] skip (own) ${relPath}`);
       return;
     }
@@ -203,6 +207,16 @@ export function startWatcher(
       // loop bombing both daemons with cross-op responses. Skip dispatch
       // explicitly for governance types so the behavior is intentional
       // rather than accidental.
+      return;
+    }
+
+    // v1.18.0-alpha.1+ — orchestration: spawn messages are watcher-handled
+    // meta-instructions, not actor work. The watcher parses the task list and
+    // posts each child as a new message in the same channel. Children carry
+    // no `from:` field (posted by watcher) so they are never self-loop-skipped
+    // by any daemon. Thread state tracking deferred to alpha.2.
+    if (type === 'spawn') {
+      await handleSpawn(transport, guid, relPath, data, body);
       return;
     }
 
@@ -315,6 +329,88 @@ export function startWatcher(
   };
 
   return { rescanAll };
+}
+
+// ── v1.18.0-alpha.1+ — orchestration ─────────────────────────────────────
+
+/** Fire-and-forget spawn handler. Parses the spawn body (YAML task list)
+ * and posts each child as a new message in the same channel. Children have
+ * no `from:` field so they are never self-loop-skipped on any daemon.
+ *
+ * Spawn body format (YAML list):
+ *
+ *   - to: actor-name
+ *     body: |
+ *       Task content here.
+ *   - to: other-actor
+ *     type: text        # optional; defaults to "text"
+ *     body: |
+ *       Another task.
+ *
+ * Frontmatter on the spawn message:
+ *   thread-id: <string>    optional — if omitted, derived from relPath
+ *   expects: <N>           optional — used by alpha.2 join tracker
+ *   synthesizer: <actor>   optional — used by alpha.3 synthesis dispatch
+ */
+async function handleSpawn(
+  transport: Transport,
+  channel: string,
+  relPath: string,
+  data: Record<string, unknown>,
+  body: string,
+): Promise<void> {
+  let tasks: unknown;
+  try {
+    tasks = parseYaml(body);
+  } catch (err) {
+    console.error(`[spawn] parse error in ${channel.slice(0, 8)}/${relPath}: ${err}`);
+    return;
+  }
+
+  if (!Array.isArray(tasks) || tasks.length === 0) {
+    console.warn(`[spawn] body must be a non-empty YAML list — ${channel.slice(0, 8)}/${relPath}`);
+    return;
+  }
+
+  // Derive thread-id from frontmatter; fall back to a slug of the relPath.
+  const threadId = (typeof data['thread-id'] === 'string' && data['thread-id'])
+    ? data['thread-id']
+    : relPath.replace(/\//g, '-').replace(/\.md$/, '');
+
+  const spawnFrom = typeof data.from === 'string' ? data.from : '';
+
+  console.log(`[spawn] ${channel.slice(0, 8)}/${relPath} — thread ${threadId} — ${tasks.length} task(s)`);
+
+  for (const task of tasks) {
+    if (!task || typeof task !== 'object' || Array.isArray(task)) continue;
+    const t = task as Record<string, unknown>;
+    const taskTo   = typeof t.to   === 'string' ? t.to.trim()  : '';
+    const taskBody = typeof t.body === 'string' ? t.body        : '';
+    const taskType = typeof t.type === 'string' ? t.type.trim() : 'text';
+
+    if (!taskTo) {
+      console.warn(`[spawn] task missing 'to' in thread ${threadId} — skipping`);
+      continue;
+    }
+
+    const fm = [
+      '---',
+      ...(spawnFrom ? [`spawn-from: ${spawnFrom}`] : []),
+      `to: ${taskTo}`,
+      `type: ${taskType}`,
+      `thread-id: ${threadId}`,
+      `in-reply-to: ${relPath}`,
+      '---',
+    ].join('\n');
+    const childContent = `${fm}\n${taskBody}`;
+
+    try {
+      const childRelPath = await transport.postMessage(channel, WATCHER_IDENTITY, childContent);
+      console.log(`[spawn] → ${taskTo} at ${childRelPath}`);
+    } catch (err) {
+      console.error(`[spawn] failed to post child → ${taskTo}: ${err}`);
+    }
+  }
 }
 
 /** Expand a message's `to:` field to the actor instances on THIS daemon
