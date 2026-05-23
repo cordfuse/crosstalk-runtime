@@ -14,6 +14,7 @@ import { verifyMessage } from './signing.js';
 import { applyDispatchPolicy, parseDispatchPolicy } from './dispatch-policy.js';
 import { QuorumTracker, emitPoolQuorumReached, emitPoolQuorumFailed } from './quorum-tracker.js';
 import { WATCHER_IDENTITY } from './system.js';
+import { createThreadState, recordThreadResponse } from './orchestration.js';
 
 /**
  * Subscribes to transport events and dispatches messages to actors per
@@ -136,6 +137,10 @@ export function startWatcher(
     // ARE in our local registry, so the self-loop check would early-
     // exit and the QuorumTracker would never count them. Record FIRST
     // — bookkeeping is distinct from re-dispatch.
+    //
+    // v1.18.0-alpha.2+ — thread response tracking runs here for the same
+    // reason: spawn child responses come FROM local actors (in the registry),
+    // so tracking must happen before the self-loop check.
     {
       const inReplyTo = typeof data['in-reply-to'] === 'string' ? data['in-reply-to'] : null;
       if (inReplyTo && from) {
@@ -149,6 +154,29 @@ export function startWatcher(
         } else if (verdict.action === 'all-responded') {
           quorumTracker.close(guid, inReplyTo);
         }
+      }
+
+      // v1.18.0-alpha.2+ — thread response tracking.
+      const threadIdField = typeof data['thread-id'] === 'string' ? data['thread-id'] : null;
+      if (threadIdField && from && type !== 'spawn') {
+        recordThreadResponse(transportRoot, guid, threadIdField, relPath, from)
+          .then(result => {
+            if (!result) return;
+            if (result.joined) {
+              console.log(
+                `[thread] join: thread ${threadIdField} complete` +
+                ` (${result.state.responses.length}/${result.state.expects} responses)` +
+                (result.state.synthesizer ? ` — synthesizer: ${result.state.synthesizer}` : ''),
+              );
+              // alpha.3: invoke synthesizer actor here
+            } else {
+              console.log(
+                `[thread] response ${result.state.responses.length}/${result.state.expects}` +
+                ` on thread ${threadIdField} from ${from}`,
+              );
+            }
+          })
+          .catch(err => console.error(`[thread] response tracking failed: ${err}`));
       }
     }
 
@@ -216,7 +244,7 @@ export function startWatcher(
     // no `from:` field (posted by watcher) so they are never self-loop-skipped
     // by any daemon. Thread state tracking deferred to alpha.2.
     if (type === 'spawn') {
-      await handleSpawn(transport, guid, relPath, data, body);
+      await handleSpawn(transport, transportRoot, guid, relPath, data, body);
       return;
     }
 
@@ -333,9 +361,12 @@ export function startWatcher(
 
 // ── v1.18.0-alpha.1+ — orchestration ─────────────────────────────────────
 
-/** Fire-and-forget spawn handler. Parses the spawn body (YAML task list)
- * and posts each child as a new message in the same channel. Children have
- * no `from:` field so they are never self-loop-skipped on any daemon.
+/** v1.18.0-alpha.1+ fire-and-forget spawn handler (thread state added alpha.2).
+ * Parses the spawn body (YAML task list), posts each child as a new message
+ * in the same channel, then persists a thread state file for join tracking.
+ *
+ * Children have no `from:` field so they are never self-loop-skipped on any
+ * daemon. `spawn-from:` carries the original sender for actor context.
  *
  * Spawn body format (YAML list):
  *
@@ -347,13 +378,14 @@ export function startWatcher(
  *     body: |
  *       Another task.
  *
- * Frontmatter on the spawn message:
- *   thread-id: <string>    optional — if omitted, derived from relPath
- *   expects: <N>           optional — used by alpha.2 join tracker
- *   synthesizer: <actor>   optional — used by alpha.3 synthesis dispatch
+ * Supported frontmatter on the spawn message:
+ *   thread-id: <string>    optional — derived from relPath if omitted
+ *   expects: <N>           optional — default: number of children posted
+ *   synthesizer: <actor>   optional — invoked on join (alpha.3)
  */
 async function handleSpawn(
   transport: Transport,
+  transportRoot: string,
   channel: string,
   relPath: string,
   data: Record<string, unknown>,
@@ -378,8 +410,11 @@ async function handleSpawn(
     : relPath.replace(/\//g, '-').replace(/\.md$/, '');
 
   const spawnFrom = typeof data.from === 'string' ? data.from : '';
+  const synthesizer = typeof data.synthesizer === 'string' ? data.synthesizer : undefined;
 
   console.log(`[spawn] ${channel.slice(0, 8)}/${relPath} — thread ${threadId} — ${tasks.length} task(s)`);
+
+  const childRelPaths: string[] = [];
 
   for (const task of tasks) {
     if (!task || typeof task !== 'object' || Array.isArray(task)) continue;
@@ -406,10 +441,25 @@ async function handleSpawn(
 
     try {
       const childRelPath = await transport.postMessage(channel, WATCHER_IDENTITY, childContent);
+      childRelPaths.push(childRelPath);
       console.log(`[spawn] → ${taskTo} at ${childRelPath}`);
     } catch (err) {
       console.error(`[spawn] failed to post child → ${taskTo}: ${err}`);
     }
+  }
+
+  if (childRelPaths.length === 0) return;
+
+  // v1.18.0-alpha.2+ — persist thread state for join tracking.
+  const expectsRaw = data.expects;
+  const expects = (typeof expectsRaw === 'number' && Number.isFinite(expectsRaw) && expectsRaw >= 1)
+    ? Math.floor(expectsRaw)
+    : childRelPaths.length;
+  try {
+    await createThreadState(transportRoot, channel, threadId, relPath, expects, childRelPaths, synthesizer);
+    console.log(`[spawn] thread ${threadId} created — expects ${expects}/${childRelPaths.length} response(s)`);
+  } catch (err) {
+    console.error(`[spawn] thread state write failed for ${threadId}: ${err}`);
   }
 }
 
