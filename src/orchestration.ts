@@ -15,6 +15,8 @@
  */
 import { join } from 'path';
 import { mkdir, readFile, writeFile } from 'fs/promises';
+import { parseFrontmatter } from './frontmatter.js';
+import type { Transport } from './transport.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -132,4 +134,73 @@ export async function recordThreadResponse(
 
   await writeThreadState(transportRoot, state);
   return { state, joined };
+}
+
+// ── Synthesis ─────────────────────────────────────────────────────────────
+
+/** Build the full content (frontmatter + body) of a synthesis-request
+ * message. Reads the original spawn and all recorded response messages from
+ * the transport, strips their frontmatter, and assembles a context document
+ * that a synthesizer actor can act on directly.
+ *
+ * The returned string is ready to pass to `transport.postMessage`. The
+ * synthesizer is identified by `state.synthesizer`; callers must ensure
+ * the field is set before calling.
+ *
+ * Cross-operator note: if the synthesizer lives on a different daemon, the
+ * message will be posted and picked up by that daemon's watcher via the
+ * normal sync path — no special dispatch needed here. */
+export async function buildSynthesisRequest(
+  transport: Transport,
+  channel: string,
+  state: ThreadState,
+): Promise<string> {
+  // Read spawn message body
+  let spawnBody = '';
+  try {
+    const raw = await transport.readMessage({ channel, relPath: state.spawnRelPath });
+    spawnBody = parseFrontmatter(raw).body.trim();
+  } catch {
+    spawnBody = '[spawn message could not be read]';
+  }
+
+  // Read each response body
+  const responseSections: string[] = [];
+  for (let i = 0; i < state.responses.length; i++) {
+    const relPath  = state.responses[i]!;
+    const respondent = state.respondents[i] ?? 'unknown';
+    let respBody = '';
+    try {
+      const raw = await transport.readMessage({ channel, relPath });
+      respBody = parseFrontmatter(raw).body.trim();
+    } catch {
+      respBody = '[response could not be read]';
+    }
+    responseSections.push(`### Response ${i + 1} — from: ${respondent}\n\n${respBody}`);
+  }
+
+  const bodyLines = [
+    `# Synthesis Request — thread: ${state.threadId}`,
+    '',
+    '## Original Task',
+    '',
+    spawnBody,
+    '',
+    '---',
+    '',
+    `## Responses (${state.responses.length} of ${state.expects})`,
+    '',
+    responseSections.join('\n\n---\n\n'),
+  ];
+
+  const fm = [
+    '---',
+    `to: ${state.synthesizer}`,
+    `type: synthesis-request`,
+    `thread-id: ${state.threadId}`,
+    `in-reply-to: ${state.spawnRelPath}`,
+    '---',
+  ].join('\n');
+
+  return `${fm}\n${bodyLines.join('\n')}\n`;
 }

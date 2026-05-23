@@ -14,7 +14,7 @@ import { verifyMessage } from './signing.js';
 import { applyDispatchPolicy, parseDispatchPolicy } from './dispatch-policy.js';
 import { QuorumTracker, emitPoolQuorumReached, emitPoolQuorumFailed } from './quorum-tracker.js';
 import { WATCHER_IDENTITY } from './system.js';
-import { createThreadState, recordThreadResponse } from './orchestration.js';
+import { createThreadState, recordThreadResponse, buildSynthesisRequest } from './orchestration.js';
 
 /**
  * Subscribes to transport events and dispatches messages to actors per
@@ -157,10 +157,11 @@ export function startWatcher(
       }
 
       // v1.18.0-alpha.2+ — thread response tracking.
+      // v1.18.0-alpha.3+ — synthesizer invocation on join.
       const threadIdField = typeof data['thread-id'] === 'string' ? data['thread-id'] : null;
       if (threadIdField && from && type !== 'spawn') {
         recordThreadResponse(transportRoot, guid, threadIdField, relPath, from)
-          .then(result => {
+          .then(async result => {
             if (!result) return;
             if (result.joined) {
               console.log(
@@ -168,7 +169,22 @@ export function startWatcher(
                 ` (${result.state.responses.length}/${result.state.expects} responses)` +
                 (result.state.synthesizer ? ` — synthesizer: ${result.state.synthesizer}` : ''),
               );
-              // alpha.3: invoke synthesizer actor here
+              // v1.18.0-alpha.3+ — post synthesis-request and let the normal
+              // watcher dispatch pipeline deliver it. Posting here rather than
+              // dispatching manually avoids a double-dispatch race (the watcher
+              // would see the new message via fs.watch/rescan and dispatch it
+              // again if we also called dispatch() here). Cross-operator:
+              // if the synthesizer is on another daemon, their watcher picks it
+              // up via sync — nothing special needed.
+              if (result.state.synthesizer) {
+                try {
+                  const synthContent = await buildSynthesisRequest(transport, guid, result.state);
+                  const synthRelPath = await transport.postMessage(guid, WATCHER_IDENTITY, synthContent);
+                  console.log(`[thread] synthesis-request → ${result.state.synthesizer} at ${synthRelPath}`);
+                } catch (err) {
+                  console.error(`[thread] synthesizer invocation failed for thread ${threadIdField}: ${err}`);
+                }
+              }
             } else {
               console.log(
                 `[thread] response ${result.state.responses.length}/${result.state.expects}` +
