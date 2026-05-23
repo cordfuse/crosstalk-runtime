@@ -148,6 +148,8 @@ export class FilesystemTransport implements Transport {
     }
   }
 
+  async commitFile(_relPath: string, _message: string): Promise<void> {}  // no-op; file already on disk
+
   async manifestFileVersion(relPath: string): Promise<string> {
     try {
       const content = await readFile(join(this.root, relPath), 'utf-8')

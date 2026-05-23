@@ -1,8 +1,9 @@
 import { join } from 'path';
 import { readdir, readFile } from 'fs/promises';
+import { parse as parseYaml } from 'yaml';
 import { parseFrontmatter } from './frontmatter.js';
 import { dispatch, isDuplicate } from './dispatch.js';
-import { readCursor, listMessages, messagesAfterCursor } from './cursor.js';
+import { readCursor, writeCursor, listMessages, messagesAfterCursor } from './cursor.js';
 import type { Transport, MessageEvent } from './transport.js';
 import type { ActorConfig, Registry } from './registry.js';
 import { resolveAddress } from './registry.js';
@@ -13,6 +14,7 @@ import { verifyMessage } from './signing.js';
 import { applyDispatchPolicy, parseDispatchPolicy } from './dispatch-policy.js';
 import { QuorumTracker, emitPoolQuorumReached, emitPoolQuorumFailed } from './quorum-tracker.js';
 import { WATCHER_IDENTITY } from './system.js';
+import { createThreadState, recordThreadResponse, buildSynthesisRequest, markSynthesisSent } from './orchestration.js';
 
 /**
  * Subscribes to transport events and dispatches messages to actors per
@@ -102,7 +104,7 @@ export function startWatcher(
     const cursor = await readCursor(sessionId, guid);
     if (cursor && relPath <= cursor) return;
 
-    const { data } = parseFrontmatter(content);
+    const { data, body } = parseFrontmatter(content);
     const from = String(data.from ?? '');
     const to = String(data.to ?? '');
     const type = String(data.type ?? 'text');
@@ -135,6 +137,10 @@ export function startWatcher(
     // ARE in our local registry, so the self-loop check would early-
     // exit and the QuorumTracker would never count them. Record FIRST
     // — bookkeeping is distinct from re-dispatch.
+    //
+    // v1.18.0-alpha.2+ — thread response tracking runs here for the same
+    // reason: spawn child responses come FROM local actors (in the registry),
+    // so tracking must happen before the self-loop check.
     {
       const inReplyTo = typeof data['in-reply-to'] === 'string' ? data['in-reply-to'] : null;
       if (inReplyTo && from) {
@@ -149,9 +155,61 @@ export function startWatcher(
           quorumTracker.close(guid, inReplyTo);
         }
       }
+
+      // v1.18.0-alpha.2+ — thread response tracking.
+      // v1.18.0-alpha.3+ — synthesizer invocation on join.
+      const threadIdField = typeof data['thread-id'] === 'string' ? data['thread-id'] : null;
+      if (threadIdField && from && type !== 'spawn') {
+        recordThreadResponse(transport, transportRoot, guid, threadIdField, relPath, from)
+          .then(async result => {
+            if (!result) return;
+            if (result.joined) {
+              console.log(
+                `[thread] join: thread ${threadIdField} complete` +
+                ` (${result.state.responses.length}/${result.state.expects} responses)` +
+                (result.state.synthesizer ? ` — synthesizer: ${result.state.synthesizer}` : ''),
+              );
+              // v1.18.0-alpha.3+ — post synthesis-request and let the normal
+              // watcher dispatch pipeline deliver it. Posting here rather than
+              // dispatching manually avoids a double-dispatch race (the watcher
+              // would see the new message via fs.watch/rescan and dispatch it
+              // again if we also called dispatch() here). Cross-operator:
+              // if the synthesizer is on another daemon, their watcher picks it
+              // up via sync — nothing special needed.
+              if (result.state.synthesizer) {
+                // Guard: if synthesis-request was already posted (restart or
+                // multi-daemon), skip re-posting. synthesisRelPath is set
+                // immediately after posting via markSynthesisSent so this is
+                // durable across restarts for both GitTransport and
+                // FilesystemTransport.
+                if (result.state.synthesisRelPath) {
+                  console.log(`[thread] synthesis already sent at ${result.state.synthesisRelPath} — skipping`);
+                } else {
+                  try {
+                    const synthContent = await buildSynthesisRequest(transport, guid, result.state);
+                    const synthRelPath = await transport.postMessage(guid, WATCHER_IDENTITY, synthContent);
+                    console.log(`[thread] synthesis-request → ${result.state.synthesizer} at ${synthRelPath}`);
+                    await markSynthesisSent(transport, transportRoot, guid, threadIdField, synthRelPath);
+                  } catch (err) {
+                    console.error(`[thread] synthesizer invocation failed for thread ${threadIdField}: ${err}`);
+                  }
+                }
+              }
+            } else {
+              console.log(
+                `[thread] response ${result.state.responses.length}/${result.state.expects}` +
+                ` on thread ${threadIdField} from ${from}`,
+              );
+            }
+          })
+          .catch(err => console.error(`[thread] response tracking failed: ${err}`));
+      }
     }
 
-    if (registry.has(from)) {
+    // v1.18.0-alpha.1+ — spawn messages from local actors must still be
+    // processed (watcher consumes them, not actors). All other own-actor
+    // messages skip as before to prevent dispatch loops.
+    if (registry.has(from) && type !== 'spawn') {
       console.log(`[watcher] skip (own) ${relPath}`);
       return;
     }
@@ -203,6 +261,20 @@ export function startWatcher(
       // loop bombing both daemons with cross-op responses. Skip dispatch
       // explicitly for governance types so the behavior is intentional
       // rather than accidental.
+      return;
+    }
+
+    // v1.18.0-alpha.1+ — orchestration: spawn messages are watcher-handled
+    // meta-instructions, not actor work. The watcher parses the task list and
+    // posts each child as a new message in the same channel. Children carry
+    // no `from:` field (posted by watcher) so they are never self-loop-skipped
+    // by any daemon. Thread state tracking deferred to alpha.2.
+    if (type === 'spawn') {
+      await handleSpawn(transport, transportRoot, guid, relPath, data, body);
+      // Advance cursor so rescanAll / polling does not re-fire this spawn.
+      // Dispatch writes the cursor for normal messages; spawn never reaches
+      // dispatch, so we write it here explicitly.
+      await writeCursor(sessionId, guid, relPath);
       return;
     }
 
@@ -315,6 +387,110 @@ export function startWatcher(
   };
 
   return { rescanAll };
+}
+
+// ── v1.18.0-alpha.1+ — orchestration ─────────────────────────────────────
+
+/** v1.18.0-alpha.1+ fire-and-forget spawn handler (thread state added alpha.2).
+ * Parses the spawn body (YAML task list), posts each child as a new message
+ * in the same channel, then persists a thread state file for join tracking.
+ *
+ * Children have no `from:` field so they are never self-loop-skipped on any
+ * daemon. `spawn-from:` carries the original sender for actor context.
+ *
+ * Spawn body format (YAML list):
+ *
+ *   - to: actor-name
+ *     body: |
+ *       Task content here.
+ *   - to: other-actor
+ *     type: text        # optional; defaults to "text"
+ *     body: |
+ *       Another task.
+ *
+ * Supported frontmatter on the spawn message:
+ *   thread-id: <string>    optional — derived from relPath if omitted
+ *   expects: <N>           optional — default: number of children posted
+ *   synthesizer: <actor>   optional — invoked on join (alpha.3)
+ */
+async function handleSpawn(
+  transport: Transport,
+  transportRoot: string,
+  channel: string,
+  relPath: string,
+  data: Record<string, unknown>,
+  body: string,
+): Promise<void> {
+  let tasks: unknown;
+  try {
+    tasks = parseYaml(body);
+  } catch (err) {
+    console.error(`[spawn] parse error in ${channel.slice(0, 8)}/${relPath}: ${err}`);
+    return;
+  }
+
+  if (!Array.isArray(tasks) || tasks.length === 0) {
+    console.warn(`[spawn] body must be a non-empty YAML list — ${channel.slice(0, 8)}/${relPath}`);
+    return;
+  }
+
+  // Derive thread-id from frontmatter; fall back to a slug of the relPath.
+  const threadId = (typeof data['thread-id'] === 'string' && data['thread-id'])
+    ? data['thread-id']
+    : relPath.replace(/\//g, '-').replace(/\.md$/, '');
+
+  const spawnFrom = typeof data.from === 'string' ? data.from : '';
+  const synthesizer = typeof data.synthesizer === 'string' ? data.synthesizer : undefined;
+
+  console.log(`[spawn] ${channel.slice(0, 8)}/${relPath} — thread ${threadId} — ${tasks.length} task(s)`);
+
+  const childRelPaths: string[] = [];
+
+  for (const task of tasks) {
+    if (!task || typeof task !== 'object' || Array.isArray(task)) continue;
+    const t = task as Record<string, unknown>;
+    const taskTo   = typeof t.to   === 'string' ? t.to.trim()  : '';
+    const taskBody = typeof t.body === 'string' ? t.body        : '';
+    const taskType = typeof t.type === 'string' ? t.type.trim() : 'text';
+
+    if (!taskTo) {
+      console.warn(`[spawn] task missing 'to' in thread ${threadId} — skipping`);
+      continue;
+    }
+
+    const fm = [
+      '---',
+      ...(spawnFrom ? [`spawn-from: ${spawnFrom}`] : []),
+      `to: ${taskTo}`,
+      `type: ${taskType}`,
+      `thread-id: ${threadId}`,
+      `in-reply-to: ${relPath}`,
+      '---',
+    ].join('\n');
+    const childContent = `${fm}\n${taskBody}`;
+
+    try {
+      const childRelPath = await transport.postMessage(channel, WATCHER_IDENTITY, childContent);
+      childRelPaths.push(childRelPath);
+      console.log(`[spawn] → ${taskTo} at ${childRelPath}`);
+    } catch (err) {
+      console.error(`[spawn] failed to post child → ${taskTo}: ${err}`);
+    }
+  }
+
+  if (childRelPaths.length === 0) return;
+
+  // v1.18.0-alpha.2+ — persist thread state for join tracking.
+  const expectsRaw = data.expects;
+  const expects = (typeof expectsRaw === 'number' && Number.isFinite(expectsRaw) && expectsRaw >= 1)
+    ? Math.floor(expectsRaw)
+    : childRelPaths.length;
+  try {
+    await createThreadState(transport, transportRoot, channel, threadId, relPath, expects, childRelPaths, synthesizer);
+    console.log(`[spawn] thread ${threadId} created — expects ${expects}/${childRelPaths.length} response(s)`);
+  } catch (err) {
+    console.error(`[spawn] thread state write failed for ${threadId}: ${err}`);
+  }
 }
 
 /** Expand a message's `to:` field to the actor instances on THIS daemon

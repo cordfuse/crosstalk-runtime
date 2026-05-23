@@ -272,6 +272,11 @@ export class GitTransport implements Transport {
     }
   }
 
+  async commitFile(relPath: string, message: string): Promise<void> {
+    const actor = { name: 'crosstalk-watcher', email: 'watcher@crosstalk.internal' }
+    await this.commitAndPush(this.root, relPath, actor, message)
+  }
+
   async manifestFileVersion(relPath: string): Promise<string> {
     try {
       const { stdout } = await execFileP('git', ['log', '-1', '--format=%H', '--', relPath], {
