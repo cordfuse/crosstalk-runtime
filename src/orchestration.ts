@@ -32,6 +32,10 @@ export interface ThreadState {
   state: 'pending' | 'complete';
   createdAt: string;
   completedAt?: string;
+  /** relPath of the synthesis-request message posted on join. Set after posting
+   * so a daemon restart (or second daemon) can detect it was already sent and
+   * skip re-invocation. */
+  synthesisRelPath?: string;
 }
 
 // ── Path helpers ──────────────────────────────────────────────────────────
@@ -128,7 +132,11 @@ export async function recordThreadResponse(
   respondent: string,
 ): Promise<{ state: ThreadState; joined: boolean } | null> {
   const state = await readThreadState(transportRoot, channel, threadId);
-  if (!state || state.state === 'complete') return null;
+  if (!state) return null;
+  if (state.state === 'complete') {
+    console.log(`[thread] late arrival on thread ${threadId} from ${respondent} — already complete, ignoring`);
+    return null;
+  }
 
   if (state.responses.includes(responseRelPath)) {
     return { state, joined: false };
@@ -150,6 +158,23 @@ export async function recordThreadResponse(
     : `thread: response ${state.responses.length}/${state.expects} on ${threadId}`;
   await writeThreadState(transport, transportRoot, state, msg);
   return { state, joined };
+}
+
+/** Record the relPath of the synthesis-request message posted on join.
+ * Guards against re-posting on daemon restart or in multi-daemon scenarios:
+ * callers should check `state.synthesisRelPath` before calling
+ * `buildSynthesisRequest`, and call this immediately after posting. */
+export async function markSynthesisSent(
+  transport: Transport,
+  transportRoot: string,
+  channel: string,
+  threadId: string,
+  synthRelPath: string,
+): Promise<void> {
+  const state = await readThreadState(transportRoot, channel, threadId);
+  if (!state) return;
+  state.synthesisRelPath = synthRelPath;
+  await writeThreadState(transport, transportRoot, state, `thread: synthesis sent ${threadId}`);
 }
 
 // ── Synthesis ─────────────────────────────────────────────────────────────

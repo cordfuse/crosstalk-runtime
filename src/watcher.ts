@@ -14,7 +14,7 @@ import { verifyMessage } from './signing.js';
 import { applyDispatchPolicy, parseDispatchPolicy } from './dispatch-policy.js';
 import { QuorumTracker, emitPoolQuorumReached, emitPoolQuorumFailed } from './quorum-tracker.js';
 import { WATCHER_IDENTITY } from './system.js';
-import { createThreadState, recordThreadResponse, buildSynthesisRequest } from './orchestration.js';
+import { createThreadState, recordThreadResponse, buildSynthesisRequest, markSynthesisSent } from './orchestration.js';
 
 /**
  * Subscribes to transport events and dispatches messages to actors per
@@ -177,12 +177,22 @@ export function startWatcher(
               // if the synthesizer is on another daemon, their watcher picks it
               // up via sync — nothing special needed.
               if (result.state.synthesizer) {
-                try {
-                  const synthContent = await buildSynthesisRequest(transport, guid, result.state);
-                  const synthRelPath = await transport.postMessage(guid, WATCHER_IDENTITY, synthContent);
-                  console.log(`[thread] synthesis-request → ${result.state.synthesizer} at ${synthRelPath}`);
-                } catch (err) {
-                  console.error(`[thread] synthesizer invocation failed for thread ${threadIdField}: ${err}`);
+                // Guard: if synthesis-request was already posted (restart or
+                // multi-daemon), skip re-posting. synthesisRelPath is set
+                // immediately after posting via markSynthesisSent so this is
+                // durable across restarts for both GitTransport and
+                // FilesystemTransport.
+                if (result.state.synthesisRelPath) {
+                  console.log(`[thread] synthesis already sent at ${result.state.synthesisRelPath} — skipping`);
+                } else {
+                  try {
+                    const synthContent = await buildSynthesisRequest(transport, guid, result.state);
+                    const synthRelPath = await transport.postMessage(guid, WATCHER_IDENTITY, synthContent);
+                    console.log(`[thread] synthesis-request → ${result.state.synthesizer} at ${synthRelPath}`);
+                    await markSynthesisSent(transport, transportRoot, guid, threadIdField, synthRelPath);
+                  } catch (err) {
+                    console.error(`[thread] synthesizer invocation failed for thread ${threadIdField}: ${err}`);
+                  }
                 }
               }
             } else {
