@@ -3,7 +3,7 @@ import { readdir, readFile } from 'fs/promises';
 import { parse as parseYaml } from 'yaml';
 import { parseFrontmatter } from './frontmatter.js';
 import { dispatch, isDuplicate } from './dispatch.js';
-import { readCursor, listMessages, messagesAfterCursor } from './cursor.js';
+import { readCursor, writeCursor, listMessages, messagesAfterCursor } from './cursor.js';
 import type { Transport, MessageEvent } from './transport.js';
 import type { ActorConfig, Registry } from './registry.js';
 import { resolveAddress } from './registry.js';
@@ -271,6 +271,10 @@ export function startWatcher(
     // by any daemon. Thread state tracking deferred to alpha.2.
     if (type === 'spawn') {
       await handleSpawn(transport, transportRoot, guid, relPath, data, body);
+      // Advance cursor so rescanAll / polling does not re-fire this spawn.
+      // Dispatch writes the cursor for normal messages; spawn never reaches
+      // dispatch, so we write it here explicitly.
+      await writeCursor(sessionId, guid, relPath);
       return;
     }
 
