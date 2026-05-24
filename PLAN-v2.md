@@ -128,10 +128,33 @@ Message body here.
 |---|---|---|---|
 | `from` | yes | free-form name | must match git commit author |
 | `to` | yes | name, list of names, or `all` | `all` = every participant; single name and list are equivalent for one entry |
-| `type` | yes | `text` | only type in v2 |
+| `type` | yes | `text`, `read` | see Message types |
 | `timestamp` | yes | ISO 8601 UTC | |
+| `ref` | conditional | relPath of original message | required when `type: read` |
 
 That's it. No other fields are part of the spec.
+
+### Message types
+
+**`type: text`** — a normal message. Body is the message content.
+
+**`type: read`** — a read receipt. Posted by a participant to acknowledge they have
+consumed a specific message. Body is empty or omitted. The `ref` field contains the
+`relPath` of the message being acknowledged (`YYYY/MM/DD/HHMMSSsssZ-<hex>.md`).
+
+```
+---
+from: concierge
+to: alice
+type: read
+timestamp: 2026-05-23T19:01:00.000Z
+ref: 2026/05/23/190000000Z-a1b2c3d4.md
+---
+```
+
+Read receipts are optional. Senders cannot require them. Participants who do not post
+them are not violating the protocol. Readers who want acknowledgment visibility scan
+the channel for `type: read` messages whose `ref` matches the message they care about.
 
 ### `to` field rules
 
