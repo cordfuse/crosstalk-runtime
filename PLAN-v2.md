@@ -156,6 +156,20 @@ Read receipts are optional. Senders cannot require them. Participants who do not
 them are not violating the protocol. Readers who want acknowledgment visibility scan
 the channel for `type: read` messages whose `ref` matches the message they care about.
 
+### Privacy model
+
+`to` is a routing hint, not an access control boundary. Every message in the channel
+is visible to anyone with read access to the git repository. Crosstalk provides no
+confidentiality guarantees.
+
+Participants are expected to ignore messages not addressed to them. That is a
+convention, not enforcement — the protocol does not and cannot prevent a participant
+from reading messages addressed to others.
+
+There are no whisper or ephemeral message types. Operators who require confidentiality
+must secure the repository itself (private repo, access controls) or encrypt message
+bodies outside the protocol.
+
 ### `to` field rules
 
 - A single string value targets one participant: `to: concierge`
