@@ -75,7 +75,6 @@ free — git already tracks it. No signing infrastructure needed.
         MM/
           DD/
             HHMMSSsssZ-<hex>.md
-  _system/          # reserved — presence events only
   CROSSTALK-VERSION
 ```
 
@@ -181,7 +180,6 @@ bodies outside the protocol.
 ### Reserved values
 
 - `to: all` — addressed to every participant in the channel
-- `_system/` — reserved directory for presence events (online/offline)
 - `CROSSTALK-VERSION` — semver string, declares protocol version
 
 ### Git identity
@@ -192,8 +190,10 @@ defined). The operator sets these up once. How is outside the spec.
 
 ### CROSSTALK-VERSION
 
-A plain text file at the transport root containing a semver string. Readers may
-check it for compatibility. Writers should set it when initialising a transport.
+A plain text file at the transport root containing a semver string. This is a hard
+version boundary — readers encountering a version other than `2.0` must not process
+messages and should surface an incompatibility error. Writers must set it to `2.0`
+when initialising a transport.
 
 Current version: `2.0`
 
@@ -242,9 +242,11 @@ the frontmatter is operator-defined and Crosstalk v2 does not care about it.
 
 ---
 
-## Open questions
+## Decisions
 
-- Does v2 live in this repo or a new one? (`cordfuse/crosstalk` — the original
-  spec repo — may be the right home. This runtime repo may be archived.)
-- Does the `_system/` presence convention survive, or is even that out of scope?
-- Is `CROSSTALK-VERSION: 2.0` a hard break or should readers be lenient?
+- **Repo:** v2 lives in `cordfuse/crosstalk` (the original spec repo). This runtime
+  repo (`cordfuse/crosstalk-runtime`) will be archived once the v2 spec lands there.
+- **`_system/`:** removed. No daemon means no presence events. The directory had no
+  purpose in a spec-only protocol.
+- **Version leniency:** hard break. Readers encountering any version other than `2.0`
+  must not process messages.
