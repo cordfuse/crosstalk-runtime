@@ -83,10 +83,38 @@ free — git already tracks it. No signing infrastructure needed.
 
 Every message is a markdown file with YAML frontmatter:
 
+Single recipient:
+
 ```
 ---
 from: alice
 to: concierge
+type: text
+timestamp: 2026-05-23T19:00:00.000Z
+---
+
+Message body here.
+```
+
+Multiple recipients (YAML list, inline or block form both valid):
+
+```
+---
+from: alice
+to: [concierge, ops-bot]
+type: text
+timestamp: 2026-05-23T19:00:00.000Z
+---
+
+Message body here.
+```
+
+Broadcast:
+
+```
+---
+from: alice
+to: all
 type: text
 timestamp: 2026-05-23T19:00:00.000Z
 ---
@@ -99,11 +127,19 @@ Message body here.
 | Field | Required | Values | Notes |
 |---|---|---|---|
 | `from` | yes | free-form name | must match git commit author |
-| `to` | yes | free-form name, or `all` | `all` = every participant |
+| `to` | yes | name, list of names, or `all` | `all` = every participant; single name and list are equivalent for one entry |
 | `type` | yes | `text` | only type in v2 |
 | `timestamp` | yes | ISO 8601 UTC | |
 
 That's it. No other fields are part of the spec.
+
+### `to` field rules
+
+- A single string value targets one participant: `to: concierge`
+- A YAML list targets multiple: `to: [concierge, ops-bot]` or block form
+- The string `all` targets every participant in the channel
+- Readers filter: a message is relevant to you if your name appears in `to`, or if `to` is `all`
+- `from` is never implicitly included in `to` — senders do not receive their own messages
 
 ### Reserved values
 
