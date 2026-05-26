@@ -1,0 +1,35 @@
+# Crosstalk runtime v2 config
+# Copy to config.yaml and fill in your values. config.yaml is git-ignored.
+
+transport: ../crosstalk-dogfood   # path to transport repo (absolute or relative to this file)
+
+jitter: 5000   # max ms to sleep before pushing (prevents concurrent-push conflicts)
+
+agents:
+  - name: concierge
+    cli: claude --print
+    systemPromptFile: manifest/custom/actors/concierge.md   # relative to transport dir
+    channel: YOUR-CHANNEL-GUID-HERE
+    interval: 60   # seconds between ticks
+    git:
+      name: Cass (Concierge)
+      email: concierge@crosstalk.local
+
+  - name: engineer
+    cli: claude --print
+    systemPromptFile: manifest/custom/actors/engineer.md
+    channel: YOUR-CHANNEL-GUID-HERE
+    interval: 120
+    git:
+      name: Cole (Engineer)
+      email: engineer@crosstalk.local
+
+# agy (Gemini) example:
+#   - name: ops-bot
+#     cli: agy --print
+#     systemPromptFile: manifest/custom/actors/devops.md
+#     channel: YOUR-CHANNEL-GUID-HERE
+#     interval: 90
+#     git:
+#       name: Remi (DevOps)
+#       email: devops@crosstalk.local
