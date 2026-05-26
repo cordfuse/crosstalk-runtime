@@ -40,8 +40,8 @@ jobs:
       - name: Install dependencies (runs prepare → tsc)
         run: npm install
 
-      - name: Smoke-test compiled binary
-        run: node dist/index.js version
+      - name: Smoke-test compiled output
+        run: node --input-type=module -e "await import('./dist/v2/config.js')"
 
       - name: Pack tarball
         run: npm pack
@@ -59,7 +59,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: Runtime ${{ github.ref_name }}
           body: |
-            Crosstalk runtime ${{ github.ref_name }}.
+            Crosstalk runtime ${{ github.ref_name }} — v2 lean runtime.
 
             **Install:**
 
@@ -67,15 +67,21 @@ jobs:
             npm install -g @cordfuse/crosstalk-runtime
             ```
 
-            **Pinned-version fallback** (also useful behind firewalls that block npm but allow GitHub):
+            **Run:**
+
+            ```sh
+            crosstalk --config config.yaml
+            ```
+
+            Copy `config.example.yaml` → `config.yaml`, fill in your transport path, channel GUID, and agent CLI, then start. See [SPEC-runtime-v2.md](https://github.com/cordfuse/crosstalk-runtime/blob/main/SPEC-runtime-v2.md) for the full design.
+
+            **Pinned-version fallback:**
 
             ```sh
             npm install -g https://github.com/cordfuse/crosstalk-runtime/releases/download/${{ github.ref_name }}/cordfuse-crosstalk-runtime-${{ steps.vinfo.outputs.vnum }}.tgz
             ```
 
-            The tarball ships pre-built `dist/` so `npm install` doesn't have to compile TypeScript on your machine. `@homebridge/node-pty-prebuilt-multiarch` does build its native PTY module locally — requires Node `>=18` and (for source-build fallback) Xcode CLI tools on Mac or `python3 make g++` on Linux. Most dev users have these.
-
-            **Why not `npm install -g cordfuse/crosstalk-runtime#${{ github.ref_name }}` (git URL form)?** npm runs the package's `prepare` lifecycle on git-URL installs BEFORE installing devDependencies in the temp clone — so `tsc` isn't on PATH when prepare fires and the build fails. Stick to the npm or tarball install above; both Just Work.
+            **Why not git URL install?** npm runs `prepare` before devDependencies are installed — `tsc` isn't on PATH when it fires. Use npm or the tarball above.
 
             See [WHATSNEW.md](https://github.com/cordfuse/crosstalk/blob/main/WHATSNEW.md) for changes — runtime changelog lives in the operator-facing repo.
           files: |

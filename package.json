@@ -1,12 +1,12 @@
 {
   "name": "@cordfuse/crosstalk-runtime",
-  "version": "1.18.0",
-  "description": "Crosstalk runtime — watches a transport for new messages and dispatches to registered actor processes",
+  "version": "2.0.0",
+  "description": "Crosstalk runtime — lean scheduler that dispatches agent CLIs on a shared git transport",
   "type": "module",
-  "main": "dist/index.js",
+  "main": "dist/v2/runner.js",
   "bin": {
-    "crosstalk": "dist/index.js",
-    "ct": "dist/index.js"
+    "crosstalk": "dist/v2/runner.js",
+    "ct": "dist/v2/runner.js"
   },
   "engines": {
     "node": ">=18"
@@ -16,7 +16,9 @@
     "prepare": "npm run build",
     "start": "node dist/index.js",
     "dev": "node --watch --experimental-strip-types src/index.ts",
-    "test": "bun test src/*.test.ts src/cli/commands/*.test.ts"
+    "test": "bun test src/*.test.ts src/cli/commands/*.test.ts",
+    "start:v2": "bun run src/v2/runner.ts",
+    "dev:v2": "bun --watch src/v2/runner.ts"
   },
   "files": [
     "dist",
