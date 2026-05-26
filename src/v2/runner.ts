@@ -27,7 +27,7 @@ async function tick(config: RuntimeConfig, agent: AgentConfig, systemPrompt: str
     return;
   }
 
-  const channelDir = join(transportPath, 'channels', agent.channel);
+  const channelDir = join(transportPath, config.channelsDir, agent.channel);
   const allRelPaths = await listMessages(channelDir);
   const cursor = await readCursor(transportPath, agent.name);
   const unread = messagesAfterCursor(allRelPaths, cursor);
@@ -36,6 +36,7 @@ async function tick(config: RuntimeConfig, agent: AgentConfig, systemPrompt: str
 
   const { stagedFiles, lastProcessed } = await dispatchTick({
     transportPath,
+    channelsDir: config.channelsDir,
     channelGuid: agent.channel,
     allRelPaths,
     unreadRelPaths: unread,

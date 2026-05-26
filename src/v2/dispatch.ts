@@ -55,10 +55,11 @@ function renderContext(context: ParsedMessage[], target: ParsedMessage): string 
   return lines.join('\n');
 }
 
-function spawnCli(cliCommand: string, stdin: string): Promise<string> {
+function spawnCli(cliCommand: string, stdin: string, cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const parts = cliCommand.trim().split(/\s+/);
     const proc = spawn(parts[0], parts.slice(1), {
+      cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -108,15 +109,16 @@ export interface DispatchResult {
 
 export async function dispatchTick(opts: {
   transportPath: string;
+  channelsDir: string;    // relative to transport, e.g. "data/channels"
   channelGuid: string;
   allRelPaths: string[];  // all messages in channel, sorted asc
   unreadRelPaths: string[];
   agent: AgentConfig;
   systemPrompt?: string;  // pre-loaded system prompt text (if configured)
 }): Promise<DispatchResult> {
-  const { transportPath, channelGuid, allRelPaths, unreadRelPaths, agent, systemPrompt } = opts;
-  const channelDir = join(transportPath, 'channels', channelGuid);
-  const channelBase = `channels/${channelGuid}`;
+  const { transportPath, channelsDir, channelGuid, allRelPaths, unreadRelPaths, agent, systemPrompt } = opts;
+  const channelDir = join(transportPath, channelsDir, channelGuid);
+  const channelBase = `${channelsDir}/${channelGuid}`;
   const stagedFiles: string[] = [];
   let lastProcessed: string | null = null;
 
@@ -138,9 +140,10 @@ export async function dispatchTick(opts: {
     const context = renderContext(contextMessages, msg);
     const stdin = systemPrompt ? `${systemPrompt}\n\n${context}` : context;
 
+    const spawnCwd = agent.spawnCwd ?? '/tmp';
     let reply: string;
     try {
-      reply = await spawnCli(agent.cli, stdin);
+      reply = await spawnCli(agent.cli, stdin, spawnCwd);
     } catch (err) {
       console.error(`[${agent.name}] dispatch failed for ${relPath}:`, err);
       continue;

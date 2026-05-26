@@ -8,6 +8,7 @@ export interface AgentConfig {
   interval: number;       // seconds between ticks
   contextWindow: number;  // how many prior messages to include per dispatch
   systemPromptFile?: string; // path relative to transport dir; prepended to stdin
+  spawnCwd?: string;      // working dir for CLI subprocess (default: /tmp — avoids CLAUDE.md pickup)
   git: {
     name: string;
     email: string;
@@ -16,6 +17,7 @@ export interface AgentConfig {
 
 export interface RuntimeConfig {
   transport: string;      // absolute or relative path to transport repo
+  channelsDir: string;    // path to channels dir relative to transport (default: data/channels)
   agents: AgentConfig[];
   jitter: number;         // max ms to sleep before push (default 5000)
 }
@@ -40,6 +42,7 @@ export function loadConfig(path: string): RuntimeConfig {
 
   return {
     transport: data.transport,
+    channelsDir: data.channelsDir ?? 'data/channels',
     agents: data.agents as AgentConfig[],
     jitter: data.jitter ?? 5000,
   };
