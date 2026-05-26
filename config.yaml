@@ -1,0 +1,24 @@
+transport: ../crosstalk-dogfood
+channelsDir: data/channels
+jitter: 1000
+
+agents:
+  - name: concierge
+    cli: claude --print
+    systemPromptFile: manifest/custom/actors/concierge.md
+    channel: test-actor-import-1779805897
+    interval: 30
+    spawnCwd: /tmp
+    git:
+      name: Cass (Concierge)
+      email: concierge@crosstalk.local
+
+  - name: engineer
+    cli: claude --print
+    systemPromptFile: manifest/custom/actors/engineer.md
+    channel: test-actor-import-1779805897
+    interval: 30
+    spawnCwd: /tmp
+    git:
+      name: Cole (Engineer)
+      email: engineer@crosstalk.local

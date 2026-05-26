@@ -1,27 +1,64 @@
-/**
- * v1.1.0 — legacy facade. The full git implementation moved to
- * `src/transports/git.ts` as the `GitTransport` class behind the
- * {@link import('./transport.js').Transport} interface.
- *
- * This file remains only to re-export `pushWithRetry` for the one CLI
- * consumer (`src/cli/commands/channel-join.ts`) that still posts directly
- * to git without going through the transport abstraction. Slated for
- * removal in v1.2.0 once the CLI subcommands also migrate.
- *
- * No other code should import from this file. Daemon-core consumers
- * (bootstrap, dispatch, watcher, system, relay, registry, index) all use
- * `Transport` instead.
- */
-import { pushWithRetryQueued, type PushResult } from './transports/git.js'
+import { spawn } from 'child_process';
 
-export type { PushResult } from './transports/git.js'
+interface GitResult {
+  code: number;
+  stderr: string;
+}
 
-/** @deprecated v1.1.0+ — use `Transport.postMessage()` instead. Kept as a
- * compatibility shim for `crosstalk channel join` which still commits
- * directly. Will be removed in v1.2.0 when CLI subcommands migrate to
- * the Transport interface. v1.13+ returns the tri-state `PushResult`
- * ('pushed' | 'no-remote' | 'failed') so callers can avoid printing
- * `✓ Pushed` on a transport with no `origin`. */
-export async function pushWithRetry(repoPath: string, maxAttempts = 20): Promise<PushResult> {
-  return pushWithRetryQueued(repoPath, maxAttempts)
+function git(cwd: string, args: string[]): Promise<GitResult> {
+  return new Promise(resolve => {
+    const proc = spawn('git', args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: process.env,
+    });
+    let stderr = '';
+    proc.stderr?.on('data', chunk => { stderr += String(chunk); });
+    proc.on('exit', code => resolve({ code: code ?? 0, stderr }));
+    proc.on('error', () => resolve({ code: 127, stderr: 'spawn error' }));
+  });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+export async function pull(transportPath: string): Promise<void> {
+  await git(transportPath, ['pull', '--rebase', 'origin', 'main']);
+}
+
+// Stages files, commits under the given identity, then pushes with JITTER.
+// Returns true on successful push, false if all retries failed (caller defers to next tick).
+export async function commitAndPush(opts: {
+  transportPath: string;
+  files: string[];          // paths relative to transportPath
+  message: string;
+  identity: { name: string; email: string };
+  jitterMs: number;
+  maxRetries?: number;
+}): Promise<boolean> {
+  const { transportPath, files, message, identity, jitterMs, maxRetries = 3 } = opts;
+
+  await git(transportPath, ['add', '--', ...files]);
+
+  const { code: commitCode } = await git(transportPath, [
+    '-c', `user.name=${identity.name}`,
+    '-c', `user.email=${identity.email}`,
+    'commit', '-m', message,
+  ]);
+
+  if (commitCode !== 0) {
+    // Nothing staged or commit error — treat as success (no-op tick)
+    return true;
+  }
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    await sleep(Math.floor(Math.random() * jitterMs));
+    const { code } = await git(transportPath, ['push', 'origin', 'main']);
+    if (code === 0) return true;
+    // Non-fast-forward — pull and retry
+    await git(transportPath, ['pull', '--rebase', 'origin', 'main']);
+  }
+
+  return false;
 }

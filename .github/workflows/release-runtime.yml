@@ -41,7 +41,7 @@ jobs:
         run: npm install
 
       - name: Smoke-test compiled output
-        run: node --input-type=module -e "await import('./dist/v2/config.js')"
+        run: node --input-type=module -e "await import('./dist/config.js')"
 
       - name: Pack tarball
         run: npm pack

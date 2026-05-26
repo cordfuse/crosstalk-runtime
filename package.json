@@ -3,10 +3,10 @@
   "version": "2.0.0",
   "description": "Crosstalk runtime — lean scheduler that dispatches agent CLIs on a shared git transport",
   "type": "module",
-  "main": "dist/v2/runner.js",
+  "main": "dist/runner.js",
   "bin": {
-    "crosstalk": "dist/v2/runner.js",
-    "ct": "dist/v2/runner.js"
+    "crosstalk": "dist/runner.js",
+    "ct": "dist/runner.js"
   },
   "engines": {
     "node": ">=18"
@@ -14,11 +14,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "prepare": "npm run build",
-    "start": "node dist/index.js",
-    "dev": "node --watch --experimental-strip-types src/index.ts",
-    "test": "bun test src/*.test.ts src/cli/commands/*.test.ts",
-    "start:v2": "bun run src/v2/runner.ts",
-    "dev:v2": "bun --watch src/v2/runner.ts"
+    "start": "node dist/runner.js",
+    "dev": "bun --watch src/runner.ts"
   },
   "files": [
     "dist",
@@ -27,19 +24,10 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
-    "@inquirer/prompts": "^8.4.3",
-    "age-encryption": "^0.3.0",
-    "commander": "^14.0.3",
-    "smol-toml": "^1.6.1",
-    "which": "^4.0.0",
-    "ws": "^8.18.0",
     "yaml": "^2.7.0"
   },
   "devDependencies": {
     "@types/node": "^18.19.0",
-    "@types/which": "^3.0.0",
-    "@types/ws": "^8.5.10",
     "typescript": "^5.5.0"
   }
 }
