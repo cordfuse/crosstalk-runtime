@@ -130,7 +130,7 @@ export async function dispatchTick(opts: {
 
     // Context: up to contextWindow text messages before this one
     const idx = allRelPaths.indexOf(relPath);
-    const priorPaths = allRelPaths.slice(Math.max(0, idx - agent.contextWindow), idx);
+    const priorPaths = allRelPaths.slice(Math.max(0, idx - (agent.contextWindow ?? 20)), idx);
     const contextMessages: ParsedMessage[] = [];
     for (const p of priorPaths) {
       const m = await parseMessage(channelDir, p);

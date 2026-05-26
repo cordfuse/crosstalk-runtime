@@ -1,25 +1,25 @@
 import { join } from 'path';
 import { mkdir, readFile, readdir, writeFile } from 'fs/promises';
 
-// Cursor files live inside the transport repo under .cursor/<agent-name>.
-// They are git-ignored (operator adds .cursor/ to .gitignore).
+// Cursor files: .cursor/<agent-name>/<channel-guid>
+// Stored inside the transport repo. Git-ignored via .gitignore entry.
 // Written only after a successful push — never speculatively.
 
-function cursorPath(transportPath: string, agentName: string): string {
-  return join(transportPath, '.cursor', agentName);
+function cursorPath(transportPath: string, agentName: string, channelGuid: string): string {
+  return join(transportPath, '.cursor', agentName, channelGuid);
 }
 
-export async function readCursor(transportPath: string, agentName: string): Promise<string | null> {
+export async function readCursor(transportPath: string, agentName: string, channelGuid: string): Promise<string | null> {
   try {
-    const content = await readFile(cursorPath(transportPath, agentName), 'utf-8');
+    const content = await readFile(cursorPath(transportPath, agentName, channelGuid), 'utf-8');
     return content.trim() || null;
   } catch {
     return null;
   }
 }
 
-export async function writeCursor(transportPath: string, agentName: string, relPath: string): Promise<void> {
-  const p = cursorPath(transportPath, agentName);
+export async function writeCursor(transportPath: string, agentName: string, channelGuid: string, relPath: string): Promise<void> {
+  const p = cursorPath(transportPath, agentName, channelGuid);
   await mkdir(join(p, '..'), { recursive: true });
   await writeFile(p, relPath, 'utf-8');
 }
@@ -43,7 +43,7 @@ export async function listMessages(channelDir: string): Promise<string[]> {
       }
     }
   } catch {
-    // channel dir may not exist yet — return empty
+    // channel dir may not exist yet
   }
   return paths;
 }
@@ -53,4 +53,15 @@ export function messagesAfterCursor(all: string[], cursor: string | null): strin
   if (!cursor) return all;
   const idx = all.indexOf(cursor);
   return idx === -1 ? all : all.slice(idx + 1);
+}
+
+// Lists all channel GUIDs found in <transport>/<channelsDir>/
+export async function discoverChannels(transportPath: string, channelsDir: string): Promise<string[]> {
+  try {
+    const dir = join(transportPath, channelsDir);
+    const entries = await readdir(dir, { withFileTypes: true });
+    return entries.filter(e => e.isDirectory()).map(e => e.name);
+  } catch {
+    return [];
+  }
 }
