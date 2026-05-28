@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { parse as parseYaml } from 'yaml';
 import type { ToknConfig } from './tokn.js';
 
@@ -23,6 +23,43 @@ export interface RuntimeConfig {
   jitter: number;         // max ms sleep before push; default: 5000 (ignored when tokn is set)
   tokn?: ToknConfig;      // if set, use tokn for push serialization instead of jitter
   agents: AgentConfig[];
+}
+
+// Build config entirely from CLI flags — no YAML file required.
+// Usage: --transport <path> --agent "name:cli" [--agent ...] [--tokn-url <url>]
+//        [--tokn-channel <ch>] [--interval <s>] [--jitter <ms>]
+export function configFromFlags(argv: string[]): RuntimeConfig {
+  const get  = (flag: string) => { const i = argv.indexOf(flag); return i === -1 ? undefined : argv[i + 1]; };
+  const getAll = (flag: string) => argv.reduce<string[]>((acc, v, i, a) => {
+    if (a[i - 1] === flag) acc.push(v);
+    return acc;
+  }, []);
+
+  const transport = get('--transport');
+  if (!transport) throw new Error('--transport <path> is required');
+
+  const agentFlags = getAll('--agent');
+  if (agentFlags.length === 0) throw new Error('at least one --agent "name:cli" is required');
+
+  const agents: AgentConfig[] = agentFlags.map(flag => {
+    const colon = flag.indexOf(':');
+    if (colon === -1) throw new Error(`--agent "${flag}" must be in "name:cli" format`);
+    return { name: flag.slice(0, colon).trim(), cli: flag.slice(colon + 1).trim() };
+  });
+
+  const toknUrl = get('--tokn-url');
+  const tokn: ToknConfig | undefined = toknUrl
+    ? { url: toknUrl, channel: get('--tokn-channel') ?? 'crosstalk:push', apiKey: process.env.TOKN_API_KEY ?? '' }
+    : undefined;
+
+  return {
+    transport,
+    channelsDir: get('--channels-dir') ?? 'data/channels',
+    interval:    Number(get('--interval')    ?? 60),
+    jitter:      Number(get('--jitter')      ?? 5000),
+    tokn,
+    agents,
+  };
 }
 
 export function loadConfig(path: string): RuntimeConfig {

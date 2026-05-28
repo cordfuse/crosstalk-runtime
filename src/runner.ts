@@ -1,13 +1,40 @@
 import { resolve, join } from 'path';
-import { readFile } from 'fs/promises';
-import { loadConfig, type AgentConfig, type RuntimeConfig } from './config.js';
+import { readFile, access } from 'fs/promises';
+import { loadConfig, configFromFlags, type AgentConfig, type RuntimeConfig } from './config.js';
 import { readCursor, writeCursor, listMessages, messagesAfterCursor, discoverChannels } from './cursor.js';
 import { pull, commitAndPush, commitAndPushWithTokn } from './git.js';
 import { ensureChannel } from './tokn.js';
 import { dispatchTick } from './dispatch.js';
 import { parseFrontmatter } from './frontmatter.js';
 
-const CONFIG_PATH = process.argv.find((_, i, a) => a[i - 1] === '--config') ?? 'config.yaml';
+const HELP = `
+Usage:
+  crosstalk-runtime --config <path>
+  crosstalk-runtime --transport <path> --agent "name:cli" [--agent ...] [options]
+
+Options:
+  --config <path>         Load config from YAML file (default: config.yaml)
+  --transport <path>      Path to transport repo (flag mode — no YAML needed)
+  --agent "name:cli"      Agent definition; repeat for multiple agents
+  --tokn-url <url>        tokn server URL for push serialization
+  --tokn-channel <name>   tokn channel name (default: crosstalk:push)
+  --interval <seconds>    Tick interval per agent (default: 60)
+  --jitter <ms>           Max jitter ms for fallback push (default: 5000)
+  --channels-dir <path>   Channels dir relative to transport (default: data/channels)
+  --help                  Show this message
+`.trim();
+
+async function resolveConfig(): Promise<RuntimeConfig> {
+  const argv = process.argv;
+  if (argv.includes('--help')) { console.log(HELP); process.exit(0); }
+  const configIdx = argv.indexOf('--config');
+  if (configIdx !== -1) return loadConfig(argv[configIdx + 1]);
+  if (argv.includes('--transport')) return configFromFlags(argv);
+  // Fall back to config.yaml in cwd if it exists
+  try { await access('config.yaml'); return loadConfig('config.yaml'); } catch {}
+  console.error('error: provide --config <path>, --transport <path> --agent "name:cli", or a config.yaml in the current directory\n\n' + HELP);
+  process.exit(1);
+}
 
 // Resolve system prompt: explicit file override → convention path → undefined
 async function resolveSystemPrompt(transportPath: string, agent: AgentConfig): Promise<string | undefined> {
@@ -151,7 +178,7 @@ async function startAgent(config: RuntimeConfig, agent: AgentConfig): Promise<vo
 }
 
 async function main(): Promise<void> {
-  const config = loadConfig(CONFIG_PATH);
+  const config = await resolveConfig();
   console.log(`crosstalk runtime v2 — transport=${config.transport} agents=${config.agents.length}`);
   await Promise.all(config.agents.map(agent => startAgent(config, agent)));
 }
