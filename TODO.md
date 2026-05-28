@@ -65,10 +65,9 @@ for the shared timeline.
 
 ## v1.x candidates (post-v1.0)
 
-- [x] **Push contention at N>10 concurrent dispatch.** Three-stage fix landed 2026-05-17:
-  - v1.0.1 — retry budget bumped 5 → 20 (symptom-level patch). 18/20 actors, 0 push failures, up to 9 retries per actor.
-  - v1.0.2 — structural fix: per-remote push queue in `src/git.ts`, serializes same-daemon pushes by remote URL. 20/20, 0 failures, but ~1.5 retries/actor (each clone rebases reactively after rejection).
-  - v1.0.3 — finished the fix: pre-pull-rebase **inside** the queue critical section before the first push. Retry rate dropped from 150% → 1.7% across a 60-dispatch re-validation (1 retry total). Same-daemon contention structurally solved; cross-daemon contention still uses the retry budget (much rarer in practice).
+- [x] **Push contention at N>10 concurrent dispatch.** Fully resolved in two phases:
+  - v1.0.1–v1.0.3 — retry budget + per-remote push queue + pre-pull-rebase inside critical section. Same-daemon contention solved; cross-daemon still used jitter.
+  - **v2.0 lean runtime + tokn** — structurally solved for all cases. tokn turn queue serializes pull → commit → push across all agents and daemons. 20-worker bench: 0 conflicts, 0 retries, 0.55s total vs 7.22s with jitter (13×). Cross-daemon contention is now impossible by design.
 - [x] **Heartbeat-interval timeout doesn't kill opencode subprocesses.** Shipped v1.0.1: `detached: true` on every spawn + `process.kill(-pid, 'SIGTERM')` to signal the entire process group (3s grace → SIGKILL escalation). The fix is mechanically correct but **not yet field-validated against a real slow-task** — all v1.0.x Monte Carlo dispatches completed in 10-15s, well under the 60s heartbeat. Re-run the 56-min hung-dispatch case to confirm.
 - [x] **Single-daemon-per-transport enforcement** (v1.0.4 → v1.0.5):
   - v1.0.4 — initial PID lock at `~/.crosstalk/daemon.pid`, per-user. Closed the bug class that caused yesterday-daemon + today-daemon to both dispatch the same fan-out during v1.0.2 testing. But too broad — also blocked the legitimate multi-transport-per-user case (one operator running one daemon per workspace).

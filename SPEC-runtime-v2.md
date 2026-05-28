@@ -29,14 +29,15 @@ The lean runtime handles exactly this. Nothing else.
 
 ## Files
 
-~5 source files. Bun + TypeScript.
+~6 source files. Bun + TypeScript.
 
 ```
 src/
   runner.ts      — main entry point; owns the scheduler loop
   cursor.ts      — tracks last-processed message per agent; persists to .cursor/
   dispatch.ts    — spawns agent CLI subprocess, captures stdout, writes reply file
-  git.ts         — pull, commit, push with JITTER backoff
+  git.ts         — pull, commit, push — tokn path and jitter fallback
+  tokn.ts        — lightweight tokn client (SSE, no npm deps); ensureChannel + withTokn
   config.ts      — loads and validates config.yaml
 ```
 
@@ -85,23 +86,35 @@ One runtime process hosts all agents. Each agent runs on its own `setInterval` �
      d. capture stdout → write as new message file
      e. write read receipt for the processed message
 6. stage new files
-7. JITTER sleep
-8. git commit + push
-9. update cursor to last processed path
+7. commit + push — via tokn (preferred) or jitter fallback
+8. update cursor to last processed path
 ```
+
+**tokn path (when `tokn:` is set in config):** enqueue on the named channel, wait for turn, then pull → commit → push inside the turn window. Zero conflicts guaranteed. Releases the token on completion.
+
+**jitter fallback (when no `tokn:` block):** sleep `rand(0, JITTER_MAX_MS)` before push. On conflict: `git pull --rebase`, retry (max 3). After 3 failures: log, leave cursor un-advanced, retry next tick.
 
 ---
 
-## JITTER backoff
+## Push serialization
 
-Multiple agents pushing at the same time will conflict. JITTER prevents the thundering herd.
+Multiple agents pushing concurrently will conflict without coordination. Two strategies are supported:
 
-- Before every push: sleep `rand(0, JITTER_MAX_MS)` (default: 5000 ms)
-- On push conflict (non-fast-forward rejected): `git pull --rebase`, sleep fresh JITTER, retry
-- Max retries: 3
-- After 3 failures: log the conflict, leave cursor un-advanced, retry on next tick
+### tokn (preferred)
 
-The retry-next-tick behaviour means no message is ever permanently dropped — just delayed one interval.
+Add a `tokn:` block to `config.yaml`:
+
+```yaml
+tokn:
+  url: https://tokn-pqgp.onrender.com
+  channel: crosstalk:push
+```
+
+Set `TOKN_API_KEY` in the environment. At startup the runtime creates the channel if it doesn't exist. Each agent enqueues before pushing and holds the turn for the full pull → commit → push window. Zero conflicts, strict FIFO, 13× faster than jitter under load (20-worker bench: 0.55s vs 7.22s).
+
+### Jitter fallback
+
+Used when no `tokn:` block is present. Before every push: sleep `rand(0, jitter)` ms (default: 5000). On conflict: `git pull --rebase`, retry (max 3). After 3 failures: log, leave cursor un-advanced, retry next tick. No message is ever permanently dropped — just delayed one interval.
 
 ---
 
@@ -179,9 +192,10 @@ No subcommands. No interactive interface. The runtime is a daemon, not a tool.
 ## What ships
 
 1. This spec
-2. `config.ts` — load + validate config
+2. `config.ts` — load + validate config; parses optional `tokn:` block
 3. `cursor.ts` — read/write cursor files
-4. `git.ts` — pull / commit / push with JITTER
-5. `dispatch.ts` — spawn CLI, capture stdout, write message file + read receipt
-6. `runner.ts` — scheduler loop, wires the above together
-7. `config.example.yaml` — copy-paste starter
+4. `git.ts` — pull / commit / push; tokn path + jitter fallback
+5. `tokn.ts` — lightweight tokn SSE client; `ensureChannel` + `withTokn`
+6. `dispatch.ts` — spawn CLI, capture stdout, write message file + read receipt
+7. `runner.ts` — scheduler loop, wires the above together
+8. `config.example.yaml` — copy-paste starter

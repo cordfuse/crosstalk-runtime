@@ -77,9 +77,20 @@ interval: 60
 
 jitter: 5000
 # Maximum milliseconds to sleep before pushing a commit.
-# Prevents concurrent-push conflicts when multiple agents run in the same process.
+# Used as fallback when no tokn: block is set.
 # The actual sleep is a random value between 0 and this number.
 # Default: 5000 (5 seconds)
+
+tokn:
+  url: <string>
+  channel: <string>
+  # Optional. When set, push serialization uses tokn instead of jitter.
+  # url:     the tokn server URL (e.g. https://tokn-pqgp.onrender.com)
+  # channel: the named turn channel shared across all agents (e.g. crosstalk:push)
+  # apiKey is read from the TOKN_API_KEY environment variable.
+  #
+  # With tokn: zero push conflicts, strict FIFO, 13× faster than jitter under load.
+  # Without tokn: falls back to jitter (random sleep + rebase-retry).
 
 # ── agents (required, non-empty array) ───────────────────────────────────────
 
@@ -165,6 +176,10 @@ channelsDir: data/channels
 interval: 60
 jitter: 3000
 
+tokn:
+  url: https://tokn-pqgp.onrender.com
+  channel: crosstalk:push
+
 agents:
   - name: concierge
     cli: claude --print
@@ -242,10 +257,10 @@ Per agent, per tick:
       - Capture stdout → write as reply message file
       - Write read receipt
    d. Stage all new files
-   e. Sleep random(0, jitter) ms
-   f. git commit + push
-   g. On push conflict: git pull --rebase, retry (max 3 attempts)
-   h. Advance cursor on successful push
+   e. Commit + push:
+      — tokn: enqueue, wait for turn, pull → commit → push, release (zero conflicts)
+      — jitter fallback: sleep random(0, jitter) ms, push, rebase-retry on conflict
+   f. Advance cursor on successful push
 ```
 
 ---
