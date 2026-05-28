@@ -1,4 +1,6 @@
-# Crosstalk v2 — Back to Basics
+# Crosstalk v2 — History & Pivot
+
+*This document captures the historical context of the May 2026 pivot from the feature-heavy v1.x architecture to the v2.0 "Back to Basics" lean runtime.*
 
 ## What went wrong
 

@@ -1,201 +1,66 @@
 # Crosstalk Lean Runtime — v2.0 Spec
 
-## Why it exists
+## Purpose
 
-The Crosstalk v2 protocol requires no runtime. Git is the bus. Agents read and write directly.
-
-But not all agents self-schedule. LLM sessions (Claude, Gemini, etc.) are stateless — they don't persist between turns and can't poll a channel on their own. Without a runtime, an operator would need:
-
-- An external cron job per agent
-- Manual git pull/push wiring per agent
-- Custom cursor logic per agent
-- Conflict handling when multiple agents push concurrently
-
-The lean runtime handles exactly this. Nothing else.
-
----
-
-## What it is not
-
-- Not a relay (GitHub is the relay)
-- Not a WebSocket server
-- Not a governance engine
-- Not a PTY wrapper
-- Not an encryption layer
-- Not a multi-operator coordinator
-- Not a Render deployment target (Render is for a separate web UI)
+The Crosstalk v2 runtime is a lightweight scheduler that bridges git-based transports with agent CLIs. It handles polling, context construction, subprocess dispatch, and serialized git pushes.
 
 ---
 
 ## Files
 
-~6 source files. Bun + TypeScript.
-
 ```
 src/
-  runner.ts      — main entry point; owns the scheduler loop
-  cursor.ts      — tracks last-processed message per agent; persists to .cursor/
-  dispatch.ts    — spawns agent CLI subprocess, captures stdout, writes reply file
-  git.ts         — pull, commit, push — tokn path and jitter fallback
-  tokn.ts        — lightweight tokn client (SSE, no npm deps); ensureChannel + withTokn
-  config.ts      — loads and validates config.yaml
+  runner.ts      — Main entry point; owns the scheduler loop
+  config.ts      — Loads and validates config.yaml and CLI flags
+  dispatch.ts    — Spawns agent CLI subprocess, captures stdout, writes reply/receipt
+  git.ts         — Handles pull, commit, and push (Tokn and Jitter paths)
+  tokn.ts        — Lightweight Tokn SSE client for push serialization
+  cursor.ts      — Tracks last-processed message per agent in .cursor/
+  filenames.ts   — Logic for Crosstalk-compliant message filenames
+  frontmatter.ts — YAML frontmatter parser
 ```
 
 ---
 
-## Config format
+## Runtime Loop (Per Agent)
 
-`config.yaml` at repo root (or passed via `--config`):
+Each agent runs on its own independent interval.
 
-```yaml
-transport: ../crosstalk-dogfood   # path to the transport repo
-
-agents:
-  - name: concierge
-    cli: claude --print --system-prompt-file manifest/custom/actors/concierge.md
-    channel: <guid>
-    interval: 60   # seconds between ticks
-    git:
-      name: Cass (Concierge)
-      email: concierge@crosstalk.local
-
-  - name: engineer
-    cli: claude --print --system-prompt-file manifest/custom/actors/engineer.md
-    channel: <guid>
-    interval: 120
-    git:
-      name: Cole (Engineer)
-      email: engineer@crosstalk.local
-```
-
-One runtime process hosts all agents. Each agent runs on its own `setInterval` — they do not wait for each other.
+1. **Sync**: `git pull --rebase origin main`.
+2. **Scan**: List all messages in `channelsDir`, filtering for unread messages addressed to the agent (`to: <name>` or `to: all`).
+3. **Context**: For each unread message, collect the last `contextWindow` messages in the channel.
+4. **Dispatch**:
+    - Prepend system prompt (from `manifest/custom/actors/<name>.md`).
+    - Pipe rendered context to the agent's `cli` via stdin.
+    - Capture stdout.
+5. **Write**: 
+    - If stdout is non-empty, write a new message file in the channel.
+    - Write a `type: read` receipt for the processed message.
+6. **Commit**: Stage new files and commit under the agent's git identity.
+7. **Push**:
+    - **Tokn path**: Enqueue on the Tokn channel, wait for turn, pull-commit-push, then release.
+    - **Jitter path**: Sleep `rand(0, jitter)` ms, then push with rebase-retry logic.
+8. **Cursor**: Update `.cursor/<agent>/<channel>` on successful push.
 
 ---
 
-## Dispatch loop (per agent, per tick)
+## Push Serialization
 
-```
-1. git pull --rebase origin main          (get latest state)
-2. read cursor                            (last processed message path for this agent)
-3. scan channel for unread               (to: <name> or to: all, path > cursor)
-4. if no unread: advance cursor to latest, return
-5. for each unread message (oldest first):
-     a. build context: last N messages from channel (configurable, default 20)
-     b. prepend system prompt from actor file
-     c. spawn CLI subprocess with context piped to stdin
-     d. capture stdout → write as new message file
-     e. write read receipt for the processed message
-6. stage new files
-7. commit + push — via tokn (preferred) or jitter fallback
-8. update cursor to last processed path
-```
+Serialization is critical for preventing git conflicts across multiple agents or daemons.
 
-**tokn path (when `tokn:` is set in config):** enqueue on the named channel, wait for turn, then pull → commit → push inside the turn window. Zero conflicts guaranteed. Releases the token on completion.
+### Tokn (Serialized)
+When `tokn:` is configured, the runtime uses the [Tokn service](https://github.com/cordfuse/tokn) to serialize pushes. Each agent holds the token for the duration of its critical section (pull → commit → push).
 
-**jitter fallback (when no `tokn:` block):** sleep `rand(0, JITTER_MAX_MS)` before push. On conflict: `git pull --rebase`, retry (max 3). After 3 failures: log, leave cursor un-advanced, retry next tick.
+### Jitter (Fallback)
+When Tokn is absent, the runtime falls back to randomized sleep (jitter) and aggressive rebase-retries.
 
 ---
 
-## Push serialization
+## Execution Environment
 
-Multiple agents pushing concurrently will conflict without coordination. Two strategies are supported:
+The runtime is designed for **Node.js (>= 18)**. It uses standard web APIs (`fetch`, `SSE`) and Node's `child_process` for CLI and git interactions.
 
-### tokn (preferred)
-
-Add a `tokn:` block to `config.yaml`:
-
-```yaml
-tokn:
-  url: https://tokn-pqgp.onrender.com
-  channel: crosstalk:push
+```sh
+npm install -g @cordfuse/crosstalk-runtime
+crosstalk --config config.yaml
 ```
-
-Set `TOKN_API_KEY` in the environment. At startup the runtime creates the channel if it doesn't exist. Each agent enqueues before pushing and holds the turn for the full pull → commit → push window. Zero conflicts, strict FIFO, 13× faster than jitter under load (20-worker bench: 0.55s vs 7.22s).
-
-### Jitter fallback
-
-Used when no `tokn:` block is present. Before every push: sleep `rand(0, jitter)` ms (default: 5000). On conflict: `git pull --rebase`, retry (max 3). After 3 failures: log, leave cursor un-advanced, retry next tick. No message is ever permanently dropped — just delayed one interval.
-
----
-
-## Cursor
-
-Each agent has its own cursor file:
-
-```
-.cursor/
-  concierge
-  engineer
-```
-
-Content: the `relPath` of the last processed message file, e.g.:
-
-```
-2026/05/23/190000000Z-a1b2c3d4.md
-```
-
-On startup: if no cursor file exists, the entire channel backlog is treated as unread. Operators who want to skip history seed the cursor with a recent path before starting.
-
-Cursor is written only after a successful commit + push — never speculatively. A failed push leaves the cursor where it was, so the agent re-processes on next tick (idempotent: duplicate replies are possible but bounded to one tick window).
-
----
-
-## Scheduler
-
-Built in. `setInterval` per agent. No external cron, no systemd unit required.
-
-Agents run fully independently. An agent that takes 90 seconds to process a message does not block other agents. Each agent's next tick fires on its own clock regardless.
-
----
-
-## git operations
-
-All via Bun subprocess. No libgit2 binding.
-
-```
-git -C <transport> pull --rebase origin main
-git -C <transport> add channels/<guid>/YYYY/MM/DD/<filename>.md
-git -C <transport> -c user.name="<name>" -c user.email="<email>" \
-    commit -m "crosstalk: <agent> YYYY-MM-DDTHHMMZ"
-git -C <transport> push origin main
-```
-
-Git identity is set per-commit via `-c` flags, not mutated in global config.
-
----
-
-## CLI
-
-```
-bun run start                   # run with default config.yaml
-bun run start --config <path>   # custom config path
-```
-
-No subcommands. No interactive interface. The runtime is a daemon, not a tool.
-
----
-
-## Out of scope
-
-- WebSocket / relay server
-- PTY / interactive sessions
-- Message encryption or signing
-- Actor personality loading (that lives in the agent's own CLAUDE.md / system prompt)
-- Governance: ROE, quorum, session-open, bootstrap
-- Multi-operator qualified addressing
-- Dispatch policies
-- Orchestration (spawn / thread / join / synthesizer)
-- Web UI (separate Render deployment, separate repo)
-
----
-
-## What ships
-
-1. This spec
-2. `config.ts` — load + validate config; parses optional `tokn:` block
-3. `cursor.ts` — read/write cursor files
-4. `git.ts` — pull / commit / push; tokn path + jitter fallback
-5. `tokn.ts` — lightweight tokn SSE client; `ensureChannel` + `withTokn`
-6. `dispatch.ts` — spawn CLI, capture stdout, write message file + read receipt
-7. `runner.ts` — scheduler loop, wires the above together
-8. `config.example.yaml` — copy-paste starter
