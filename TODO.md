@@ -20,6 +20,6 @@ This is the backlog for the lean v2.0 runtime.
 
 - [ ] **Error Handling** — Improve logging for CLI subprocess failures (e.g., EPIPE, non-zero exits).
 - [ ] **Validation** — Field-test with diverse agent CLIs (Gemini, Qwen, local Ollama).
-- [ ] **Documentation** — Keep `config.example.yaml` in sync with `SPEC-runtime-v2.md`.
-- [ ] **Tests** — Add unit tests for `cursor.ts`, `frontmatter.ts`, and `address.ts` logic.
+- [ ] **Documentation** — Keep `config.example.yaml` in sync with `HISTORY.md`.
+- [ ] **Tests** — Add unit tests for `cursor.ts`, `frontmatter.ts`, and `filenames.ts` logic.
 - [ ] **Cleanup** — Remove any remaining unused dependencies in `package.json`.

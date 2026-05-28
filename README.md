@@ -1,6 +1,8 @@
 # @cordfuse/crosstalk-runtime
 
-The Crosstalk v2 runtime. A lean scheduler that dispatches agent CLIs (Claude, Gemini, agy, etc.) on a shared git transport.
+The scheduler for Crosstalk. It watches a transport repo, finds unread messages, sends them to the right agent CLI (Claude, Gemini, agy, etc.), and commits replies back.
+
+**Haven't set up a transport yet?** Start there first → [cordfuse/crosstalk](https://github.com/cordfuse/crosstalk)
 
 ---
 
@@ -17,37 +19,40 @@ Puts `crosstalk` (and the alias `ct`) on your PATH.
 ## Quickstart
 
 ```sh
-# 1. Create a config file
+# 1. Copy the example config
 cp config.example.yaml config.yaml
 
-# 2. Set the transport path and add your agents (see below)
+# 2. Set your transport path and agents (see config reference below)
+
 # 3. Run
 crosstalk --config config.yaml
 ```
 
 ---
 
-## Usage
+## Two ways to run it
 
-The runtime supports two modes: **Config Mode** (YAML) and **Flag Mode** (CLI-only).
+### Config Mode (recommended)
 
-### Config Mode (Recommended)
+Point it at a YAML file:
+
 ```sh
 crosstalk --config path/to/config.yaml
 ```
 
-### Flag Mode (Zero-config)
+### Flag Mode (quick test, no config file needed)
+
 ```sh
-crosstalk --transport ./my-repo --agent "concierge:claude --print" --agent "engineer:agy --print"
+crosstalk --transport ./my-transport --agent "concierge:claude --print" --agent "engineer:agy --print"
 ```
 
 ---
 
-## config.yaml Reference
+## config.yaml reference
 
 ### Minimal config
 
-Two required fields per agent. Everything else is auto-discovered or defaulted.
+The only required fields are `transport` and at least one agent with a `name` and `cli`.
 
 ```yaml
 transport: ../my-transport
@@ -60,25 +65,25 @@ agents:
     cli: claude --print
 ```
 
-The runtime will:
-- Discover all channels in the transport automatically.
-- Load the system prompt from `manifest/custom/actors/<name>.md`.
-- Derive the git identity from the actor file's `metadata.alias`.
-- Use `/tmp` as the CLI working directory.
-- Poll every 60 seconds per agent.
+With this config the runtime will:
+- Discover all channels in the transport automatically
+- Load each agent's system prompt from `manifest/custom/actors/<name>.md`
+- Set the git commit identity from the actor file's alias (falls back to `<name>@crosstalk.local`)
+- Poll every 60 seconds per agent
+- Include the last 20 messages as context
 
 ### Full config reference
 
 ```yaml
-# ── Required ────────────────────────────────────────────────────────────────
+# ── Required ──────────────────────────────────────────────────────────────────
 
 transport: <string>
-# Path to the transport repo. Absolute or relative to config.yaml.
+# Path to the transport repo. Absolute or relative to this config file.
 
-# ── Top-level options (all optional) ────────────────────────────────────────
+# ── Top-level options (all optional) ──────────────────────────────────────────
 
 channelsDir: data/channels
-# Path to the channels directory, relative to the transport root.
+# Where to look for channels, relative to the transport root.
 # Default: "data/channels"
 
 interval: 60
@@ -86,73 +91,128 @@ interval: 60
 # Default: 60
 
 jitter: 5000
-# Maximum milliseconds to sleep before pushing a commit.
-# Used as fallback when no tokn: block is set.
+# Max milliseconds to wait before pushing a commit.
+# Used when tokn is not configured.
 # Default: 5000
 
 tokn:
   url: <string>
   channel: <string>
-  # Optional. When set, push serialization uses tokn instead of jitter.
-  # apiKey is read from the TOKN_API_KEY environment variable.
+# Optional. Enables tokn for push serialization instead of jitter.
+# API key is read from the TOKN_API_KEY environment variable.
 
-# ── agents (required, non-empty array) ───────────────────────────────────────
+# ── agents ────────────────────────────────────────────────────────────────────
 
 agents:
   - name: <string>
-    # Required. Participant name (must match `to:` in messages).
+    # Required. Must match the `to:` field in incoming messages.
 
     cli: <string>
-    # Required. The shell command used to invoke the agent.
-    # The runtime pipes the conversation context to stdin and reads the reply from stdout.
+    # Required. The shell command used to invoke this agent.
+    # The runtime pipes the conversation to stdin and reads the reply from stdout.
 
     interval: <integer>
-    # Optional. Override the top-level interval for this agent.
+    # Override the top-level poll interval for this agent only.
 
     channels:
       - <guid>
-    # Optional. Restrict this agent to specific channel GUIDs.
+    # Restrict this agent to specific channel GUIDs.
+    # Omit to let it see all channels.
 
     systemPromptFile: <string>
-    # Optional. Path to system prompt, relative to transport root.
+    # Path to the system prompt file, relative to the transport root.
     # Default: manifest/custom/actors/<name>.md
 
     contextWindow: <integer>
-    # Optional. Number of prior messages to include as context.
+    # How many prior messages to include as context.
     # Default: 20
 
     git:
       name: <string>
       email: <string>
-    # Optional. Explicit git commit identity.
+    # Set an explicit git commit identity for this agent.
+    # Overrides the actor file's alias.
 
     spawnCwd: <string>
-    # Optional. Working directory for the CLI subprocess.
+    # Working directory for the agent CLI subprocess.
     # Default: /tmp
 ```
 
 ---
 
-## CLI Flags
+## Push coordination with tokn
+
+When multiple agents commit to the same transport at the same time, git push conflicts can occur. The runtime handles this with jitter by default — each agent waits a random amount of time before pushing, which reduces collisions but does not eliminate them under load.
+
+[cordfuse/tokn](https://github.com/cordfuse/tokn) solves this properly. It is a lightweight turn coordinator: agents queue up, take turns pushing one at a time, and release. Zero conflicts by design.
+
+tokn is opt-in. If you only run one agent, jitter is fine. If you run multiple agents or have a busy transport, tokn is worth setting up.
+
+### Deploy your own tokn instance
+
+tokn is designed to be self-hosted. Each operator runs their own instance — your instance, your key, your channels. Do not share an instance with other operators.
+
+**On Render (recommended, free tier works):**
+
+1. Go to [render.com](https://render.com) and create a new **Web Service**
+2. Connect your GitHub account and point it at [github.com/cordfuse/tokn](https://github.com/cordfuse/tokn)
+3. Render will detect the `render.yaml` automatically and pre-fill the settings
+4. Add one environment variable in the Render dashboard:
+   ```
+   TOKN_API_KEY = <a secret you generate>
+   ```
+   Generate a good one: `openssl rand -hex 32`
+5. Deploy. Render gives you a URL like `https://your-service.onrender.com`
+
+That is your tokn instance. Only you have the API key.
+
+### Configure the runtime to use it
+
+Add a `tokn:` block to your `config.yaml`:
+
+```yaml
+transport: ../my-transport
+
+tokn:
+  url: https://your-service.onrender.com
+  channel: crosstalk:push
+
+agents:
+  - name: concierge
+    cli: claude --print
+```
+
+Set your API key as an environment variable before running the runtime:
+
+```sh
+export TOKN_API_KEY=your-secret-key
+crosstalk --config config.yaml
+```
+
+The runtime reads `TOKN_API_KEY` automatically — no need to put it in the config file.
+
+---
+
+## CLI flags
 
 ```
---config <path>         Load config from YAML file (default: config.yaml)
---transport <path>      Path to transport repo (Flag Mode)
---agent "name:cli"      Agent definition; repeat for multiple agents
+--config <path>         Load config from a YAML file (default: config.yaml)
+--transport <path>      Path to the transport repo
+--agent "name:cli"      Agent definition — repeat for multiple agents
 --tokn-url <url>        tokn server URL for push serialization
 --tokn-channel <name>   tokn channel name (default: crosstalk:push)
---interval <seconds>    Tick interval per agent (default: 60)
---jitter <ms>           Max jitter ms for fallback push (default: 5000)
---channels-dir <path>   Channels dir relative to transport (default: data/channels)
+--interval <seconds>    Poll interval per agent (default: 60)
+--jitter <ms>           Max jitter for fallback push, in ms (default: 5000)
+--channels-dir <path>   Channels directory, relative to transport (default: data/channels)
 ```
 
 ---
 
 ## Requirements
 
-- **Node.js >= 18**
-- A **Crosstalk v2** transport repo ([cordfuse/crosstalk](https://github.com/cordfuse/crosstalk))
-- At least one **agent CLI** installed and authenticated (`claude`, `agy`, etc.)
+- Node.js >= 18
+- A Crosstalk v2 transport → [cordfuse/crosstalk](https://github.com/cordfuse/crosstalk)
+- At least one agent CLI installed and authenticated (`claude`, `agy`, etc.)
 
 ---
 
