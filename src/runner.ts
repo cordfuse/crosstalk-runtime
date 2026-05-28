@@ -6,10 +6,12 @@ import { pull, commitAndPush, commitAndPushWithTokn } from './git.js';
 import { ensureChannel } from './tokn.js';
 import { dispatchTick } from './dispatch.js';
 import { parseFrontmatter } from './frontmatter.js';
+import { runInit } from './init.js';
 
 const HELP = `
 Usage:
-  crosstalk-runtime --config <path>
+  crosstalk init [--transport <path>]
+  crosstalk --config <path>
   crosstalk-runtime --transport <path> --agent "name:cli" [--agent ...] [options]
 
 Options:
@@ -178,6 +180,10 @@ async function startAgent(config: RuntimeConfig, agent: AgentConfig): Promise<vo
 }
 
 async function main(): Promise<void> {
+  if (process.argv[2] === 'init') {
+    await runInit(process.argv.slice(3));
+    return;
+  }
   const config = await resolveConfig();
   console.log(`crosstalk runtime v2 — transport=${config.transport} agents=${config.agents.length}`);
   await Promise.all(config.agents.map(agent => startAgent(config, agent)));

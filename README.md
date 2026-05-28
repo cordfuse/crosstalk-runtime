@@ -18,20 +18,16 @@ Puts `crosstalk` (and the alias `ct`) on your PATH.
 
 ## Quickstart
 
-Create a `config.yaml` file:
-
-```yaml
-transport: /path/to/your/transport-repo
-
-agents:
-  - name: concierge
-    cli: claude --print
-```
-
-Then run:
+Run this inside your cloned transport repo:
 
 ```sh
-crosstalk --config config.yaml
+crosstalk init
+```
+
+This creates a channel, commits it to the transport, and writes a starter config to `~/.config/crosstalk/<repo-name>/config.yaml`. Edit the config to set your agents, then:
+
+```sh
+crosstalk --config ~/.config/crosstalk/<repo-name>/config.yaml
 ```
 
 ---
