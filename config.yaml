@@ -2,6 +2,10 @@ transport: ../crosstalk-dogfood
 channelsDir: data/channels
 jitter: 1000
 
+tokn:
+  url: https://tokn-pqgp.onrender.com
+  channel: crosstalk:push
+
 agents:
   - name: concierge
     cli: claude --print
