@@ -1,5 +1,8 @@
 import { readFileSync } from 'fs';
 import { parse as parseYaml } from 'yaml';
+import type { ToknConfig } from './tokn.js';
+
+export type { ToknConfig };
 
 export interface AgentConfig {
   name: string;
@@ -17,7 +20,8 @@ export interface RuntimeConfig {
   transport: string;      // path to transport repo (absolute or relative to config file)
   channelsDir: string;    // channels dir relative to transport; default: data/channels
   interval: number;       // default tick interval seconds; default: 60
-  jitter: number;         // max ms sleep before push; default: 5000
+  jitter: number;         // max ms sleep before push; default: 5000 (ignored when tokn is set)
+  tokn?: ToknConfig;      // if set, use tokn for push serialization instead of jitter
   agents: AgentConfig[];
 }
 
@@ -34,11 +38,21 @@ export function loadConfig(path: string): RuntimeConfig {
     if (!agent.cli) throw new Error(`config: agent "${agent.name}" missing cli`);
   }
 
+  const toknYaml = (data as any).tokn as { url?: string; channel?: string } | undefined;
+  const tokn: ToknConfig | undefined = toknYaml?.url
+    ? {
+        url: toknYaml.url,
+        channel: toknYaml.channel ?? 'crosstalk:push',
+        apiKey: process.env.TOKN_API_KEY ?? '',
+      }
+    : undefined;
+
   return {
     transport: data.transport,
     channelsDir: data.channelsDir ?? 'data/channels',
     interval: data.interval ?? 60,
     jitter: data.jitter ?? 5000,
+    tokn,
     agents: data.agents as AgentConfig[],
   };
 }

@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { withTokn, type ToknConfig } from './tokn.js';
 
 interface GitResult {
   code: number;
@@ -25,6 +26,32 @@ function sleep(ms: number): Promise<void> {
 
 export async function pull(transportPath: string): Promise<void> {
   await git(transportPath, ['pull', '--rebase', 'origin', 'main']);
+}
+
+// Serializes pull + commit + push through a tokn channel.
+// Holds the token only for the critical section — pull/commit/push.
+// Returns true on success or no-op, throws on push failure.
+export async function commitAndPushWithTokn(opts: {
+  transportPath: string;
+  files: string[];
+  message: string;
+  identity: { name: string; email: string };
+  tokn: ToknConfig;
+}): Promise<boolean> {
+  const { transportPath, files, message, identity, tokn } = opts;
+  return withTokn(tokn, async () => {
+    await git(transportPath, ['pull', '--rebase', 'origin', 'main']);
+    await git(transportPath, ['add', '--', ...files]);
+    const { code: commitCode } = await git(transportPath, [
+      '-c', `user.name=${identity.name}`,
+      '-c', `user.email=${identity.email}`,
+      'commit', '-m', message,
+    ]);
+    if (commitCode !== 0) return true; // nothing to commit
+    const { code, stderr } = await git(transportPath, ['push', 'origin', 'main']);
+    if (code !== 0) throw new Error(`git push failed: ${stderr}`);
+    return true;
+  });
 }
 
 // Stages files, commits under the given identity, then pushes with JITTER.

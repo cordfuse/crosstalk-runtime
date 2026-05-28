@@ -1,0 +1,12 @@
+services:
+  crosstalk-runtime:
+    build:
+      context: .
+      dockerfile: Dockerfile.runtime
+    restart: unless-stopped
+    environment:
+      - TOKN_API_KEY=${TOKN_API_KEY}
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ${TRANSPORT_PATH}:/transport:rw
+      - ${SSH_KEY_PATH:-~/.ssh}:/root/.ssh:ro
