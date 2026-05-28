@@ -70,9 +70,9 @@ export async function runInit(argv: string[]): Promise<void> {
     if (stderr.trim()) console.warn(`  ${stderr.trim()}`);
   }
 
-  // Write config to ~/.config/crosstalk/<repo-name>/config.yaml
+  // Write config to ~/.crosstalk/<repo-name>/config.yaml
   const repoName = basename(transportPath);
-  const configDir = join(homedir(), '.config', 'crosstalk', repoName);
+  const configDir = join(homedir(), '.crosstalk', repoName);
   const configPath = join(configDir, 'config.yaml');
   await mkdir(configDir, { recursive: true });
   await writeFile(configPath, configTemplate(transportPath), 'utf-8');

@@ -24,10 +24,10 @@ Run this inside your cloned transport repo:
 crosstalk init
 ```
 
-This creates a channel, commits it to the transport, and writes a starter config to `~/.config/crosstalk/<repo-name>/config.yaml`. Edit the config to set your agents, then:
+This creates a channel, commits it to the transport, and writes a starter config to `~/.crosstalk/<repo-name>/config.yaml`. Edit the config to set your agents, then:
 
 ```sh
-crosstalk --config ~/.config/crosstalk/<repo-name>/config.yaml
+crosstalk --config ~/.crosstalk/<repo-name>/config.yaml
 ```
 
 ---
