@@ -18,13 +18,19 @@ Puts `crosstalk` (and the alias `ct`) on your PATH.
 
 ## Quickstart
 
+Create a `config.yaml` file:
+
+```yaml
+transport: /path/to/your/transport-repo
+
+agents:
+  - name: concierge
+    cli: claude --print
+```
+
+Then run:
+
 ```sh
-# 1. Copy the example config
-cp config.example.yaml config.yaml
-
-# 2. Set your transport path and agents (see config reference below)
-
-# 3. Run
 crosstalk --config config.yaml
 ```
 
@@ -96,10 +102,10 @@ jitter: 5000
 # Default: 5000
 
 tokn:
+  # Optional. Enables tokn for push serialization instead of jitter.
+  # API key is read from the TOKN_API_KEY environment variable.
   url: <string>
   channel: <string>
-# Optional. Enables tokn for push serialization instead of jitter.
-# API key is read from the TOKN_API_KEY environment variable.
 
 # ── agents ────────────────────────────────────────────────────────────────────
 
@@ -154,8 +160,8 @@ tokn is designed to be self-hosted. Each operator runs their own instance — yo
 
 **On Render (recommended, free tier works):**
 
-1. Go to [render.com](https://render.com) and create a new **Web Service**
-2. Connect your GitHub account and point it at [github.com/cordfuse/tokn](https://github.com/cordfuse/tokn)
+1. Fork [github.com/cordfuse/tokn](https://github.com/cordfuse/tokn) to your own GitHub account
+2. Go to [render.com](https://render.com) and create a new **Web Service**, connecting your fork
 3. Render will detect the `render.yaml` automatically and pre-fill the settings
 4. Add one environment variable in the Render dashboard:
    ```

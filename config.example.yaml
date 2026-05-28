@@ -8,7 +8,7 @@ transport: ../my-crosstalk-transport   # path to your transport repo
 # API key is read from TOKN_API_KEY env var — do not put it here.
 # Remove this block to fall back to jitter-based push retry.
 tokn:
-  url: http://tokn.linux.internal:3000   # or your Render URL in prod
+  url: https://your-tokn-instance.onrender.com
   channel: crosstalk:push
 
 agents:
