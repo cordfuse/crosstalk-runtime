@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { resolve, join } from 'path';
 import { readFile, access } from 'fs/promises';
 import { loadConfig, configFromFlags, type AgentConfig, type RuntimeConfig } from './config.js';
