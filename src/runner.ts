@@ -2,7 +2,8 @@ import { resolve, join } from 'path';
 import { readFile } from 'fs/promises';
 import { loadConfig, type AgentConfig, type RuntimeConfig } from './config.js';
 import { readCursor, writeCursor, listMessages, messagesAfterCursor, discoverChannels } from './cursor.js';
-import { pull, commitAndPush } from './git.js';
+import { pull, commitAndPush, commitAndPushWithTokn } from './git.js';
+import { ensureChannel } from './tokn.js';
 import { dispatchTick } from './dispatch.js';
 import { parseFrontmatter } from './frontmatter.js';
 
@@ -76,13 +77,21 @@ async function tickChannel(opts: {
 
   const now = new Date();
   const label = `${now.toISOString().slice(0, 16).replace('T', ' ')}Z`;
-  const ok = await commitAndPush({
-    transportPath,
-    files: stagedFiles,
-    message: `crosstalk: ${agent.name} ${label}`,
-    identity: gitIdentity,
-    jitterMs: config.jitter,
-  });
+  const ok = config.tokn
+    ? await commitAndPushWithTokn({
+        transportPath,
+        files: stagedFiles,
+        message: `crosstalk: ${agent.name} ${label}`,
+        identity: gitIdentity,
+        tokn: config.tokn,
+      })
+    : await commitAndPush({
+        transportPath,
+        files: stagedFiles,
+        message: `crosstalk: ${agent.name} ${label}`,
+        identity: gitIdentity,
+        jitterMs: config.jitter,
+      });
 
   if (ok && lastProcessed) {
     await writeCursor(transportPath, agent.name, channelGuid, lastProcessed);
@@ -123,6 +132,11 @@ async function startAgent(config: RuntimeConfig, agent: AgentConfig): Promise<vo
 
   if (channels.length === 0) {
     console.warn(`[${agent.name}] no channels found in ${join(transportPath, config.channelsDir)} — waiting`);
+  }
+
+  if (config.tokn) {
+    await ensureChannel(config.tokn);
+    console.log(`[${agent.name}] tokn channel ready: ${config.tokn.channel}`);
   }
 
   const interval = agent.interval ?? config.interval;
