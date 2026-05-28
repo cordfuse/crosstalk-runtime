@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import { resolve, join } from 'path';
 import { readFile, access } from 'fs/promises';
+import { createRequire } from 'module';
+const _require = createRequire(import.meta.url);
+const { version } = _require('../package.json') as { version: string };
 import { loadConfig, configFromFlags, type AgentConfig, type RuntimeConfig } from './config.js';
 import { readCursor, writeCursor, listMessages, messagesAfterCursor, discoverChannels } from './cursor.js';
 import { pull, commitAndPush, commitAndPushWithTokn } from './git.js';
@@ -183,6 +186,10 @@ async function startAgent(config: RuntimeConfig, agent: AgentConfig): Promise<vo
 async function main(): Promise<void> {
   if (process.argv[2] === 'init') {
     await runInit(process.argv.slice(3));
+    return;
+  }
+  if (process.argv.includes('--version') || process.argv.includes('-v')) {
+    console.log(version);
     return;
   }
   const config = await resolveConfig();
