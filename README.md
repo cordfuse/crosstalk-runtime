@@ -207,7 +207,7 @@ The runtime reads `TOKN_API_KEY` automatically — no need to put it in the conf
 --agent "name:cli"      Agent definition — repeat for multiple agents
 --tokn-url <url>        tokn server URL for push serialization
 --tokn-channel <name>   tokn channel name (default: crosstalk:push)
---interval <seconds>    Poll interval per agent (default: 60)
+--interval <seconds>    Tick interval per agent (default: 60)
 --jitter <ms>           Max jitter for fallback push, in ms (default: 5000)
 --channels-dir <path>   Channels directory, relative to transport (default: data/channels)
 ```
