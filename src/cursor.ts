@@ -1,5 +1,5 @@
 import { join } from 'path';
-import { mkdir, readFile, readdir, writeFile } from 'fs/promises';
+import { mkdir, readFile, readdir, writeFile, access } from 'fs/promises';
 
 // Cursor files: .cursor/<agent-name>/<channel-guid>
 // Stored inside the transport repo. Git-ignored via .gitignore entry.
@@ -15,6 +15,16 @@ export async function readCursor(transportPath: string, agentName: string, chann
     return content.trim() || null;
   } catch {
     return null;
+  }
+}
+
+// Returns true if a cursor file exists for this agent+channel.
+export async function cursorExists(transportPath: string, agentName: string, channelGuid: string): Promise<boolean> {
+  try {
+    await access(cursorPath(transportPath, agentName, channelGuid));
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -48,11 +58,19 @@ export async function listMessages(channelDir: string): Promise<string[]> {
   return paths;
 }
 
-// Returns relPaths after the cursor (exclusive). If cursor is null, returns all.
+// Returns relPaths after the cursor (exclusive).
+// If cursor is null (first time this agent has seen this channel),
+// initialize to the current tip so the agent only reads new messages.
 export function messagesAfterCursor(all: string[], cursor: string | null): string[] {
-  if (!cursor) return all;
+  if (!cursor) return [];
   const idx = all.indexOf(cursor);
   return idx === -1 ? all : all.slice(idx + 1);
+}
+
+// Returns the current tip (last message), or null if channel is empty.
+// Used to initialize the cursor for new agents.
+export function currentTip(all: string[]): string | null {
+  return all.length > 0 ? all[all.length - 1] : null;
 }
 
 // Lists all channel GUIDs found in <transport>/<channelsDir>/

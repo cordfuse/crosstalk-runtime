@@ -5,7 +5,7 @@ import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
 const { version } = _require('../package.json') as { version: string };
 import { loadConfig, configFromFlags, type AgentConfig, type RuntimeConfig } from './config.js';
-import { readCursor, writeCursor, listMessages, messagesAfterCursor, discoverChannels } from './cursor.js';
+import { readCursor, writeCursor, cursorExists, listMessages, messagesAfterCursor, currentTip, discoverChannels } from './cursor.js';
 import { pull, commitAndPush, commitAndPushWithTokn } from './git.js';
 import { ensureChannel } from './tokn.js';
 import { dispatchTick } from './dispatch.js';
@@ -95,6 +95,14 @@ async function tickChannel(opts: {
   const { config, agent, channelGuid, transportPath, systemPrompt, gitIdentity } = opts;
   const channelDir = join(transportPath, config.channelsDir, channelGuid);
   const allRelPaths = await listMessages(channelDir);
+
+  // First time this agent sees this channel — initialize cursor to tip, skip history.
+  if (!await cursorExists(transportPath, agent.name, channelGuid)) {
+    const tip = currentTip(allRelPaths);
+    if (tip) await writeCursor(transportPath, agent.name, channelGuid, tip);
+    return;
+  }
+
   const cursor = await readCursor(transportPath, agent.name, channelGuid);
   const unread = messagesAfterCursor(allRelPaths, cursor);
 
