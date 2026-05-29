@@ -138,7 +138,10 @@ export async function dispatchTick(opts: {
     }
 
     const context = renderContext(contextMessages, msg);
-    const stdin = systemPrompt ? `${systemPrompt}\n\n${context}` : context;
+    const identity = `Your agent name is ${agent.name}.`;
+    const stdin = systemPrompt
+      ? `${systemPrompt}\n\n${identity}\n\n${context}`
+      : `${identity}\n\n${context}`;
 
     const spawnCwd = agent.spawnCwd ?? '/tmp';
     let reply: string;
