@@ -57,19 +57,27 @@ function renderContext(context: ParsedMessage[], target: ParsedMessage): string 
 
 function spawnCli(cliCommand: string, stdin: string, cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const parts = cliCommand.trim().split(/\s+/);
-    const proc = spawn(parts[0], parts.slice(1), {
+    // shell: true delegates parsing to /bin/sh so quoted args (e.g.
+    // --model "claude-haiku-4-5") are preserved correctly. Naive
+    // whitespace split corrupted any flag value containing spaces.
+    const proc = spawn(cliCommand, {
       cwd,
+      shell: true,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
+    let stderr = '';
     proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
-    proc.stderr.on('data', () => {}); // suppress
+    proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
     proc.stdin.write(stdin, 'utf-8');
     proc.stdin.end();
     proc.on('exit', code => {
-      if (code !== 0) reject(new Error(`cli exited ${code}`));
-      else resolve(stdout.trim());
+      if (code !== 0) {
+        const tail = stderr.trim() || '(no stderr)';
+        reject(new Error(`cli exited ${code}: ${tail}`));
+      } else {
+        resolve(stdout.trim());
+      }
     });
     proc.on('error', reject);
   });
