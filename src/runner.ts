@@ -88,6 +88,42 @@ async function resolveGitIdentity(
   }
 }
 
+// Resolve pool membership: explicit config.pool → actor file metadata.pool → undefined.
+// See CROSSTALK.md Pools — operator config takes precedence over transport-side declaration.
+async function resolveAgentPool(
+  transportPath: string,
+  agent: AgentConfig,
+): Promise<string | undefined> {
+  if (agent.pool) return agent.pool;
+  const candidatePath = agent.systemPromptFile
+    ? join(transportPath, agent.systemPromptFile)
+    : join(transportPath, 'manifest', 'custom', 'actors', `${agent.name}.md`);
+  try {
+    const raw = await readFile(candidatePath, 'utf-8');
+    const { data } = parseFrontmatter(raw);
+    const meta = data.metadata as Record<string, string> | undefined;
+    return meta?.pool ? String(meta.pool) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Build the pool roster (this operator's view) — sorted ascending. Used for
+// hash-based claim selection. Empty if the agent is not in a pool.
+async function buildPoolRoster(
+  transportPath: string,
+  config: RuntimeConfig,
+  agentPool: string | undefined,
+): Promise<string[]> {
+  if (!agentPool) return [];
+  const roster: string[] = [];
+  for (const a of config.agents) {
+    const pool = await resolveAgentPool(transportPath, a);
+    if (pool === agentPool) roster.push(a.name);
+  }
+  return roster.sort();
+}
+
 async function tickChannel(opts: {
   config: RuntimeConfig;
   agent: AgentConfig;
@@ -95,8 +131,10 @@ async function tickChannel(opts: {
   transportPath: string;
   systemPrompt: string | undefined;
   gitIdentity: { name: string; email: string };
+  agentPool: string | undefined;
+  poolRoster: string[];
 }): Promise<void> {
-  const { config, agent, channelGuid, transportPath, systemPrompt, gitIdentity } = opts;
+  const { config, agent, channelGuid, transportPath, systemPrompt, gitIdentity, agentPool, poolRoster } = opts;
   const channelDir = join(transportPath, config.channelsDir, channelGuid);
   const allRelPaths = await listMessages(channelDir);
 
@@ -120,6 +158,8 @@ async function tickChannel(opts: {
     unreadRelPaths: unread,
     agent,
     systemPrompt,
+    agentPool,
+    poolRoster,
   });
 
   if (stagedFiles.length === 0) {
@@ -159,6 +199,8 @@ async function tick(
   channels: string[],
   systemPrompt: string | undefined,
   gitIdentity: { name: string; email: string },
+  agentPool: string | undefined,
+  poolRoster: string[],
 ): Promise<void> {
   const transportPath = resolve(config.transport);
   try {
@@ -168,7 +210,7 @@ async function tick(
     return;
   }
   for (const channelGuid of channels) {
-    await tickChannel({ config, agent, channelGuid, transportPath, systemPrompt, gitIdentity });
+    await tickChannel({ config, agent, channelGuid, transportPath, systemPrompt, gitIdentity, agentPool, poolRoster });
   }
 }
 
@@ -185,6 +227,8 @@ async function startAgent(config: RuntimeConfig, agent: AgentConfig): Promise<vo
   const transportPath = resolve(config.transport);
   const systemPrompt = await resolveSystemPrompt(transportPath, agent);
   const gitIdentity = await resolveGitIdentity(transportPath, agent);
+  const agentPool = await resolveAgentPool(transportPath, agent);
+  const poolRoster = await buildPoolRoster(transportPath, config, agentPool);
 
   const allChannels = await discoverChannels(transportPath, config.channelsDir);
   const channels = agent.channels?.length
@@ -200,9 +244,10 @@ async function startAgent(config: RuntimeConfig, agent: AgentConfig): Promise<vo
   }
 
   const interval = agent.interval ?? config.interval;
-  console.log(`[${agent.name}] starting — channels=${channels.length} interval=${interval}s git="${gitIdentity.name}"`);
+  const poolInfo = agentPool ? ` pool=${agentPool}(${poolRoster.length})` : '';
+  console.log(`[${agent.name}] starting — channels=${channels.length} interval=${interval}s git="${gitIdentity.name}"${poolInfo}`);
 
-  const run = () => tick(config, agent, channels, systemPrompt, gitIdentity).catch(err => {
+  const run = () => tick(config, agent, channels, systemPrompt, gitIdentity, agentPool, poolRoster).catch(err => {
     console.error(`[${agent.name}] tick error:`, err);
   });
 

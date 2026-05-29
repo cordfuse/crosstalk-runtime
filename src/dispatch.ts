@@ -1,6 +1,7 @@
 import { join } from 'path';
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import { spawn } from 'child_process';
+import { createHash } from 'crypto';
 import { parseFrontmatter } from './frontmatter.js';
 import { messageFilename, messageDatePath } from './filenames.js';
 import type { AgentConfig } from './config.js';
@@ -12,12 +13,16 @@ interface ParsedMessage {
   type: string;
   timestamp: string;
   body: string;
+  delivery?: 'any' | 'all';
 }
 
 async function parseMessage(channelDir: string, relPath: string): Promise<ParsedMessage | null> {
   try {
     const raw = await readFile(join(channelDir, relPath), 'utf-8');
     const { data, body } = parseFrontmatter(raw);
+    const deliveryRaw = String(data.delivery ?? '');
+    const delivery: 'any' | 'all' | undefined =
+      deliveryRaw === 'any' ? 'any' : deliveryRaw === 'all' ? 'all' : undefined;
     return {
       relPath,
       from: String(data.from ?? ''),
@@ -25,17 +30,57 @@ async function parseMessage(channelDir: string, relPath: string): Promise<Parsed
       type: String(data.type ?? 'text'),
       timestamp: String(data.timestamp ?? ''),
       body: body.trim(),
+      delivery,
     };
   } catch {
     return null;
   }
 }
 
-function isAddressedTo(msg: ParsedMessage, agentName: string): boolean {
+// Hash-based claim for pool delivery: any. Returns the chosen member name.
+// roster MUST be the full pool roster (this operator's view), sorted ascending.
+function choosePoolMember(roster: string[], msgRelPath: string): string | null {
+  if (roster.length === 0) return null;
+  const sorted = [...roster].sort();
+  const hex = createHash('sha256').update(msgRelPath).digest('hex');
+  // First 8 hex chars → 32-bit unsigned int → mod roster size.
+  const idx = parseInt(hex.slice(0, 8), 16) % sorted.length;
+  return sorted[idx];
+}
+
+function matchesTarget(
+  target: string,
+  agentName: string,
+  agentPool: string | undefined,
+  poolRoster: string[],
+  msg: ParsedMessage,
+): boolean {
+  if (target === 'all') return true;
+  if (target === agentName) return true;
+  if (target.startsWith('pool:')) {
+    const poolName = target.slice(5);
+    if (!agentPool || agentPool !== poolName) return false;
+    // Default delivery for pool addressing is 'any'.
+    const delivery = msg.delivery ?? 'any';
+    if (delivery === 'all') return true;
+    // delivery: any → hash-based claim. Dispatch only if we are chosen.
+    return choosePoolMember(poolRoster, msg.relPath) === agentName;
+  }
+  return false;
+}
+
+function isAddressedTo(
+  msg: ParsedMessage,
+  agentName: string,
+  agentPool: string | undefined,
+  poolRoster: string[],
+): boolean {
   if (msg.from === agentName) return false;
-  if (msg.to === 'all') return true;
-  if (Array.isArray(msg.to)) return msg.to.includes(agentName);
-  return msg.to === agentName;
+  const targets = Array.isArray(msg.to) ? msg.to : [msg.to];
+  for (const target of targets) {
+    if (matchesTarget(target, agentName, agentPool, poolRoster, msg)) return true;
+  }
+  return false;
 }
 
 function renderMessage(msg: ParsedMessage): string {
@@ -123,18 +168,21 @@ export async function dispatchTick(opts: {
   unreadRelPaths: string[];
   agent: AgentConfig;
   systemPrompt?: string;  // pre-loaded system prompt text (if configured)
+  agentPool?: string;     // resolved pool name (config.pool || metadata.pool)
+  poolRoster?: string[];  // sorted roster of pool members (this operator's view); includes self
 }): Promise<DispatchResult> {
-  const { transportPath, channelsDir, channelGuid, allRelPaths, unreadRelPaths, agent, systemPrompt } = opts;
+  const { transportPath, channelsDir, channelGuid, allRelPaths, unreadRelPaths, agent, systemPrompt, agentPool, poolRoster } = opts;
   const channelDir = join(transportPath, channelsDir, channelGuid);
   const channelBase = `${channelsDir}/${channelGuid}`;
   const stagedFiles: string[] = [];
   let lastProcessed: string | null = null;
+  const roster = poolRoster ?? [];
 
   for (const relPath of unreadRelPaths) {
     const msg = await parseMessage(channelDir, relPath);
     if (!msg) continue;
     if (msg.type !== 'text') { lastProcessed = relPath; continue; }
-    if (!isAddressedTo(msg, agent.name)) { lastProcessed = relPath; continue; }
+    if (!isAddressedTo(msg, agent.name, agentPool, roster)) { lastProcessed = relPath; continue; }
 
     // Context: up to contextWindow text messages before this one
     const idx = allRelPaths.indexOf(relPath);
