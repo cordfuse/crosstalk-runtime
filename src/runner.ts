@@ -65,15 +65,19 @@ async function resolveSystemPrompt(transportPath: string, agent: AgentConfig): P
   }
 }
 
-// Derive git identity: explicit override → actor frontmatter alias → bare name
+// Derive git identity: explicit override → actor frontmatter alias → bare name.
+// Persona-file lookup mirrors resolveSystemPrompt so fan-out slots
+// (slot name ≠ persona file name) still pick up the alias.
 async function resolveGitIdentity(
   transportPath: string,
   agent: AgentConfig,
 ): Promise<{ name: string; email: string }> {
   if (agent.git) return agent.git;
+  const candidatePath = agent.systemPromptFile
+    ? join(transportPath, agent.systemPromptFile)
+    : join(transportPath, 'manifest', 'custom', 'actors', `${agent.name}.md`);
   try {
-    const actorFile = join(transportPath, 'manifest', 'custom', 'actors', `${agent.name}.md`);
-    const raw = await readFile(actorFile, 'utf-8');
+    const raw = await readFile(candidatePath, 'utf-8');
     const { data } = parseFrontmatter(raw);
     const meta = data.metadata as Record<string, string> | undefined;
     const alias = meta?.alias ?? String(data.alias ?? '');
