@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { resolve, join } from 'path';
 import { readFile, access, watch } from 'fs/promises';
+import { hostname as osHostname } from 'os';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
 const { version } = _require('../package.json') as { version: string };
-import { loadConfig, configFromFlags, type AgentConfig, type RuntimeConfig } from './config.js';
+import { loadConfig, configFromFlags, findHostFile, expandHostFile, type AgentConfig, type RuntimeConfig } from './config.js';
 import { readCursor, writeCursor, cursorExists, listMessages, messagesAfterCursor, currentTip, discoverChannels } from './cursor.js';
 import { pull, commitAndPush, commitAndPushWithTokn } from './git.js';
 import { ensureChannel } from './tokn.js';
@@ -78,25 +79,26 @@ async function resolveSystemPrompt(transportPath: string, agent: AgentConfig): P
 }
 
 // Derive git identity: explicit override → actor frontmatter alias → bare name.
-// Persona-file lookup mirrors resolveSystemPrompt so fan-out slots
-// (slot name ≠ persona file name) still pick up the alias.
+// Email includes host alias for traceability across multi-host transports.
 async function resolveGitIdentity(
   transportPath: string,
   agent: AgentConfig,
+  hostAlias?: string,
 ): Promise<{ name: string; email: string }> {
   if (agent.git) return agent.git;
   const candidatePath = agent.systemPromptFile
     ? join(transportPath, agent.systemPromptFile)
     : join(transportPath, 'manifest', 'custom', 'actors', `${agent.name}.md`);
+  const emailHost = hostAlias ? `${hostAlias}.crosstalk.local` : 'crosstalk.local';
   try {
     const raw = await readFile(candidatePath, 'utf-8');
     const { data } = parseFrontmatter(raw);
     const meta = data.metadata as Record<string, string> | undefined;
     const alias = meta?.alias ?? String(data.alias ?? '');
     const displayName = alias ? `${alias} (${agent.name})` : agent.name;
-    return { name: displayName, email: `${agent.name}@crosstalk.local` };
+    return { name: displayName, email: `${agent.name}@${emailHost}` };
   } catch {
-    return { name: agent.name, email: `${agent.name}@crosstalk.local` };
+    return { name: agent.name, email: `${agent.name}@${emailHost}` };
   }
 }
 
@@ -110,8 +112,9 @@ async function tickChannel(opts: {
   gitIdentity: { name: string; email: string };
   instanceIndex: number;
   groupSize: number;
+  hostAlias?: string;
 }): Promise<void> {
-  const { config, agent, runtimeKey, channelGuid, transportPath, systemPrompt, gitIdentity, instanceIndex, groupSize } = opts;
+  const { config, agent, runtimeKey, channelGuid, transportPath, systemPrompt, gitIdentity, instanceIndex, groupSize, hostAlias } = opts;
   const channelDir = join(transportPath, config.channelsDir, channelGuid);
   const allRelPaths = await listMessages(channelDir);
 
@@ -134,6 +137,7 @@ async function tickChannel(opts: {
     allRelPaths,
     unreadRelPaths: unread,
     agent,
+    hostAlias,
     systemPrompt,
     instanceIndex,
     groupSize,
@@ -188,7 +192,7 @@ async function tick(
     return;
   }
   for (const channelGuid of channels) {
-    await tickChannel({ config, agent, runtimeKey, channelGuid, transportPath, systemPrompt, gitIdentity, instanceIndex, groupSize });
+    await tickChannel({ config, agent, runtimeKey, channelGuid, transportPath, systemPrompt, gitIdentity, instanceIndex, groupSize, hostAlias: config.hostAlias });
   }
 }
 
@@ -204,7 +208,7 @@ function stopAgent(name: string): void {
 async function startAgent(config: RuntimeConfig, agent: AgentConfig): Promise<void> {
   const transportPath = resolve(config.transport);
   const systemPrompt = await resolveSystemPrompt(transportPath, agent);
-  const gitIdentity = await resolveGitIdentity(transportPath, agent);
+  const gitIdentity = await resolveGitIdentity(transportPath, agent, config.hostAlias);
 
   // Instance group: agents in this config that share our name. Position via
   // reference equality is stable because each AgentConfig is a distinct object.
@@ -284,8 +288,29 @@ async function main(): Promise<void> {
     console.log(version);
     return;
   }
+
   const { config, configPath } = await resolveConfig();
-  console.log(`crosstalk runtime v2 — transport=${config.transport} agents=${config.agents.length}`);
+  const transportPath = resolve(config.transport);
+
+  // Host file mode: agents array is empty, resolve from manifest/hosts/
+  if (config.agents.length === 0) {
+    const hostFile = findHostFile(transportPath, config.hostAlias);
+    if (!hostFile) {
+      const attempted = config.hostAlias ?? osHostname();
+      console.error(
+        `[runtime] no host file found for "${attempted}" in ${join(transportPath, 'manifest', 'hosts')}\n` +
+        `[runtime] create manifest/hosts/<alias>.md with hostname: ${osHostname()}, or set host: <alias> in config.yaml\n` +
+        `[runtime] idling — no agents will dispatch until a host file is found`
+      );
+      // Stay alive so the process doesn't crash; operator can fix and restart.
+      return;
+    }
+    config.hostAlias = hostFile.alias;
+    config.agents    = expandHostFile(hostFile);
+    console.log(`[runtime] host=${hostFile.alias} actors=${Object.keys(hostFile.actors).join(', ')} workers=${config.agents.length}`);
+  }
+
+  console.log(`crosstalk runtime v2 — transport=${config.transport} agents=${config.agents.length}${config.hostAlias ? ` host=${config.hostAlias}` : ''}`);
   await applyConfig(config);
   if (configPath) watchConfig(configPath, () => config);
 }

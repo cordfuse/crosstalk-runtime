@@ -52,18 +52,51 @@ crosstalk --transport ./my-transport --agent "concierge:claude --print" --agent 
 
 ## config.yaml reference
 
-### Minimal config
+### Minimal config (v2.2 — host file mode)
 
-The only required fields are `transport` and at least one agent with a `name` and `cli`.
+Create `manifest/hosts/<alias>.md` in your transport declaring your machine and its actors. Then your local config only needs the transport path:
+
+```yaml
+transport: ../my-transport
+# host: my-machine   ← uncomment to override OS hostname auto-detection
+```
+
+The runtime reads your host file from the transport and starts one polling loop per declared worker.
+
+**Host file** (`manifest/hosts/my-machine.md`):
+
+```markdown
+---
+alias: my-machine
+hostname: my-hostname
+actors:
+  concierge:
+    sonnet: claude --model claude-sonnet-4-6 --print
+  junior-developer:
+    haiku:
+      cli: claude --model claude-haiku-4-5 --print
+      count: 3
+    flash: gemini --model gemini-2.5-flash -p
+---
+```
+
+- `alias` — human-readable machine name; used in `actor@host` addressing
+- `hostname` — OS hostname for auto-detection (`os.hostname()`)
+- Tier names (`sonnet`, `haiku`, `flash`) are operator-defined labels
+- `count:` sets parallel workers for that tier; omit for a single worker
+- Bare string shorthand is equivalent to `count: 1`
+
+On startup the runtime scans `manifest/hosts/` and claims the file matching its hostname (or the explicit `host:` override). If no match is found, it logs clearly and idles — it does not crash.
+
+### Legacy config (agents declared directly)
+
+The `agents:` array still works for single-machine setups or quick tests:
 
 ```yaml
 transport: ../my-transport
 
 agents:
   - name: concierge
-    cli: claude --print
-
-  - name: engineer
     cli: claude --print
 ```
 
@@ -84,6 +117,10 @@ transport: <string>
 
 # ── Top-level options (all optional) ──────────────────────────────────────────
 
+host: <string>
+# Override host file auto-detection. Must match an alias: field in manifest/hosts/.
+# Default: auto-detected from os.hostname() matching hostname: in host files.
+
 channelsDir: data/channels
 # Where to look for channels, relative to the transport root.
 # Default: "data/channels"
@@ -103,7 +140,7 @@ tokn:
   url: <string>
   channel: <string>
 
-# ── agents ────────────────────────────────────────────────────────────────────
+# ── agents (legacy — use host file instead) ───────────────────────────────────
 
 agents:
   - name: <string>

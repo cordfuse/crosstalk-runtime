@@ -1,0 +1,33 @@
+# Changelog
+
+All notable changes to `@cordfuse/crosstalk-runtime`.
+
+## v2.2.0 — 2026-05-29
+
+**Host file support** — the runtime now reads actor configuration from `manifest/hosts/<alias>.md` in the transport instead of requiring an `agents:` list in the local config:
+
+- Host file reader: scans `manifest/hosts/`, parses `alias`/`hostname`/`actors` frontmatter
+- Auto-detection: matches `os.hostname()` against `hostname:` fields; explicit `host:` in local config overrides
+- Tier expansion: each tier × `count` becomes one polling worker. Shorthand (bare CLI string) = `count: 1`
+- `actor@host` addressing: runtime skips messages targeted at a different host alias
+- Git commit email now includes host alias: `actor@hostalias.crosstalk.local`
+- Startup failure mode: if no host file is found, logs clearly and idles without crashing
+- Legacy `agents:` array in config.yaml still works for single-machine setups and flag mode
+
+Protocol: [cordfuse/crosstalk v2.2.0](https://github.com/cordfuse/crosstalk/releases/tag/v2.2.0)
+
+## v2.1.2 — 2026-05-29
+
+Docs-only patch. Added instance groups section to README.
+
+## v2.1.1 — 2026-05-29
+
+Instance groups: shared-name dispatch via `sha256(message_path) mod group_size`. Replaced pool routing.
+
+## v2.1.0 — 2026-05-29
+
+Pool routing (deprecated — replaced by v2.1.1 before any operator adopted it).
+
+## v2.0.9 — 2026-05-28
+
+Bug fixes: persona alias in git identity, CLI arg quoting, stderr capture, empty reply warning.

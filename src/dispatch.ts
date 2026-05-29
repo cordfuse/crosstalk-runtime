@@ -40,16 +40,31 @@ function chosenInstanceIndex(msgRelPath: string, groupSize: number): number {
   return parseInt(hex.slice(0, 8), 16) % groupSize;
 }
 
+// Parse actor@host syntax. Bare names return host=undefined (matches any host).
+function parseTarget(target: string): { actor: string; host?: string } {
+  const at = target.lastIndexOf('@');
+  if (at === -1) return { actor: target };
+  return { actor: target.slice(0, at), host: target.slice(at + 1) };
+}
+
 function isAddressedTo(
   msg: ParsedMessage,
   agentName: string,
-  instanceIndex: number,  // this agent's position within its same-name group (0 if name is unique)
-  groupSize: number,      // count of agents sharing this name in config (1 if unique)
+  hostAlias: string | undefined, // this runtime's host alias; undefined in legacy/flag mode
+  instanceIndex: number,         // this agent's position within its same-name group (0 if name is unique)
+  groupSize: number,             // count of agents sharing this name in config (1 if unique)
 ): boolean {
   if (msg.from === agentName) return false;
   const targets = Array.isArray(msg.to) ? msg.to : [msg.to];
   for (const target of targets) {
-    if (target !== 'all' && target !== agentName) continue;
+    if (target === 'all') {
+      // broadcast — no host filter
+    } else {
+      const { actor, host } = parseTarget(target);
+      if (actor !== agentName) continue;
+      // host-targeted: skip if host doesn't match ours
+      if (host && hostAlias && host !== hostAlias) continue;
+    }
     if (groupSize <= 1) return true;
     return chosenInstanceIndex(msg.relPath, groupSize) === instanceIndex;
   }
@@ -140,13 +155,15 @@ export async function dispatchTick(opts: {
   allRelPaths: string[];  // all messages in channel, sorted asc
   unreadRelPaths: string[];
   agent: AgentConfig;
+  hostAlias?: string;     // this runtime's host alias for actor@host filtering
   systemPrompt?: string;  // pre-loaded system prompt text (if configured)
   instanceIndex?: number; // 0-based position within same-name group; default 0
   groupSize?: number;     // count of agents sharing this name in config; default 1
 }): Promise<DispatchResult> {
   const { transportPath, channelsDir, channelGuid, allRelPaths, unreadRelPaths, agent, systemPrompt } = opts;
+  const hostAlias     = opts.hostAlias;
   const instanceIndex = opts.instanceIndex ?? 0;
-  const groupSize = opts.groupSize ?? 1;
+  const groupSize     = opts.groupSize ?? 1;
   const channelDir = join(transportPath, channelsDir, channelGuid);
   const channelBase = `${channelsDir}/${channelGuid}`;
   const stagedFiles: string[] = [];
@@ -156,7 +173,7 @@ export async function dispatchTick(opts: {
     const msg = await parseMessage(channelDir, relPath);
     if (!msg) continue;
     if (msg.type !== 'text') { lastProcessed = relPath; continue; }
-    if (!isAddressedTo(msg, agent.name, instanceIndex, groupSize)) { lastProcessed = relPath; continue; }
+    if (!isAddressedTo(msg, agent.name, hostAlias, instanceIndex, groupSize)) { lastProcessed = relPath; continue; }
 
     // Context: up to contextWindow text messages before this one
     const idx = allRelPaths.indexOf(relPath);
