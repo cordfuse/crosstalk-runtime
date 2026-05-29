@@ -143,7 +143,7 @@ export async function dispatchTick(opts: {
       ? `${systemPrompt}\n\n${identity}\n\n${context}`
       : `${identity}\n\n${context}`;
 
-    const spawnCwd = agent.spawnCwd ?? '/tmp';
+    const spawnCwd = agent.spawnCwd ?? transportPath;
     let reply: string;
     try {
       reply = await spawnCli(agent.cli, stdin, spawnCwd);

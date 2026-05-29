@@ -137,7 +137,7 @@ agents:
 
     spawnCwd: <string>
     # Working directory for the agent CLI subprocess.
-    # Default: /tmp
+    # Default: transport root (so the agent boots inside the repo and can read/write files directly)
 ```
 
 ---
