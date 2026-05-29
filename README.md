@@ -142,6 +142,57 @@ agents:
 
 ---
 
+## Instance groups
+
+Multiple agents sharing the same `name:` form an **instance group**. The runtime dispatches each incoming message to exactly one instance, chosen by `sha256(message_path).first_32_bits mod group_size`. Use this when you want N parallel workers under one logical actor — load balancing without a coordinator.
+
+```yaml
+agents:
+  - name: junior-developer
+    cli: claude --model claude-haiku-4-5 --print
+    systemPromptFile: manifest/custom/actors/junior-developer.md
+  - name: junior-developer
+    cli: claude --model claude-haiku-4-5 --print
+    systemPromptFile: manifest/custom/actors/junior-developer.md
+  - name: junior-developer
+    cli: claude --model claude-haiku-4-5 --print
+    systemPromptFile: manifest/custom/actors/junior-developer.md
+```
+
+Three entries with the same `name:` form an instance group of size 3.
+
+**Properties:**
+
+- **Deterministic** — every instance computes the same chosen index for the same message, so exactly one ever dispatches. No double-handling.
+- **Retry-stable** — the same message always selects the same instance, so re-ticks after a failed dispatch hit the same dispatcher.
+- **Per-instance state** — each instance has its own cursor file at `<transport>/.cursor/<name>#<index>/<channel>/`, so internal read state never collides. Cursors are tracked by position in `agents:`.
+- **Transport-visible identity** — all instances sign messages and commits as the shared `name`. The group is one actor on the wire.
+
+### Picking the model
+
+Model selection lives in each entry's `cli:` string. Every supported AI CLI takes a model flag:
+
+| Provider | Example |
+|---|---|
+| Claude Code | `claude --model claude-haiku-4-5 --print` |
+| Codex CLI | `codex exec --model gpt-5-turbo --skip-confirmations` |
+| Gemini CLI | `gemini --model gemini-2.5-pro -p` |
+| OpenCode | `opencode --model llama3:70b -r` |
+| Qwen Code | `qwen --model qwen-coder-3 -i` |
+| Antigravity (`agy`) | `agy --model agy-pro --print` |
+
+Mix model tiers in one group by varying `cli:` per entry. The hash distributes messages evenly across all entries; mix ratio = entry-count ratio.
+
+### Limitations
+
+- **Single-operator only.** Multi-operator groups (instances spread across operators on the same transport) see disjoint rosters and would double-dispatch. Deferred.
+- **Avoid reordering or deleting middle entries while the daemon is running.** Cursor state is keyed by position; reorder shifts every cursor's meaning. Stop, edit, restart.
+- **Hot-reload across instance-count changes** initialises new positions at the channel tip — anything between the old cursor and the tip is skipped for that slot. Prefer a clean restart for instance-count changes.
+
+For the operator-facing walkthrough, see [cordfuse/crosstalk GUIDE.md — Part 4](https://github.com/cordfuse/crosstalk/blob/main/GUIDE.md#part-4--running-multiple-instances-of-an-actor-optional).
+
+---
+
 ## Push coordination with tokn
 
 When multiple agents commit to the same transport at the same time, git push conflicts can occur. The runtime handles this with jitter by default — each agent waits a random amount of time before pushing, which reduces collisions but does not eliminate them under load.
