@@ -14,8 +14,6 @@ export interface AgentConfig {
   contextWindow?: number;    // prior messages to include per dispatch; default: 20
   git?: { name: string; email: string }; // default: derived from actor file + <name>@crosstalk.local
   spawnCwd?: string;         // CLI subprocess working dir; default: /tmp
-  pool?: string;             // pool name this agent is a member of (see CROSSTALK.md Pools).
-                             // Overrides metadata.pool from the resolved actor file.
 }
 
 export interface RuntimeConfig {

@@ -13,16 +13,12 @@ interface ParsedMessage {
   type: string;
   timestamp: string;
   body: string;
-  delivery?: 'any' | 'all';
 }
 
 async function parseMessage(channelDir: string, relPath: string): Promise<ParsedMessage | null> {
   try {
     const raw = await readFile(join(channelDir, relPath), 'utf-8');
     const { data, body } = parseFrontmatter(raw);
-    const deliveryRaw = String(data.delivery ?? '');
-    const delivery: 'any' | 'all' | undefined =
-      deliveryRaw === 'any' ? 'any' : deliveryRaw === 'all' ? 'all' : undefined;
     return {
       relPath,
       from: String(data.from ?? ''),
@@ -30,55 +26,32 @@ async function parseMessage(channelDir: string, relPath: string): Promise<Parsed
       type: String(data.type ?? 'text'),
       timestamp: String(data.timestamp ?? ''),
       body: body.trim(),
-      delivery,
     };
   } catch {
     return null;
   }
 }
 
-// Hash-based claim for pool delivery: any. Returns the chosen member name.
-// roster MUST be the full pool roster (this operator's view), sorted ascending.
-function choosePoolMember(roster: string[], msgRelPath: string): string | null {
-  if (roster.length === 0) return null;
-  const sorted = [...roster].sort();
+// Instance groups (see CROSSTALK.md): when multiple agents share a name,
+// exactly one dispatches per message. sha256(relPath) mod group-size selects
+// by position in the group's local ordering.
+function chosenInstanceIndex(msgRelPath: string, groupSize: number): number {
   const hex = createHash('sha256').update(msgRelPath).digest('hex');
-  // First 8 hex chars → 32-bit unsigned int → mod roster size.
-  const idx = parseInt(hex.slice(0, 8), 16) % sorted.length;
-  return sorted[idx];
-}
-
-function matchesTarget(
-  target: string,
-  agentName: string,
-  agentPool: string | undefined,
-  poolRoster: string[],
-  msg: ParsedMessage,
-): boolean {
-  if (target === 'all') return true;
-  if (target === agentName) return true;
-  if (target.startsWith('pool:')) {
-    const poolName = target.slice(5);
-    if (!agentPool || agentPool !== poolName) return false;
-    // Default delivery for pool addressing is 'any'.
-    const delivery = msg.delivery ?? 'any';
-    if (delivery === 'all') return true;
-    // delivery: any → hash-based claim. Dispatch only if we are chosen.
-    return choosePoolMember(poolRoster, msg.relPath) === agentName;
-  }
-  return false;
+  return parseInt(hex.slice(0, 8), 16) % groupSize;
 }
 
 function isAddressedTo(
   msg: ParsedMessage,
   agentName: string,
-  agentPool: string | undefined,
-  poolRoster: string[],
+  instanceIndex: number,  // this agent's position within its same-name group (0 if name is unique)
+  groupSize: number,      // count of agents sharing this name in config (1 if unique)
 ): boolean {
   if (msg.from === agentName) return false;
   const targets = Array.isArray(msg.to) ? msg.to : [msg.to];
   for (const target of targets) {
-    if (matchesTarget(target, agentName, agentPool, poolRoster, msg)) return true;
+    if (target !== 'all' && target !== agentName) continue;
+    if (groupSize <= 1) return true;
+    return chosenInstanceIndex(msg.relPath, groupSize) === instanceIndex;
   }
   return false;
 }
@@ -168,21 +141,22 @@ export async function dispatchTick(opts: {
   unreadRelPaths: string[];
   agent: AgentConfig;
   systemPrompt?: string;  // pre-loaded system prompt text (if configured)
-  agentPool?: string;     // resolved pool name (config.pool || metadata.pool)
-  poolRoster?: string[];  // sorted roster of pool members (this operator's view); includes self
+  instanceIndex?: number; // 0-based position within same-name group; default 0
+  groupSize?: number;     // count of agents sharing this name in config; default 1
 }): Promise<DispatchResult> {
-  const { transportPath, channelsDir, channelGuid, allRelPaths, unreadRelPaths, agent, systemPrompt, agentPool, poolRoster } = opts;
+  const { transportPath, channelsDir, channelGuid, allRelPaths, unreadRelPaths, agent, systemPrompt } = opts;
+  const instanceIndex = opts.instanceIndex ?? 0;
+  const groupSize = opts.groupSize ?? 1;
   const channelDir = join(transportPath, channelsDir, channelGuid);
   const channelBase = `${channelsDir}/${channelGuid}`;
   const stagedFiles: string[] = [];
   let lastProcessed: string | null = null;
-  const roster = poolRoster ?? [];
 
   for (const relPath of unreadRelPaths) {
     const msg = await parseMessage(channelDir, relPath);
     if (!msg) continue;
     if (msg.type !== 'text') { lastProcessed = relPath; continue; }
-    if (!isAddressedTo(msg, agent.name, agentPool, roster)) { lastProcessed = relPath; continue; }
+    if (!isAddressedTo(msg, agent.name, instanceIndex, groupSize)) { lastProcessed = relPath; continue; }
 
     // Context: up to contextWindow text messages before this one
     const idx = allRelPaths.indexOf(relPath);
