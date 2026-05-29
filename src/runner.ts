@@ -30,8 +30,20 @@ Options:
   --help                  Show this message
 `.trim();
 
-// Tracks interval handles for running agents so they can be stopped on reload
+// Tracks interval handles for running agents so they can be stopped on reload.
+// Keyed by runtime key (see runtimeKeyFor) — distinct per process instance, so
+// shared-name instance groups (CROSSTALK.md Instance groups) don't collide.
 const agentHandles = new Map<string, ReturnType<typeof setInterval>>();
+
+// Process-local key for state tracking. Equals agent.name when the name is
+// unique. For shared names, appends `#<index>` so each instance has its own
+// cursor + handle. Transport-facing identity (from:, to:, git author) still
+// uses agent.name — only on-disk runtime state uses this key.
+function runtimeKeyFor(agents: AgentConfig[], target: AgentConfig): string {
+  const sameName = agents.filter(a => a.name === target.name);
+  if (sameName.length <= 1) return target.name;
+  return `${target.name}#${sameName.indexOf(target)}`;
+}
 
 async function resolveConfig(): Promise<{ config: RuntimeConfig; configPath: string | null }> {
   const argv = process.argv;
@@ -88,64 +100,29 @@ async function resolveGitIdentity(
   }
 }
 
-// Resolve pool membership: explicit config.pool → actor file metadata.pool → undefined.
-// See CROSSTALK.md Pools — operator config takes precedence over transport-side declaration.
-async function resolveAgentPool(
-  transportPath: string,
-  agent: AgentConfig,
-): Promise<string | undefined> {
-  if (agent.pool) return agent.pool;
-  const candidatePath = agent.systemPromptFile
-    ? join(transportPath, agent.systemPromptFile)
-    : join(transportPath, 'manifest', 'custom', 'actors', `${agent.name}.md`);
-  try {
-    const raw = await readFile(candidatePath, 'utf-8');
-    const { data } = parseFrontmatter(raw);
-    const meta = data.metadata as Record<string, string> | undefined;
-    return meta?.pool ? String(meta.pool) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-// Build the pool roster (this operator's view) — sorted ascending. Used for
-// hash-based claim selection. Empty if the agent is not in a pool.
-async function buildPoolRoster(
-  transportPath: string,
-  config: RuntimeConfig,
-  agentPool: string | undefined,
-): Promise<string[]> {
-  if (!agentPool) return [];
-  const roster: string[] = [];
-  for (const a of config.agents) {
-    const pool = await resolveAgentPool(transportPath, a);
-    if (pool === agentPool) roster.push(a.name);
-  }
-  return roster.sort();
-}
-
 async function tickChannel(opts: {
   config: RuntimeConfig;
   agent: AgentConfig;
+  runtimeKey: string;
   channelGuid: string;
   transportPath: string;
   systemPrompt: string | undefined;
   gitIdentity: { name: string; email: string };
-  agentPool: string | undefined;
-  poolRoster: string[];
+  instanceIndex: number;
+  groupSize: number;
 }): Promise<void> {
-  const { config, agent, channelGuid, transportPath, systemPrompt, gitIdentity, agentPool, poolRoster } = opts;
+  const { config, agent, runtimeKey, channelGuid, transportPath, systemPrompt, gitIdentity, instanceIndex, groupSize } = opts;
   const channelDir = join(transportPath, config.channelsDir, channelGuid);
   const allRelPaths = await listMessages(channelDir);
 
   // First time this agent sees this channel — initialize cursor to tip, skip history.
-  if (!await cursorExists(transportPath, agent.name, channelGuid)) {
+  if (!await cursorExists(transportPath, runtimeKey, channelGuid)) {
     const tip = currentTip(allRelPaths);
-    if (tip) await writeCursor(transportPath, agent.name, channelGuid, tip);
+    if (tip) await writeCursor(transportPath, runtimeKey, channelGuid, tip);
     return;
   }
 
-  const cursor = await readCursor(transportPath, agent.name, channelGuid);
+  const cursor = await readCursor(transportPath, runtimeKey, channelGuid);
   const unread = messagesAfterCursor(allRelPaths, cursor);
 
   if (unread.length === 0) return;
@@ -158,13 +135,13 @@ async function tickChannel(opts: {
     unreadRelPaths: unread,
     agent,
     systemPrompt,
-    agentPool,
-    poolRoster,
+    instanceIndex,
+    groupSize,
   });
 
   if (stagedFiles.length === 0) {
     const advance = lastProcessed ?? unread[unread.length - 1];
-    await writeCursor(transportPath, agent.name, channelGuid, advance);
+    await writeCursor(transportPath, runtimeKey, channelGuid, advance);
     return;
   }
 
@@ -187,7 +164,7 @@ async function tickChannel(opts: {
       });
 
   if (ok && lastProcessed) {
-    await writeCursor(transportPath, agent.name, channelGuid, lastProcessed);
+    await writeCursor(transportPath, runtimeKey, channelGuid, lastProcessed);
   } else if (!ok) {
     console.error(`[${agent.name}] push failed after retries — will retry next tick`);
   }
@@ -196,21 +173,22 @@ async function tickChannel(opts: {
 async function tick(
   config: RuntimeConfig,
   agent: AgentConfig,
+  runtimeKey: string,
   channels: string[],
   systemPrompt: string | undefined,
   gitIdentity: { name: string; email: string },
-  agentPool: string | undefined,
-  poolRoster: string[],
+  instanceIndex: number,
+  groupSize: number,
 ): Promise<void> {
   const transportPath = resolve(config.transport);
   try {
     await pull(transportPath);
   } catch {
-    console.error(`[${agent.name}] git pull failed — skipping tick`);
+    console.error(`[${runtimeKey}] git pull failed — skipping tick`);
     return;
   }
   for (const channelGuid of channels) {
-    await tickChannel({ config, agent, channelGuid, transportPath, systemPrompt, gitIdentity, agentPool, poolRoster });
+    await tickChannel({ config, agent, runtimeKey, channelGuid, transportPath, systemPrompt, gitIdentity, instanceIndex, groupSize });
   }
 }
 
@@ -227,8 +205,13 @@ async function startAgent(config: RuntimeConfig, agent: AgentConfig): Promise<vo
   const transportPath = resolve(config.transport);
   const systemPrompt = await resolveSystemPrompt(transportPath, agent);
   const gitIdentity = await resolveGitIdentity(transportPath, agent);
-  const agentPool = await resolveAgentPool(transportPath, agent);
-  const poolRoster = await buildPoolRoster(transportPath, config, agentPool);
+
+  // Instance group: agents in this config that share our name. Position via
+  // reference equality is stable because each AgentConfig is a distinct object.
+  const sameName = config.agents.filter(a => a.name === agent.name);
+  const instanceIndex = sameName.indexOf(agent);
+  const groupSize = sameName.length;
+  const runtimeKey = runtimeKeyFor(config.agents, agent);
 
   const allChannels = await discoverChannels(transportPath, config.channelsDir);
   const channels = agent.channels?.length
@@ -236,7 +219,7 @@ async function startAgent(config: RuntimeConfig, agent: AgentConfig): Promise<vo
     : allChannels;
 
   if (channels.length === 0) {
-    console.warn(`[${agent.name}] no channels found in ${join(transportPath, config.channelsDir)} — waiting`);
+    console.warn(`[${runtimeKey}] no channels found in ${join(transportPath, config.channelsDir)} — waiting`);
   }
 
   if (config.tokn && !agentHandles.size) {
@@ -244,30 +227,30 @@ async function startAgent(config: RuntimeConfig, agent: AgentConfig): Promise<vo
   }
 
   const interval = agent.interval ?? config.interval;
-  const poolInfo = agentPool ? ` pool=${agentPool}(${poolRoster.length})` : '';
-  console.log(`[${agent.name}] starting — channels=${channels.length} interval=${interval}s git="${gitIdentity.name}"${poolInfo}`);
+  const groupInfo = groupSize > 1 ? ` instance=${instanceIndex + 1}/${groupSize}` : '';
+  console.log(`[${runtimeKey}] starting — channels=${channels.length} interval=${interval}s git="${gitIdentity.name}"${groupInfo}`);
 
-  const run = () => tick(config, agent, channels, systemPrompt, gitIdentity, agentPool, poolRoster).catch(err => {
-    console.error(`[${agent.name}] tick error:`, err);
+  const run = () => tick(config, agent, runtimeKey, channels, systemPrompt, gitIdentity, instanceIndex, groupSize).catch(err => {
+    console.error(`[${runtimeKey}] tick error:`, err);
   });
 
   await run();
-  agentHandles.set(agent.name, setInterval(run, interval * 1000));
+  agentHandles.set(runtimeKey, setInterval(run, interval * 1000));
 }
 
 async function applyConfig(config: RuntimeConfig): Promise<void> {
-  const incoming = new Map(config.agents.map(a => [a.name, a]));
+  const incomingKeys = new Set(config.agents.map(a => runtimeKeyFor(config.agents, a)));
   const running = new Set(agentHandles.keys());
 
   // Stop agents that were removed or changed
-  for (const name of running) {
-    if (!incoming.has(name)) {
-      stopAgent(name);
+  for (const key of running) {
+    if (!incomingKeys.has(key)) {
+      stopAgent(key);
     }
   }
 
   // Start agents that are new
-  const toStart = config.agents.filter(a => !agentHandles.has(a.name));
+  const toStart = config.agents.filter(a => !agentHandles.has(runtimeKeyFor(config.agents, a)));
   await Promise.all(toStart.map(agent => startAgent(config, agent)));
 }
 

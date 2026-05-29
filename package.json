@@ -1,6 +1,6 @@
 {
   "name": "@cordfuse/crosstalk-runtime",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Crosstalk runtime — lean scheduler that dispatches agent CLIs on a shared git transport",
   "type": "module",
   "main": "dist/runner.js",
