@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { resolve, join } from 'path';
-import { readFile, access } from 'fs/promises';
+import { readFile, access, watch } from 'fs/promises';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
 const { version } = _require('../package.json') as { version: string };
@@ -30,14 +30,22 @@ Options:
   --help                  Show this message
 `.trim();
 
-async function resolveConfig(): Promise<RuntimeConfig> {
+// Tracks interval handles for running agents so they can be stopped on reload
+const agentHandles = new Map<string, ReturnType<typeof setInterval>>();
+
+async function resolveConfig(): Promise<{ config: RuntimeConfig; configPath: string | null }> {
   const argv = process.argv;
   if (argv.includes('--help')) { console.log(HELP); process.exit(0); }
   const configIdx = argv.indexOf('--config');
-  if (configIdx !== -1) return loadConfig(argv[configIdx + 1]);
-  if (argv.includes('--transport')) return configFromFlags(argv);
-  // Fall back to config.yaml in cwd if it exists
-  try { await access('config.yaml'); return loadConfig('config.yaml'); } catch {}
+  if (configIdx !== -1) {
+    const configPath = argv[configIdx + 1];
+    return { config: await loadConfig(configPath), configPath: resolve(configPath) };
+  }
+  if (argv.includes('--transport')) return { config: configFromFlags(argv), configPath: null };
+  try {
+    await access('config.yaml');
+    return { config: await loadConfig('config.yaml'), configPath: resolve('config.yaml') };
+  } catch {}
   console.error('error: provide --config <path>, --transport <path> --agent "name:cli", or a config.yaml in the current directory\n\n' + HELP);
   process.exit(1);
 }
@@ -152,12 +160,20 @@ async function tick(
   }
 }
 
+function stopAgent(name: string): void {
+  const handle = agentHandles.get(name);
+  if (handle) {
+    clearInterval(handle);
+    agentHandles.delete(name);
+    console.log(`[${name}] stopped`);
+  }
+}
+
 async function startAgent(config: RuntimeConfig, agent: AgentConfig): Promise<void> {
   const transportPath = resolve(config.transport);
   const systemPrompt = await resolveSystemPrompt(transportPath, agent);
   const gitIdentity = await resolveGitIdentity(transportPath, agent);
 
-  // Resolve channel list: explicit override or discover all channels in transport
   const allChannels = await discoverChannels(transportPath, config.channelsDir);
   const channels = agent.channels?.length
     ? agent.channels.filter(g => allChannels.includes(g))
@@ -167,9 +183,8 @@ async function startAgent(config: RuntimeConfig, agent: AgentConfig): Promise<vo
     console.warn(`[${agent.name}] no channels found in ${join(transportPath, config.channelsDir)} — waiting`);
   }
 
-  if (config.tokn) {
+  if (config.tokn && !agentHandles.size) {
     await ensureChannel(config.tokn);
-    console.log(`[${agent.name}] tokn channel ready: ${config.tokn.channel}`);
   }
 
   const interval = agent.interval ?? config.interval;
@@ -180,7 +195,44 @@ async function startAgent(config: RuntimeConfig, agent: AgentConfig): Promise<vo
   });
 
   await run();
-  setInterval(run, interval * 1000);
+  agentHandles.set(agent.name, setInterval(run, interval * 1000));
+}
+
+async function applyConfig(config: RuntimeConfig): Promise<void> {
+  const incoming = new Map(config.agents.map(a => [a.name, a]));
+  const running = new Set(agentHandles.keys());
+
+  // Stop agents that were removed or changed
+  for (const name of running) {
+    if (!incoming.has(name)) {
+      stopAgent(name);
+    }
+  }
+
+  // Start agents that are new
+  const toStart = config.agents.filter(a => !agentHandles.has(a.name));
+  await Promise.all(toStart.map(agent => startAgent(config, agent)));
+}
+
+async function watchConfig(configPath: string, getCurrentConfig: () => RuntimeConfig): Promise<void> {
+  let debounce: ReturnType<typeof setTimeout> | null = null;
+  try {
+    const watcher = watch(configPath);
+    for await (const _ of watcher) {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(async () => {
+        try {
+          const next = await loadConfig(configPath);
+          console.log(`config reloaded — agents=${next.agents.length}`);
+          await applyConfig(next);
+        } catch (err) {
+          console.error('config reload failed:', err);
+        }
+      }, 500);
+    }
+  } catch {
+    // watch not available or file removed — silently stop watching
+  }
 }
 
 async function main(): Promise<void> {
@@ -192,9 +244,10 @@ async function main(): Promise<void> {
     console.log(version);
     return;
   }
-  const config = await resolveConfig();
+  const { config, configPath } = await resolveConfig();
   console.log(`crosstalk runtime v2 — transport=${config.transport} agents=${config.agents.length}`);
-  await Promise.all(config.agents.map(agent => startAgent(config, agent)));
+  await applyConfig(config);
+  if (configPath) watchConfig(configPath, () => config);
 }
 
 main().catch(err => {
