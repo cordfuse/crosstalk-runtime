@@ -160,7 +160,11 @@ export async function dispatchTick(opts: {
       continue;
     }
 
-    if (!reply) { lastProcessed = relPath; continue; }
+    if (!reply) {
+      console.warn(`[${agent.name}] empty reply for ${relPath} — advancing cursor without filing reply`);
+      lastProcessed = relPath;
+      continue;
+    }
 
     // Write reply
     const replyNow = new Date();
