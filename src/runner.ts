@@ -7,8 +7,8 @@ const _require = createRequire(import.meta.url);
 const { version } = _require('../package.json') as { version: string };
 import { loadConfig, configFromFlags, findHostFile, expandHostFile, type AgentConfig, type RuntimeConfig } from './config.js';
 import { readCursor, writeCursor, cursorExists, listMessages, messagesAfterCursor, currentTip, discoverChannels } from './cursor.js';
-import { pull, commitAndPush, commitAndPushWithTokn } from './git.js';
-import { ensureChannel } from './tokn.js';
+import { pull, commitAndPush, commitAndPushWithTurnq } from './git.js';
+import { ensureChannel } from './turnq.js';
 import { dispatchTick } from './dispatch.js';
 import { parseFrontmatter } from './frontmatter.js';
 import { runInit } from './init.js';
@@ -23,8 +23,8 @@ Options:
   --config <path>         Load config from YAML file (default: config.yaml)
   --transport <path>      Path to transport repo (flag mode — no YAML needed)
   --agent "name:cli"      Agent definition; repeat for multiple agents
-  --tokn-url <url>        tokn server URL for push serialization
-  --tokn-channel <name>   tokn channel name (default: crosstalk:push)
+  --turnq-url <url>        turnq server URL for push serialization
+  --turnq-channel <name>   turnq channel name (default: crosstalk:push)
   --interval <seconds>    Tick interval per agent (default: 60)
   --jitter <ms>           Max jitter ms for fallback push (default: 5000)
   --channels-dir <path>   Channels dir relative to transport (default: data/channels)
@@ -151,13 +151,13 @@ async function tickChannel(opts: {
 
   const now = new Date();
   const label = `${now.toISOString().slice(0, 16).replace('T', ' ')}Z`;
-  const ok = config.tokn
-    ? await commitAndPushWithTokn({
+  const ok = config.turnq
+    ? await commitAndPushWithTurnq({
         transportPath,
         files: stagedFiles,
         message: `crosstalk: ${agent.name} ${label}`,
         identity: gitIdentity,
-        tokn: config.tokn,
+        turnq: config.turnq,
       })
     : await commitAndPush({
         transportPath,
@@ -226,8 +226,8 @@ async function startAgent(config: RuntimeConfig, agent: AgentConfig): Promise<vo
     console.warn(`[${runtimeKey}] no channels found in ${join(transportPath, config.channelsDir)} — waiting`);
   }
 
-  if (config.tokn && !agentHandles.size) {
-    await ensureChannel(config.tokn);
+  if (config.turnq && !agentHandles.size) {
+    await ensureChannel(config.turnq);
   }
 
   const interval = agent.interval ?? config.interval;

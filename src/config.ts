@@ -3,9 +3,9 @@ import { join } from 'path';
 import { hostname as osHostname } from 'os';
 import { parse as parseYaml } from 'yaml';
 import { parseFrontmatter } from './frontmatter.js';
-import type { ToknConfig } from './tokn.js';
+import type { TurnqConfig } from './turnq.js';
 
-export type { ToknConfig };
+export type { TurnqConfig };
 
 export interface AgentConfig {
   name: string;
@@ -24,8 +24,8 @@ export interface RuntimeConfig {
   transport: string;      // path to transport repo (absolute or relative to config file)
   channelsDir: string;    // channels dir relative to transport; default: data/channels
   interval: number;       // default tick interval seconds; default: 60
-  jitter: number;         // max ms sleep before push; default: 5000 (ignored when tokn is set)
-  tokn?: ToknConfig;      // if set, use tokn for push serialization instead of jitter
+  jitter: number;         // max ms sleep before push; default: 5000 (ignored when turnq is set)
+  turnq?: TurnqConfig;      // if set, use turnq for push serialization instead of jitter
   agents: AgentConfig[];  // expanded from host file or declared directly
   hostAlias?: string;     // resolved alias from manifest/hosts/<alias>.md; undefined in flag/legacy mode
 }
@@ -102,8 +102,8 @@ export function findHostFile(transportPath: string, hostOverride?: string): Host
 // ── Config loading ────────────────────────────────────────────────────────────
 
 // Build config entirely from CLI flags — no YAML file required.
-// Usage: --transport <path> --agent "name:cli" [--agent ...] [--tokn-url <url>]
-//        [--tokn-channel <ch>] [--interval <s>] [--jitter <ms>]
+// Usage: --transport <path> --agent "name:cli" [--agent ...] [--turnq-url <url>]
+//        [--turnq-channel <ch>] [--interval <s>] [--jitter <ms>]
 export function configFromFlags(argv: string[]): RuntimeConfig {
   const get    = (flag: string) => { const i = argv.indexOf(flag); return i === -1 ? undefined : argv[i + 1]; };
   const getAll = (flag: string) => argv.reduce<string[]>((acc, v, i, a) => {
@@ -123,9 +123,9 @@ export function configFromFlags(argv: string[]): RuntimeConfig {
     return { name: flag.slice(0, colon).trim(), cli: flag.slice(colon + 1).trim() };
   });
 
-  const toknUrl = get('--tokn-url');
-  const tokn: ToknConfig | undefined = toknUrl
-    ? { url: toknUrl, channel: get('--tokn-channel') ?? 'crosstalk:push', apiKey: process.env.TOKN_API_KEY ?? '' }
+  const turnqUrl = get('--turnq-url');
+  const turnq: TurnqConfig | undefined = turnqUrl
+    ? { url: turnqUrl, channel: get('--turnq-channel') ?? 'crosstalk:push', apiKey: process.env.TURNQ_API_KEY ?? '' }
     : undefined;
 
   return {
@@ -133,7 +133,7 @@ export function configFromFlags(argv: string[]): RuntimeConfig {
     channelsDir: get('--channels-dir') ?? 'data/channels',
     interval:    Number(get('--interval')    ?? 60),
     jitter:      Number(get('--jitter')      ?? 5000),
-    tokn,
+    turnq,
     agents,
   };
 }
@@ -144,9 +144,9 @@ export function loadConfig(path: string): RuntimeConfig {
 
   if (!data.transport) throw new Error('config: transport is required');
 
-  const toknYaml = data.tokn as { url?: string; channel?: string } | undefined;
-  const tokn: ToknConfig | undefined = toknYaml?.url
-    ? { url: toknYaml.url, channel: toknYaml.channel ?? 'crosstalk:push', apiKey: process.env.TOKN_API_KEY ?? '' }
+  const turnqYaml = data.turnq as { url?: string; channel?: string } | undefined;
+  const turnq: TurnqConfig | undefined = turnqYaml?.url
+    ? { url: turnqYaml?.url, channel: turnqYaml.channel ?? 'crosstalk:push', apiKey: process.env.TURNQ_API_KEY ?? '' }
     : undefined;
 
   const base: Omit<RuntimeConfig, 'agents'> = {
@@ -154,7 +154,7 @@ export function loadConfig(path: string): RuntimeConfig {
     channelsDir: String(data.channelsDir ?? 'data/channels'),
     interval:    Number(data.interval ?? 60),
     jitter:      Number(data.jitter ?? 5000),
-    tokn,
+    turnq,
     hostAlias:   data.host ? String(data.host) : undefined,
   };
 

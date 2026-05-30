@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { withTokn, type ToknConfig } from './tokn.js';
+import { withTurnq, type TurnqConfig } from './turnq.js';
 
 interface GitResult {
   code: number;
@@ -31,15 +31,15 @@ export async function pull(transportPath: string): Promise<void> {
 // Serializes pull + commit + push through a tokn channel.
 // Holds the token only for the critical section — pull/commit/push.
 // Returns true on success or no-op, throws on push failure.
-export async function commitAndPushWithTokn(opts: {
+export async function commitAndPushWithTurnq(opts: {
   transportPath: string;
   files: string[];
   message: string;
   identity: { name: string; email: string };
-  tokn: ToknConfig;
+  turnq: TurnqConfig;
 }): Promise<boolean> {
-  const { transportPath, files, message, identity, tokn } = opts;
-  return withTokn(tokn, async () => {
+  const { transportPath, files, message, identity, turnq } = opts;
+  return withTurnq(turnq, async () => {
     await git(transportPath, ['pull', '--rebase', 'origin', 'main']);
     await git(transportPath, ['add', '--', ...files]);
     const { code: commitCode } = await git(transportPath, [
