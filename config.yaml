@@ -12,7 +12,6 @@ agents:
     systemPromptFile: manifest/custom/actors/concierge.md
     channel: test-actor-import-1779805897
     interval: 30
-    spawnCwd: /tmp
     git:
       name: Cass (Concierge)
       email: concierge@crosstalk.local
@@ -22,7 +21,6 @@ agents:
     systemPromptFile: manifest/custom/actors/engineer.md
     channel: test-actor-import-1779805897
     interval: 30
-    spawnCwd: /tmp
     git:
       name: Cole (Engineer)
       email: engineer@crosstalk.local
