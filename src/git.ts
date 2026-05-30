@@ -28,7 +28,7 @@ export async function pull(transportPath: string): Promise<void> {
   await git(transportPath, ['pull', '--rebase', 'origin', 'main']);
 }
 
-// Serializes pull + commit + push through a tokn channel.
+// Serializes pull + commit + push through a turnq channel.
 // Holds the token only for the critical section — pull/commit/push.
 // Returns true on success or no-op, throws on push failure.
 export async function commitAndPushWithTurnq(opts: {
