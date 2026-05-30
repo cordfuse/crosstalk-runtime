@@ -24,8 +24,7 @@ export interface RuntimeConfig {
   transport: string;      // path to transport repo (absolute or relative to config file)
   channelsDir: string;    // channels dir relative to transport; default: data/channels
   interval: number;       // default tick interval seconds; default: 60
-  jitter: number;         // max ms sleep before push; default: 5000 (ignored when turnq is set)
-  turnq?: TurnqConfig;      // if set, use turnq for push serialization instead of jitter
+  turnq?: TurnqConfig;    // distributed coordinator URL; omit to use local file lock
   agents: AgentConfig[];  // expanded from host file or declared directly
   hostAlias?: string;     // resolved alias from manifest/hosts/<alias>.md; undefined in flag/legacy mode
 }
@@ -131,8 +130,7 @@ export function configFromFlags(argv: string[]): RuntimeConfig {
   return {
     transport,
     channelsDir: get('--channels-dir') ?? 'data/channels',
-    interval:    Number(get('--interval')    ?? 60),
-    jitter:      Number(get('--jitter')      ?? 5000),
+    interval:    Number(get('--interval') ?? 60),
     turnq,
     agents,
   };
@@ -153,7 +151,6 @@ export function loadConfig(path: string): RuntimeConfig {
     transport:   String(data.transport),
     channelsDir: String(data.channelsDir ?? 'data/channels'),
     interval:    Number(data.interval ?? 60),
-    jitter:      Number(data.jitter ?? 5000),
     turnq,
     hostAlias:   data.host ? String(data.host) : undefined,
   };

@@ -7,7 +7,7 @@ const _require = createRequire(import.meta.url);
 const { version } = _require('../package.json') as { version: string };
 import { loadConfig, configFromFlags, findHostFile, expandHostFile, type AgentConfig, type RuntimeConfig } from './config.js';
 import { readCursor, writeCursor, cursorExists, listMessages, messagesAfterCursor, currentTip, discoverChannels } from './cursor.js';
-import { pull, commitAndPush, commitAndPushWithTurnq } from './git.js';
+import { pull, commitAndPush } from './git.js';
 import { ensureChannel } from './turnq.js';
 import { dispatchTick } from './dispatch.js';
 import { parseFrontmatter } from './frontmatter.js';
@@ -23,10 +23,9 @@ Options:
   --config <path>         Load config from YAML file (default: config.yaml)
   --transport <path>      Path to transport repo (flag mode — no YAML needed)
   --agent "name:cli"      Agent definition; repeat for multiple agents
-  --turnq-url <url>        turnq server URL for push serialization
+  --turnq-url <url>        turnq server URL for distributed push serialization
   --turnq-channel <name>   turnq channel name (default: crosstalk:push)
   --interval <seconds>    Tick interval per agent (default: 60)
-  --jitter <ms>           Max jitter ms for fallback push (default: 5000)
   --channels-dir <path>   Channels dir relative to transport (default: data/channels)
   --help                  Show this message
 `.trim();
@@ -151,21 +150,13 @@ async function tickChannel(opts: {
 
   const now = new Date();
   const label = `${now.toISOString().slice(0, 16).replace('T', ' ')}Z`;
-  const ok = config.turnq
-    ? await commitAndPushWithTurnq({
-        transportPath,
-        files: stagedFiles,
-        message: `crosstalk: ${agent.name} ${label}`,
-        identity: gitIdentity,
-        turnq: config.turnq,
-      })
-    : await commitAndPush({
-        transportPath,
-        files: stagedFiles,
-        message: `crosstalk: ${agent.name} ${label}`,
-        identity: gitIdentity,
-        jitterMs: config.jitter,
-      });
+  const ok = await commitAndPush({
+    transportPath,
+    files: stagedFiles,
+    message: `crosstalk: ${agent.name} ${label}`,
+    identity: gitIdentity,
+    turnq: config.turnq,
+  });
 
   if (ok && lastProcessed) {
     await writeCursor(transportPath, runtimeKey, channelGuid, lastProcessed);
@@ -226,7 +217,7 @@ async function startAgent(config: RuntimeConfig, agent: AgentConfig): Promise<vo
     console.warn(`[${runtimeKey}] no channels found in ${join(transportPath, config.channelsDir)} — waiting`);
   }
 
-  if (config.turnq && !agentHandles.size) {
+  if (!agentHandles.size) {
     await ensureChannel(config.turnq);
   }
 
