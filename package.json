@@ -24,6 +24,7 @@
     "LICENSE"
   ],
   "dependencies": {
+    "@cordfuse/tokn": "file:../tokn",
     "yaml": "^2.7.0"
   },
   "devDependencies": {
