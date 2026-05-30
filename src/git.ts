@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { withTurnq, type TurnqConfig } from './turnq.js';
+import { createCoordinator, type Coordinator, type CoordinatorOptions } from '@cordfuse/turnq/coordinator';
 
 interface GitResult {
   code: number;
@@ -24,17 +24,34 @@ export async function pull(transportPath: string): Promise<void> {
   await git(transportPath, ['pull', '--rebase', 'origin', 'main']);
 }
 
-// Serializes pull + commit + push through a turnq channel (local or distributed).
-// Returns true on success or no-op, throws on push failure.
+let _coordinator: Coordinator | null = null;
+let _channel = 'crosstalk:push';
+
+export async function initCoordinator(opts?: CoordinatorOptions & { channel?: string }): Promise<void> {
+  _channel = opts?.channel ?? 'crosstalk:push';
+  const c = await createCoordinator(opts);
+  await c.createChannel(_channel, { leaseMs: 120_000 });
+  _coordinator = c;
+}
+
+async function getCoordinator(): Promise<Coordinator> {
+  if (!_coordinator) {
+    const c = await createCoordinator();
+    await c.createChannel(_channel, { leaseMs: 120_000 });
+    _coordinator = c;
+  }
+  return _coordinator;
+}
+
 export async function commitAndPush(opts: {
   transportPath: string;
   files: string[];
   message: string;
   identity: { name: string; email: string };
-  turnq?: TurnqConfig;
 }): Promise<boolean> {
-  const { transportPath, files, message, identity, turnq } = opts;
-  return withTurnq(turnq, async () => {
+  const { transportPath, files, message, identity } = opts;
+  const c = await getCoordinator();
+  return c.withTurn(_channel, async () => {
     await git(transportPath, ['pull', '--rebase', 'origin', 'main']);
     await git(transportPath, ['add', '--', ...files]);
     const { code: commitCode } = await git(transportPath, [
@@ -42,7 +59,7 @@ export async function commitAndPush(opts: {
       '-c', `user.email=${identity.email}`,
       'commit', '-m', message,
     ]);
-    if (commitCode !== 0) return true; // nothing to commit
+    if (commitCode !== 0) return true;
     const { code, stderr } = await git(transportPath, ['push', 'origin', 'main']);
     if (code !== 0) throw new Error(`git push failed: ${stderr}`);
     return true;

@@ -7,8 +7,7 @@ const _require = createRequire(import.meta.url);
 const { version } = _require('../package.json') as { version: string };
 import { loadConfig, configFromFlags, findHostFile, expandHostFile, type AgentConfig, type RuntimeConfig } from './config.js';
 import { readCursor, writeCursor, cursorExists, listMessages, messagesAfterCursor, currentTip, discoverChannels } from './cursor.js';
-import { pull, commitAndPush } from './git.js';
-import { ensureChannel } from './turnq.js';
+import { pull, commitAndPush, initCoordinator } from './git.js';
 import { dispatchTick } from './dispatch.js';
 import { parseFrontmatter } from './frontmatter.js';
 import { runInit } from './init.js';
@@ -155,7 +154,6 @@ async function tickChannel(opts: {
     files: stagedFiles,
     message: `crosstalk: ${agent.name} ${label}`,
     identity: gitIdentity,
-    turnq: config.turnq,
   });
 
   if (ok && lastProcessed) {
@@ -218,7 +216,9 @@ async function startAgent(config: RuntimeConfig, agent: AgentConfig): Promise<vo
   }
 
   if (!agentHandles.size) {
-    await ensureChannel(config.turnq);
+    await initCoordinator(config.turnq
+      ? { url: config.turnq.url, apiKey: config.turnq.apiKey, channel: config.turnq.channel }
+      : undefined);
   }
 
   const interval = agent.interval ?? config.interval;

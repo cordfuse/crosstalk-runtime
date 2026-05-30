@@ -3,9 +3,12 @@ import { join } from 'path';
 import { hostname as osHostname } from 'os';
 import { parse as parseYaml } from 'yaml';
 import { parseFrontmatter } from './frontmatter.js';
-import type { TurnqConfig } from './turnq.js';
 
-export type { TurnqConfig };
+export interface TurnqConfig {
+  url: string;
+  channel: string;
+  apiKey: string;
+}
 
 export interface AgentConfig {
   name: string;
