@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile.runtime
     restart: unless-stopped
     environment:
-      - TOKN_API_KEY=${TOKN_API_KEY}
+      - TURNQ_API_KEY=${TURNQ_API_KEY}
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ${TRANSPORT_PATH}:/transport:rw
