@@ -3,6 +3,7 @@ import { join } from 'path';
 import { hostname as osHostname, userInfo } from 'os';
 import { parse as parseYaml } from 'yaml';
 import { parseFrontmatter } from './frontmatter.js';
+import { detectPlatform } from './platform.js';
 
 export interface TurnqConfig {
   url: string;
@@ -24,12 +25,13 @@ export interface AgentConfig {
 }
 
 export interface RuntimeConfig {
-  transport: string;      // path to transport repo (absolute or relative to config file)
-  channelsDir: string;    // channels dir relative to transport; default: data/channels
-  interval: number;       // default tick interval seconds; default: 60
-  turnq?: TurnqConfig;    // distributed coordinator URL; omit to use local file lock
-  agents: AgentConfig[];  // expanded from host file or declared directly
-  hostAlias?: string;     // resolved alias from manifest/hosts/<alias>.md; undefined in flag/legacy mode
+  transport: string;       // primary transport path (kept for backwards compat)
+  transports: string[];    // all transport paths — v3 system daemon may watch several
+  channelsDir: string;     // channels dir relative to transport; default: data/channels
+  interval: number;        // default tick interval seconds; default: 60
+  turnq?: TurnqConfig;     // distributed coordinator URL; omit to use local file lock
+  agents: AgentConfig[];   // expanded from host file or declared directly
+  hostAlias?: string;      // resolved alias from manifest/hosts/<alias>.md; undefined in flag/legacy mode
 }
 
 // ── Host file types ───────────────────────────────────────────────────────────
@@ -150,6 +152,7 @@ export function configFromFlags(argv: string[]): RuntimeConfig {
 
   return {
     transport,
+    transports: [transport],
     channelsDir: get('--channels-dir') ?? 'data/channels',
     interval:    Number(get('--interval') ?? 60),
     turnq,
@@ -161,7 +164,14 @@ export function loadConfig(path: string): RuntimeConfig {
   const raw  = readFileSync(path, 'utf-8');
   const data = parseYaml(raw) as Record<string, unknown>;
 
-  if (!data.transport) throw new Error('config: transport is required');
+  // Resolve transport list — support both singular transport: and plural transports:
+  const transportsSingle: string[] = data.transport ? [String(data.transport)] : [];
+  const transportsArray: string[]  = Array.isArray(data.transports)
+    ? (data.transports as unknown[]).map(String)
+    : [];
+  const transports = transportsArray.length > 0 ? transportsArray : transportsSingle;
+
+  if (transports.length === 0) throw new Error('config: transport or transports is required');
 
   const turnqYaml = data.turnq as { url?: string; channel?: string } | undefined;
   const turnq: TurnqConfig | undefined = turnqYaml?.url
@@ -169,7 +179,8 @@ export function loadConfig(path: string): RuntimeConfig {
     : undefined;
 
   const base: Omit<RuntimeConfig, 'agents'> = {
-    transport:   String(data.transport),
+    transport:   transports[0],
+    transports,
     channelsDir: String(data.channelsDir ?? 'data/channels'),
     interval:    Number(data.interval ?? 60),
     turnq,
@@ -186,7 +197,14 @@ export function loadConfig(path: string): RuntimeConfig {
     return { ...base, agents: agents as AgentConfig[] };
   }
 
-  // Host file path: agents derived at runtime startup (transport path needed first).
-  // Return empty agents array; runner.ts resolves the host file after resolving transport.
+  // Host file path: agents derived at runtime startup.
   return { ...base, agents: [] };
+}
+
+// Discover the platform config file and load it.
+// Returns null if the platform config doesn't exist yet (not installed).
+export function loadPlatformConfig(): RuntimeConfig | null {
+  const { paths } = detectPlatform();
+  if (!existsSync(paths.configFile)) return null;
+  return loadConfig(paths.configFile);
 }

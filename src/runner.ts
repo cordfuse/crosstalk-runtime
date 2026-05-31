@@ -5,7 +5,8 @@ import { hostname as osHostname } from 'os';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
 const { version } = _require('../package.json') as { version: string };
-import { loadConfig, configFromFlags, findHostFile, expandHostFile, type AgentConfig, type RuntimeConfig, type HostFile } from './config.js';
+import { loadConfig, loadPlatformConfig, configFromFlags, findHostFile, expandHostFile, type AgentConfig, type RuntimeConfig, type HostFile } from './config.js';
+import { runInstall, runUninstall, runAddTransport, runRemoveTransport, runStatus as runStatusCmd } from './install.js';
 import { readCursor, writeCursor, cursorExists, listMessages, messagesAfterCursor, currentTip, discoverChannels } from './cursor.js';
 import { pull, commitAndPush, initCoordinator } from './git.js';
 import { dispatchTick, dispatchSingle } from './dispatch.js';
@@ -15,16 +16,21 @@ import { runInit } from './init.js';
 
 const HELP = `
 Usage:
-  crosstalk init [--transport <path>]
-  crosstalk --config <path>
-  crosstalk-runtime --transport <path> --agent "name:cli" [--agent ...] [options]
+  crosstalk install                          Install as a system daemon (requires sudo/admin)
+  crosstalk uninstall [--purge]              Remove the system daemon (--purge also wipes data)
+  crosstalk add-transport <git-url>          Clone a transport and register it (requires sudo/admin)
+  crosstalk remove-transport <name>          Unregister a transport (requires sudo/admin)
+  crosstalk status                           Show daemon status and registered transports
+  crosstalk init [--transport <path>]        Scaffold a new transport repo
+  crosstalk --config <path>                  Run with a specific config file
+  crosstalk --transport <path> --agent ...   Run in flag mode (no config file)
 
 Options:
-  --config <path>         Load config from YAML file (default: config.yaml)
+  --config <path>         Load config from YAML file (default: platform config or config.yaml in CWD)
   --transport <path>      Path to transport repo (flag mode — no YAML needed)
   --agent "name:cli"      Agent definition; repeat for multiple agents
-  --turnq-url <url>        turnq server URL for distributed push serialization
-  --turnq-channel <name>   turnq channel name (default: crosstalk:push)
+  --turnq-url <url>       turnq server URL for distributed push serialization
+  --turnq-channel <name>  turnq channel name (default: crosstalk:push)
   --interval <seconds>    Tick interval per agent (default: 60)
   --channels-dir <path>   Channels dir relative to transport (default: data/channels)
   --help                  Show this message
@@ -72,13 +78,20 @@ async function resolveConfig(): Promise<{ config: RuntimeConfig; configPath: str
   const configIdx = argv.indexOf('--config');
   if (configIdx !== -1) {
     const configPath = argv[configIdx + 1];
-    return { config: await loadConfig(configPath), configPath: resolve(configPath) };
+    return { config: loadConfig(configPath), configPath: resolve(configPath) };
   }
   if (argv.includes('--transport')) return { config: configFromFlags(argv), configPath: null };
+  // CWD config.yaml
   try {
     await access('config.yaml');
-    return { config: await loadConfig('config.yaml'), configPath: resolve('config.yaml') };
+    return { config: loadConfig('config.yaml'), configPath: resolve('config.yaml') };
   } catch {}
+  // Platform-installed config (/etc/crosstalk/config.yaml or equivalent)
+  const platformConfig = loadPlatformConfig();
+  if (platformConfig) {
+    const { paths } = (await import('./platform.js')).detectPlatform();
+    return { config: platformConfig, configPath: paths.configFile };
+  }
   console.error('error: provide --config <path>, --transport <path> --agent "name:cli", or a config.yaml in the current directory\n\n' + HELP);
   process.exit(1);
 }
@@ -414,37 +427,65 @@ async function watchConfig(configPath: string): Promise<void> {
 
 // ── Entry point ────────────────────────────────────────────────────────────
 
-async function main(): Promise<void> {
-  if (process.argv[2] === 'init') {
-    await runInit(process.argv.slice(3));
+async function runAllTransports(config: RuntimeConfig): Promise<void> {
+  const transports = config.transports.length > 0 ? config.transports : [config.transport];
+
+  if (transports.length === 1) {
+    // Single transport — run inline (original behaviour)
+    const transportPath = resolve(transports[0]);
+    const hostFile = findHostFile(transportPath, config.hostAlias);
+    if (!hostFile) {
+      const attempted = config.hostAlias ?? osHostname();
+      console.error(
+        `[runtime] no host file found for "${attempted}" in ${join(transportPath, 'manifest', 'hosts')}\n` +
+        `[runtime] create manifest/hosts/<alias>.md with hostname: ${osHostname()}, or set host: <alias> in config.yaml`
+      );
+      return;
+    }
+    console.log(`crosstalk runtime v${version} — transport=${transports[0]} host=${hostFile.alias}`);
+    await runCoordinator({ ...config, transport: transports[0] }, hostFile);
     return;
   }
+
+  // Multiple transports — run one coordinator per transport concurrently
+  console.log(`crosstalk runtime v${version} — ${transports.length} transports`);
+  const coordinators = transports.map(async (transportPath) => {
+    const resolved   = resolve(transportPath);
+    const hostFile   = findHostFile(resolved, config.hostAlias);
+    if (!hostFile) {
+      console.warn(`[runtime] no host file for ${transportPath} — skipping`);
+      return;
+    }
+    console.log(`[runtime] starting coordinator for ${transportPath} host=${hostFile.alias}`);
+    await runCoordinator({ ...config, transport: transportPath, transports: [transportPath] }, hostFile);
+  });
+  await Promise.all(coordinators);
+}
+
+async function main(): Promise<void> {
+  const sub = process.argv[2];
+
+  if (sub === 'install')          { await runInstall(process.argv.slice(3)); return; }
+  if (sub === 'uninstall')        { await runUninstall(process.argv.slice(3)); return; }
+  if (sub === 'add-transport')    { await runAddTransport(process.argv.slice(3)); return; }
+  if (sub === 'remove-transport') { await runRemoveTransport(process.argv.slice(3)); return; }
+  if (sub === 'status')           { await runStatusCmd(); return; }
+  if (sub === 'init')             { await runInit(process.argv.slice(3)); return; }
+
   if (process.argv.includes('--version') || process.argv.includes('-v')) {
     console.log(version);
     return;
   }
 
   const { config, configPath } = await resolveConfig();
-  const transportPath = resolve(config.transport);
 
-  // v3 path: no agents list → resolve host file → run coordinator
+  // v3 host-file path
   if (config.agents.length === 0) {
-    const hostFile = findHostFile(transportPath, config.hostAlias);
-    if (!hostFile) {
-      const attempted = config.hostAlias ?? osHostname();
-      console.error(
-        `[runtime] no host file found for "${attempted}" in ${join(transportPath, 'manifest', 'hosts')}\n` +
-        `[runtime] create manifest/hosts/<alias>.md with hostname: ${osHostname()}, or set host: <alias> in config.yaml\n` +
-        `[runtime] idling — no agents will dispatch until a host file is found`
-      );
-      return;
-    }
-    console.log(`crosstalk runtime v${version} — transport=${config.transport} host=${hostFile.alias} [v3]`);
-    await runCoordinator(config, hostFile);
+    await runAllTransports(config);
     return;
   }
 
-  // v2 legacy path: explicit agents list
+  // v2 legacy path: explicit agents list in config
   console.log(`crosstalk runtime v${version} — transport=${config.transport} agents=${config.agents.length} [v2 legacy]`);
   await applyConfig(config);
   if (configPath) watchConfig(configPath);
