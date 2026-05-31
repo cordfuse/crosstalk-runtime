@@ -219,7 +219,7 @@ async function runCoordinator(config: RuntimeConfig, hostFile: HostFile): Promis
               await writeCursor(transportPath, job.actor, job.channelGuid, job.messageRelPath);
             }
           } finally {
-            queue.complete(job.actor);
+            queue.complete(job);
           }
         })();
 

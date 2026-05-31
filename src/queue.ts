@@ -10,22 +10,26 @@ export interface Job {
   messageRelPath: string;
 }
 
+function jobKey(job: Job): string {
+  return `${job.actor}:${job.channelGuid}:${job.messageRelPath}`;
+}
+
 export class JobQueue {
   private readonly pending: Job[] = [];
   private readonly inFlight = new Map<string, number>(); // actorName → active count
+  private readonly inFlightKeys = new Set<string>();     // deduplicate across pending + in-flight
 
-  // Enqueue a job. Silently drops duplicates (same actor + relPath).
+  // Enqueue a job. Returns false and drops silently if the job is already
+  // pending or in-flight (same actor + channelGuid + relPath).
   enqueue(job: Job): boolean {
-    const dup = this.pending.some(
-      j => j.actor === job.actor && j.messageRelPath === job.messageRelPath,
-    );
-    if (dup) return false;
+    const key = jobKey(job);
+    if (this.inFlightKeys.has(key) || this.pending.some(j => jobKey(j) === key)) return false;
     this.pending.push(job);
     return true;
   }
 
   // Return up to (maxConcurrent − inFlight) jobs for the given actor,
-  // removing them from the pending list.
+  // removing them from the pending list and marking them in-flight.
   drain(actorName: string, maxConcurrent: number): Job[] {
     const active = this.inFlight.get(actorName) ?? 0;
     const available = maxConcurrent - active;
@@ -44,14 +48,16 @@ export class JobQueue {
 
     if (out.length > 0) {
       this.inFlight.set(actorName, active + out.length);
+      for (const job of out) this.inFlightKeys.add(jobKey(job));
     }
     return out;
   }
 
-  // Signal that one dispatch for actorName has completed.
-  complete(actorName: string): void {
-    const active = this.inFlight.get(actorName) ?? 1;
-    this.inFlight.set(actorName, Math.max(0, active - 1));
+  // Signal that a dispatch has completed. Pass the job to release its dedup key.
+  complete(job: Job): void {
+    const active = this.inFlight.get(job.actor) ?? 1;
+    this.inFlight.set(job.actor, Math.max(0, active - 1));
+    this.inFlightKeys.delete(jobKey(job));
   }
 
   pendingCount(actorName?: string): number {

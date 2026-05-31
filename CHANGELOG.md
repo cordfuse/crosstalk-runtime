@@ -2,6 +2,10 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v2.4.2 — 2026-05-31
+
+**Fix: JobQueue duplicate detection missed in-flight jobs** — `enqueue()` now checks both pending and in-flight sets before accepting a job. `complete()` signature changed to accept the full `Job` object so the in-flight key can be released correctly.
+
 ## v2.4.1 — 2026-05-31
 
 **Multi-user host support** — host file auto-detection now considers `username` alongside `hostname`:
