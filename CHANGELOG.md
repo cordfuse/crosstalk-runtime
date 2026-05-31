@@ -2,6 +2,10 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v2.4.3 — 2026-05-31
+
+**Fix: CI packaging** — switch `@cordfuse/turnq` dependency from `file:../turnq` to the npm-published `^0.3.3`. The local path reference caused CI builds to fail (sibling directory absent in the runner), which prevented 2.3.0–2.4.2 from publishing to npm. First npm-published release since v2.2.0.
+
 ## v2.4.2 — 2026-05-31
 
 **Fix: JobQueue duplicate detection missed in-flight jobs** — `enqueue()` now checks both pending and in-flight sets before accepting a job. `complete()` signature changed to accept the full `Job` object so the in-flight key can be released correctly.
