@@ -1,6 +1,6 @@
 import { resolve, join, basename } from 'path';
 import { mkdir, writeFile, access } from 'fs/promises';
-import { homedir, hostname as osHostname } from 'os';
+import { homedir, hostname as osHostname, userInfo } from 'os';
 import { randomUUID } from 'crypto';
 import { spawn } from 'child_process';
 import * as readline from 'readline';
@@ -19,11 +19,12 @@ function prompt(rl: readline.Interface, question: string): Promise<string> {
   return new Promise(resolve => rl.question(question, resolve));
 }
 
-function hostFileTemplate(alias: string, hostname: string, actorName: string, cli: string): string {
+function hostFileTemplate(alias: string, hostname: string, username: string, actorName: string, cli: string): string {
   return [
     '---',
     `alias: ${alias}`,
     `hostname: ${hostname}`,
+    `username: ${username}`,
     'actors:',
     `  ${actorName}:`,
     `    default: ${cli}`,
@@ -58,10 +59,12 @@ export async function runInit(argv: string[]): Promise<void> {
   }
 
   const detectedHostname = osHostname();
+  const detectedUsername = (() => { try { return userInfo().username; } catch { return ''; } })();
+  const defaultAlias     = detectedUsername || detectedHostname;
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
   console.log('');
-  const alias     = (await prompt(rl, `  host alias     [${detectedHostname}]: `)).trim() || detectedHostname;
+  const alias     = (await prompt(rl, `  host alias     [${defaultAlias}]: `)).trim() || defaultAlias;
   const actorName = (await prompt(rl, `  actor name     [concierge]: `)).trim() || 'concierge';
   const cli       = (await prompt(rl, `  CLI command    [claude --print]: `)).trim() || 'claude --print';
   rl.close();
@@ -71,7 +74,7 @@ export async function runInit(argv: string[]): Promise<void> {
   const hostsDir    = join(transportPath, 'manifest', 'hosts');
   const hostRelPath = join('manifest', 'hosts', `${alias}.md`);
   await mkdir(hostsDir, { recursive: true });
-  await writeFile(join(transportPath, hostRelPath), hostFileTemplate(alias, detectedHostname, actorName, cli), 'utf-8');
+  await writeFile(join(transportPath, hostRelPath), hostFileTemplate(alias, detectedHostname, detectedUsername, actorName, cli), 'utf-8');
   console.log(`  host file created: ${hostRelPath}`);
 
   // Create a channel

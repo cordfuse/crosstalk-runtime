@@ -2,6 +2,15 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v2.4.1 — 2026-05-31
+
+**Multi-user host support** — host file auto-detection now considers `username` alongside `hostname`:
+
+- `HostFile` interface gains optional `username` field (`os.userInfo().username`)
+- `findHostFile()` matches `username + hostname` before falling back to bare `hostname`; explicit `host:` override still takes precedence
+- `crosstalk init` writes `username:` into the generated host file and uses OS username as the default alias suggestion
+- Single-user hosts with no `username:` field continue to work unchanged
+
 ## v2.4.0 — 2026-05-31
 
 **v3 coordinator runtime** — host-file mode now uses a single job-queue coordinator instead of N per-agent polling loops:

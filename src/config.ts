@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
-import { hostname as osHostname } from 'os';
+import { hostname as osHostname, userInfo } from 'os';
 import { parse as parseYaml } from 'yaml';
 import { parseFrontmatter } from './frontmatter.js';
 
@@ -44,6 +44,7 @@ interface HostFileActors {
 export interface HostFile {
   alias: string;
   hostname?: string;
+  username?: string;  // OS username for multi-user host auto-detection
   actors: HostFileActors;
 }
 
@@ -64,13 +65,18 @@ export function expandHostFile(hostFile: HostFile): AgentConfig[] {
 }
 
 // Scan manifest/hosts/ and return the HostFile matching the given alias or
-// the machine's OS hostname. Returns null if not found (caller handles idle).
+// the current machine identity. Auto-detection precedence:
+//   1. host: override in config — alias exact match
+//   2. username + hostname match — multi-user host support
+//   3. bare hostname match — single-user fallback (backward compat)
 export function findHostFile(transportPath: string, hostOverride?: string): HostFile | null {
   const hostsDir = join(transportPath, 'manifest', 'hosts');
   if (!existsSync(hostsDir)) return null;
 
   let machineHostname = '';
+  let machineUsername = '';
   try { machineHostname = osHostname(); } catch { /* ignore */ }
+  try { machineUsername = userInfo().username; } catch { /* ignore */ }
 
   let files: string[];
   try {
@@ -79,6 +85,10 @@ export function findHostFile(transportPath: string, hostOverride?: string): Host
     return null;
   }
 
+  // Two-pass: prefer username+hostname match over bare hostname match so that
+  // multi-user host files are never shadowed by single-user legacy files.
+  let bareHostnameMatch: HostFile | null = null;
+
   for (const file of files) {
     try {
       const raw = readFileSync(join(hostsDir, file), 'utf-8');
@@ -86,19 +96,27 @@ export function findHostFile(transportPath: string, hostOverride?: string): Host
       const hf = data as Partial<HostFile>;
       if (!hf.alias) continue;
 
-      const aliasMatch    = hostOverride && hf.alias === hostOverride;
-      const hostnameMatch = !hostOverride && hf.hostname && hf.hostname === machineHostname;
+      // 1. Explicit alias override
+      if (hostOverride) {
+        if (hf.alias === hostOverride) {
+          return { alias: hf.alias, hostname: hf.hostname, username: hf.username, actors: (hf.actors as HostFileActors) ?? {} };
+        }
+        continue;
+      }
 
-      if (aliasMatch || hostnameMatch) {
-        return {
-          alias:    hf.alias,
-          hostname: hf.hostname,
-          actors:   (hf.actors as HostFileActors) ?? {},
-        };
+      // 2. username + hostname — multi-user
+      if (hf.username && hf.hostname && hf.username === machineUsername && hf.hostname === machineHostname) {
+        return { alias: hf.alias, hostname: hf.hostname, username: hf.username, actors: (hf.actors as HostFileActors) ?? {} };
+      }
+
+      // 3. bare hostname — single-user fallback (save for second pass)
+      if (!hf.username && hf.hostname && hf.hostname === machineHostname) {
+        bareHostnameMatch = { alias: hf.alias, hostname: hf.hostname, actors: (hf.actors as HostFileActors) ?? {} };
       }
     } catch { /* skip malformed files */ }
   }
-  return null;
+
+  return bareHostnameMatch;
 }
 
 // ── Config loading ────────────────────────────────────────────────────────────
