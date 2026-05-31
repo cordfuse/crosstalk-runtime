@@ -2,6 +2,17 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v2.4.0 — 2026-05-31
+
+**v3 coordinator runtime** — host-file mode now uses a single job-queue coordinator instead of N per-agent polling loops:
+
+- `JobQueue` class: per-actor pending + in-flight tracking; `drain()` returns up to `totalCount` concurrent jobs; `complete()` decrements on finish
+- `dispatchSingle()`: processes one message without outer loop or hash-based instance selection — queue guarantees exactly-once delivery
+- Coordinator loop: pulls git once per cycle, scans all channels × actors, enqueues unread messages, dispatches concurrently up to each actor's tier sum, awaits all in-flight jobs before sleeping
+- Workers are ephemeral — spawned per message, not long-running pollers
+- Legacy `agents:` list mode still runs the v2 per-agent `setInterval` path (backward-compatible)
+- Version banner distinguishes `[v3]` vs `[v2 legacy]`
+
 ## v2.3.0 — 2026-05-31
 
 **Interactive `crosstalk init`** — init now scaffolds a host file instead of generating a legacy `agents:` config:

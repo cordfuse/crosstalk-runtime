@@ -148,6 +148,85 @@ export interface DispatchResult {
   lastProcessed: string | null;
 }
 
+// v3: dispatch a single known message. No outer loop, no instance selection —
+// the job queue guarantees exactly-once delivery.
+// Returns staged file paths on success, or empty array if message was skipped
+// (wrong addressee, non-text type, etc.) or dispatch failed.
+export async function dispatchSingle(opts: {
+  transportPath: string;
+  channelsDir: string;
+  channelGuid: string;
+  allRelPaths: string[];   // all messages in channel (for context window)
+  messageRelPath: string;  // the specific message to process
+  actorName: string;
+  hostAlias?: string;
+  systemPrompt?: string;
+  cli: string;
+  contextWindow?: number;
+  spawnCwd?: string;
+}): Promise<string[]> {
+  const {
+    transportPath, channelsDir, channelGuid, allRelPaths, messageRelPath,
+    actorName, hostAlias, systemPrompt, cli,
+  } = opts;
+  const contextWindow = opts.contextWindow ?? 20;
+  const channelDir  = join(transportPath, channelsDir, channelGuid);
+  const channelBase = `${channelsDir}/${channelGuid}`;
+
+  const msg = await parseMessage(channelDir, messageRelPath);
+  if (!msg) return [];
+  if (msg.type !== 'text') return [];
+
+  // Check addressee — pass instanceIndex=0 / groupSize=1: queue handles uniqueness
+  if (!isAddressedTo(msg, actorName, hostAlias, 0, 1)) return [];
+
+  // Build context
+  const idx = allRelPaths.indexOf(messageRelPath);
+  const priorPaths = allRelPaths.slice(Math.max(0, idx - contextWindow), idx);
+  const contextMessages: ParsedMessage[] = [];
+  for (const p of priorPaths) {
+    const m = await parseMessage(channelDir, p);
+    if (m && m.type === 'text') contextMessages.push(m);
+  }
+
+  const context  = renderContext(contextMessages, msg);
+  const identity = `Your agent name is ${actorName}.`;
+  const stdin    = systemPrompt ? `${systemPrompt}\n\n${identity}\n\n${context}` : `${identity}\n\n${context}`;
+  const spawnCwd = opts.spawnCwd ?? transportPath;
+
+  let reply: string;
+  try {
+    reply = await spawnCli(cli, stdin, spawnCwd);
+  } catch (err) {
+    console.error(`[${actorName}] dispatch failed for ${messageRelPath}:`, err);
+    return [];
+  }
+
+  if (!reply) {
+    console.warn(`[${actorName}] empty reply for ${messageRelPath} — skipping`);
+    return [];
+  }
+
+  const stagedFiles: string[] = [];
+  const replyNow       = new Date();
+  const replyDatePath  = messageDatePath(replyNow);
+  const replyFilename  = messageFilename(replyNow);
+  const replyRelPath   = `${replyDatePath}/${replyFilename}`;
+  await mkdir(join(channelDir, replyDatePath), { recursive: true });
+  await writeFile(join(channelDir, replyRelPath), messageFile(actorName, msg.from, replyNow, reply), 'utf-8');
+  stagedFiles.push(`${channelBase}/${replyRelPath}`);
+
+  const receiptNow      = new Date(replyNow.getTime() + 1);
+  const receiptDatePath = messageDatePath(receiptNow);
+  const receiptFilename = messageFilename(receiptNow);
+  const receiptRelPath  = `${receiptDatePath}/${receiptFilename}`;
+  await mkdir(join(channelDir, receiptDatePath), { recursive: true });
+  await writeFile(join(channelDir, receiptRelPath), readReceiptFile(actorName, msg.from, messageRelPath, receiptNow), 'utf-8');
+  stagedFiles.push(`${channelBase}/${receiptRelPath}`);
+
+  return stagedFiles;
+}
+
 export async function dispatchTick(opts: {
   transportPath: string;
   channelsDir: string;    // relative to transport, e.g. "data/channels"

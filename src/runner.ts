@@ -5,11 +5,12 @@ import { hostname as osHostname } from 'os';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
 const { version } = _require('../package.json') as { version: string };
-import { loadConfig, configFromFlags, findHostFile, expandHostFile, type AgentConfig, type RuntimeConfig } from './config.js';
+import { loadConfig, configFromFlags, findHostFile, expandHostFile, type AgentConfig, type RuntimeConfig, type HostFile } from './config.js';
 import { readCursor, writeCursor, cursorExists, listMessages, messagesAfterCursor, currentTip, discoverChannels } from './cursor.js';
 import { pull, commitAndPush, initCoordinator } from './git.js';
-import { dispatchTick } from './dispatch.js';
+import { dispatchTick, dispatchSingle } from './dispatch.js';
 import { parseFrontmatter } from './frontmatter.js';
+import { JobQueue, type Job } from './queue.js';
 import { runInit } from './init.js';
 
 const HELP = `
@@ -29,19 +30,40 @@ Options:
   --help                  Show this message
 `.trim();
 
-// Tracks interval handles for running agents so they can be stopped on reload.
-// Keyed by runtime key (see runtimeKeyFor) — distinct per process instance, so
-// shared-name instance groups (CROSSTALK.md Instance groups) don't collide.
-const agentHandles = new Map<string, ReturnType<typeof setInterval>>();
+// ── Shared helpers ─────────────────────────────────────────────────────────
 
-// Process-local key for state tracking. Equals agent.name when the name is
-// unique. For shared names, appends `#<index>` so each instance has its own
-// cursor + handle. Transport-facing identity (from:, to:, git author) still
-// uses agent.name — only on-disk runtime state uses this key.
-function runtimeKeyFor(agents: AgentConfig[], target: AgentConfig): string {
-  const sameName = agents.filter(a => a.name === target.name);
-  if (sameName.length <= 1) return target.name;
-  return `${target.name}#${sameName.indexOf(target)}`;
+async function resolveSystemPrompt(transportPath: string, agent: Pick<AgentConfig, 'name' | 'systemPromptFile'>): Promise<string | undefined> {
+  const candidatePath = agent.systemPromptFile
+    ? join(transportPath, agent.systemPromptFile)
+    : join(transportPath, 'manifest', 'custom', 'actors', `${agent.name}.md`);
+  try {
+    return await readFile(candidatePath, 'utf-8');
+  } catch {
+    if (agent.systemPromptFile) console.warn(`[${agent.name}] systemPromptFile not found: ${agent.systemPromptFile}`);
+    return undefined;
+  }
+}
+
+async function resolveGitIdentity(
+  transportPath: string,
+  agentName: string,
+  systemPromptFile?: string,
+  hostAlias?: string,
+): Promise<{ name: string; email: string }> {
+  const candidatePath = systemPromptFile
+    ? join(transportPath, systemPromptFile)
+    : join(transportPath, 'manifest', 'custom', 'actors', `${agentName}.md`);
+  const emailHost = hostAlias ? `${hostAlias}.crosstalk.local` : 'crosstalk.local';
+  try {
+    const raw = await readFile(candidatePath, 'utf-8');
+    const { data } = parseFrontmatter(raw);
+    const meta = data.metadata as Record<string, string> | undefined;
+    const alias = meta?.alias ?? String(data.alias ?? '');
+    const displayName = alias ? `${alias} (${agentName})` : agentName;
+    return { name: displayName, email: `${agentName}@${emailHost}` };
+  } catch {
+    return { name: agentName, email: `${agentName}@${emailHost}` };
+  }
 }
 
 async function resolveConfig(): Promise<{ config: RuntimeConfig; configPath: string | null }> {
@@ -61,44 +83,172 @@ async function resolveConfig(): Promise<{ config: RuntimeConfig; configPath: str
   process.exit(1);
 }
 
-// Resolve system prompt: explicit file override → convention path → undefined
-async function resolveSystemPrompt(transportPath: string, agent: AgentConfig): Promise<string | undefined> {
-  const candidatePath = agent.systemPromptFile
-    ? join(transportPath, agent.systemPromptFile)
-    : join(transportPath, 'manifest', 'custom', 'actors', `${agent.name}.md`);
-  try {
-    return await readFile(candidatePath, 'utf-8');
-  } catch {
-    if (agent.systemPromptFile) {
-      console.warn(`[${agent.name}] systemPromptFile not found: ${agent.systemPromptFile}`);
+// ── v3 Coordinator ─────────────────────────────────────────────────────────
+//
+// Replaces N per-agent polling loops with a single coordinator:
+//   1. Pull git
+//   2. Scan all channels × actors, enqueue unread messages
+//   3. Drain the queue — dispatch up to each actor's total count concurrently
+//   4. Wait interval, repeat
+//
+// Hash-based instance selection (v2) is dropped: the queue guarantees
+// exactly-once delivery without needing per-instance disambiguation.
+
+interface ActorMeta {
+  totalCount: number;                   // sum of tier counts from host file
+  tiers: Array<{ name: string; cli: string; count: number }>;
+  systemPrompt: string | undefined;
+  gitIdentity: { name: string; email: string };
+}
+
+async function buildActorMeta(
+  transportPath: string,
+  hostFile: HostFile,
+  hostAlias?: string,
+): Promise<Map<string, ActorMeta>> {
+  const map = new Map<string, ActorMeta>();
+  for (const [actorName, tierMap] of Object.entries(hostFile.actors)) {
+    const tiers: ActorMeta['tiers'] = [];
+    let totalCount = 0;
+    for (const [tierName, tierValue] of Object.entries(tierMap)) {
+      const cli   = typeof tierValue === 'string' ? tierValue : tierValue.cli;
+      const count = typeof tierValue === 'string' ? 1 : (tierValue.count ?? 1);
+      tiers.push({ name: tierName, cli, count });
+      totalCount += count;
     }
-    return undefined;
+    const systemPrompt  = await resolveSystemPrompt(transportPath, { name: actorName });
+    const gitIdentity   = await resolveGitIdentity(transportPath, actorName, undefined, hostAlias);
+    map.set(actorName, { totalCount, tiers, systemPrompt, gitIdentity });
+  }
+  return map;
+}
+
+// Pick a CLI for a job. For now: use the first tier's CLI. A future version
+// can accept tier hints from the message's metadata to select dynamically.
+function pickCli(meta: ActorMeta): { tier: string; cli: string } {
+  return { tier: meta.tiers[0].name, cli: meta.tiers[0].cli };
+}
+
+async function runCoordinator(config: RuntimeConfig, hostFile: HostFile): Promise<void> {
+  const transportPath = resolve(config.transport);
+  const hostAlias     = hostFile.alias;
+  const actorMeta     = await buildActorMeta(transportPath, hostFile, hostAlias);
+  const queue         = new JobQueue();
+
+  console.log(`[v3] host=${hostAlias} actors=${[...actorMeta.keys()].join(', ')}`);
+
+  await initCoordinator(config.turnq
+    ? { url: config.turnq.url, apiKey: config.turnq.apiKey, channel: config.turnq.channel }
+    : undefined);
+
+  async function cycle(): Promise<void> {
+    try {
+      await pull(transportPath);
+    } catch {
+      console.error('[v3] git pull failed — skipping cycle');
+      return;
+    }
+
+    const channels = await discoverChannels(transportPath, config.channelsDir);
+
+    // Enqueue unread messages for each actor × channel
+    for (const channelGuid of channels) {
+      const channelDir = join(transportPath, config.channelsDir, channelGuid);
+      const allRelPaths = await listMessages(channelDir);
+
+      for (const [actorName, meta] of actorMeta) {
+        // Initialise cursor on first encounter
+        if (!await cursorExists(transportPath, actorName, channelGuid)) {
+          const tip = currentTip(allRelPaths);
+          if (tip) await writeCursor(transportPath, actorName, channelGuid, tip);
+          continue;
+        }
+
+        const cursor  = await readCursor(transportPath, actorName, channelGuid);
+        const unread  = messagesAfterCursor(allRelPaths, cursor);
+        const { cli, tier } = pickCli(meta);
+
+        for (const relPath of unread) {
+          queue.enqueue({ actor: actorName, tier, cli, channelGuid, messageRelPath: relPath });
+        }
+      }
+    }
+
+    if (queue.pendingCount() === 0 && queue.inFlightCount() === 0) return;
+
+    // Dispatch: for each actor, drain up to totalCount concurrent jobs
+    const promises: Promise<void>[] = [];
+
+    for (const [actorName, meta] of actorMeta) {
+      const jobs = queue.drain(actorName, meta.totalCount);
+
+      for (const job of jobs) {
+        const channelDir  = join(transportPath, config.channelsDir, job.channelGuid);
+        const allRelPaths = await listMessages(channelDir);
+
+        const promise = (async () => {
+          try {
+            const stagedFiles = await dispatchSingle({
+              transportPath,
+              channelsDir: config.channelsDir,
+              channelGuid: job.channelGuid,
+              allRelPaths,
+              messageRelPath: job.messageRelPath,
+              actorName: job.actor,
+              hostAlias,
+              systemPrompt: meta.systemPrompt,
+              cli: job.cli,
+            });
+
+            if (stagedFiles.length > 0) {
+              const now   = new Date();
+              const label = `${now.toISOString().slice(0, 16).replace('T', ' ')}Z`;
+              const ok    = await commitAndPush({
+                transportPath,
+                files: stagedFiles,
+                message: `crosstalk: ${job.actor} ${label}`,
+                identity: meta.gitIdentity,
+              });
+              if (ok) {
+                await writeCursor(transportPath, job.actor, job.channelGuid, job.messageRelPath);
+              } else {
+                console.error(`[${job.actor}] push failed — will retry next cycle`);
+              }
+            } else {
+              // No reply staged (skipped or failed) — advance cursor anyway
+              await writeCursor(transportPath, job.actor, job.channelGuid, job.messageRelPath);
+            }
+          } finally {
+            queue.complete(job.actor);
+          }
+        })();
+
+        promises.push(promise);
+      }
+    }
+
+    await Promise.all(promises);
+  }
+
+  // Main loop
+  const interval = config.interval;
+  console.log(`[v3] coordinator running — interval=${interval}s`);
+
+  while (true) {
+    await cycle();
+    await new Promise(r => setTimeout(r, interval * 1000));
   }
 }
 
-// Derive git identity: explicit override → actor frontmatter alias → bare name.
-// Email includes host alias for traceability across multi-host transports.
-async function resolveGitIdentity(
-  transportPath: string,
-  agent: AgentConfig,
-  hostAlias?: string,
-): Promise<{ name: string; email: string }> {
-  if (agent.git) return agent.git;
-  const candidatePath = agent.systemPromptFile
-    ? join(transportPath, agent.systemPromptFile)
-    : join(transportPath, 'manifest', 'custom', 'actors', `${agent.name}.md`);
-  const emailHost = hostAlias ? `${hostAlias}.crosstalk.local` : 'crosstalk.local';
-  try {
-    const raw = await readFile(candidatePath, 'utf-8');
-    const { data } = parseFrontmatter(raw);
-    const meta = data.metadata as Record<string, string> | undefined;
-    const alias = meta?.alias ?? String(data.alias ?? '');
-    const displayName = alias ? `${alias} (${agent.name})` : agent.name;
-    return { name: displayName, email: `${agent.name}@${emailHost}` };
-  } catch {
-    return { name: agent.name, email: `${agent.name}@${emailHost}` };
-  }
+// ── v2 Legacy polling (agents: list mode) ─────────────────────────────────
+
+function runtimeKeyFor(agents: AgentConfig[], target: AgentConfig): string {
+  const sameName = agents.filter(a => a.name === target.name);
+  if (sameName.length <= 1) return target.name;
+  return `${target.name}#${sameName.indexOf(target)}`;
 }
+
+const agentHandles = new Map<string, ReturnType<typeof setInterval>>();
 
 async function tickChannel(opts: {
   config: RuntimeConfig;
@@ -112,11 +262,10 @@ async function tickChannel(opts: {
   groupSize: number;
   hostAlias?: string;
 }): Promise<void> {
-  const { config, agent, runtimeKey, channelGuid, transportPath, systemPrompt, gitIdentity, instanceIndex, groupSize, hostAlias } = opts;
+  const { config, agent, runtimeKey, channelGuid, transportPath, systemPrompt, gitIdentity, instanceIndex, groupSize } = opts;
   const channelDir = join(transportPath, config.channelsDir, channelGuid);
   const allRelPaths = await listMessages(channelDir);
 
-  // First time this agent sees this channel — initialize cursor to tip, skip history.
   if (!await cursorExists(transportPath, runtimeKey, channelGuid)) {
     const tip = currentTip(allRelPaths);
     if (tip) await writeCursor(transportPath, runtimeKey, channelGuid, tip);
@@ -125,7 +274,6 @@ async function tickChannel(opts: {
 
   const cursor = await readCursor(transportPath, runtimeKey, channelGuid);
   const unread = messagesAfterCursor(allRelPaths, cursor);
-
   if (unread.length === 0) return;
 
   const { stagedFiles, lastProcessed } = await dispatchTick({
@@ -135,7 +283,7 @@ async function tickChannel(opts: {
     allRelPaths,
     unreadRelPaths: unread,
     agent,
-    hostAlias,
+    hostAlias: opts.hostAlias,
     systemPrompt,
     instanceIndex,
     groupSize,
@@ -196,23 +344,21 @@ function stopAgent(name: string): void {
 
 async function startAgent(config: RuntimeConfig, agent: AgentConfig): Promise<void> {
   const transportPath = resolve(config.transport);
-  const systemPrompt = await resolveSystemPrompt(transportPath, agent);
-  const gitIdentity = await resolveGitIdentity(transportPath, agent, config.hostAlias);
+  const systemPrompt  = await resolveSystemPrompt(transportPath, agent);
+  const gitIdentity   = await resolveGitIdentity(transportPath, agent.name, agent.systemPromptFile, config.hostAlias);
 
-  // Instance group: agents in this config that share our name. Position via
-  // reference equality is stable because each AgentConfig is a distinct object.
   const sameName = config.agents.filter(a => a.name === agent.name);
   const instanceIndex = sameName.indexOf(agent);
-  const groupSize = sameName.length;
-  const runtimeKey = runtimeKeyFor(config.agents, agent);
+  const groupSize     = sameName.length;
+  const runtimeKey    = runtimeKeyFor(config.agents, agent);
 
   const allChannels = await discoverChannels(transportPath, config.channelsDir);
-  const channels = agent.channels?.length
+  const channels    = agent.channels?.length
     ? agent.channels.filter(g => allChannels.includes(g))
     : allChannels;
 
   if (channels.length === 0) {
-    console.warn(`[${runtimeKey}] no channels found in ${join(transportPath, config.channelsDir)} — waiting`);
+    console.warn(`[${runtimeKey}] no channels found — waiting`);
   }
 
   if (!agentHandles.size) {
@@ -221,7 +367,7 @@ async function startAgent(config: RuntimeConfig, agent: AgentConfig): Promise<vo
       : undefined);
   }
 
-  const interval = agent.interval ?? config.interval;
+  const interval  = agent.interval ?? config.interval;
   const groupInfo = groupSize > 1 ? ` instance=${instanceIndex + 1}/${groupSize}` : '';
   console.log(`[${runtimeKey}] starting — channels=${channels.length} interval=${interval}s git="${gitIdentity.name}"${groupInfo}`);
 
@@ -237,19 +383,15 @@ async function applyConfig(config: RuntimeConfig): Promise<void> {
   const incomingKeys = new Set(config.agents.map(a => runtimeKeyFor(config.agents, a)));
   const running = new Set(agentHandles.keys());
 
-  // Stop agents that were removed or changed
   for (const key of running) {
-    if (!incomingKeys.has(key)) {
-      stopAgent(key);
-    }
+    if (!incomingKeys.has(key)) stopAgent(key);
   }
 
-  // Start agents that are new
   const toStart = config.agents.filter(a => !agentHandles.has(runtimeKeyFor(config.agents, a)));
   await Promise.all(toStart.map(agent => startAgent(config, agent)));
 }
 
-async function watchConfig(configPath: string, getCurrentConfig: () => RuntimeConfig): Promise<void> {
+async function watchConfig(configPath: string): Promise<void> {
   let debounce: ReturnType<typeof setTimeout> | null = null;
   try {
     const watcher = watch(configPath);
@@ -266,9 +408,11 @@ async function watchConfig(configPath: string, getCurrentConfig: () => RuntimeCo
       }, 500);
     }
   } catch {
-    // watch not available or file removed — silently stop watching
+    // watch not available or file removed — silently stop
   }
 }
+
+// ── Entry point ────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
   if (process.argv[2] === 'init') {
@@ -283,7 +427,7 @@ async function main(): Promise<void> {
   const { config, configPath } = await resolveConfig();
   const transportPath = resolve(config.transport);
 
-  // Host file mode: agents array is empty, resolve from manifest/hosts/
+  // v3 path: no agents list → resolve host file → run coordinator
   if (config.agents.length === 0) {
     const hostFile = findHostFile(transportPath, config.hostAlias);
     if (!hostFile) {
@@ -293,17 +437,17 @@ async function main(): Promise<void> {
         `[runtime] create manifest/hosts/<alias>.md with hostname: ${osHostname()}, or set host: <alias> in config.yaml\n` +
         `[runtime] idling — no agents will dispatch until a host file is found`
       );
-      // Stay alive so the process doesn't crash; operator can fix and restart.
       return;
     }
-    config.hostAlias = hostFile.alias;
-    config.agents    = expandHostFile(hostFile);
-    console.log(`[runtime] host=${hostFile.alias} actors=${Object.keys(hostFile.actors).join(', ')} workers=${config.agents.length}`);
+    console.log(`crosstalk runtime v${version} — transport=${config.transport} host=${hostFile.alias} [v3]`);
+    await runCoordinator(config, hostFile);
+    return;
   }
 
-  console.log(`crosstalk runtime v2 — transport=${config.transport} agents=${config.agents.length}${config.hostAlias ? ` host=${config.hostAlias}` : ''}`);
+  // v2 legacy path: explicit agents list
+  console.log(`crosstalk runtime v${version} — transport=${config.transport} agents=${config.agents.length} [v2 legacy]`);
   await applyConfig(config);
-  if (configPath) watchConfig(configPath, () => config);
+  if (configPath) watchConfig(configPath);
 }
 
 main().catch(err => {
