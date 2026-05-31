@@ -2,6 +2,15 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v2.3.0 — 2026-05-31
+
+**Interactive `crosstalk init`** — init now scaffolds a host file instead of generating a legacy `agents:` config:
+
+- Prompts for host alias (default: `os.hostname()`), actor name (default: `concierge`), and CLI command (default: `claude --print`)
+- Creates `manifest/hosts/<alias>.md` with the declared actor and tier, commits it to the transport, and pushes
+- Writes a thin local config (`transport:` + `host:`) instead of the old `agents:` array
+- Closes the onboarding gap where operators had to create host files manually after init
+
 ## v2.2.0 — 2026-05-29
 
 **Host file support** — the runtime now reads actor configuration from `manifest/hosts/<alias>.md` in the transport instead of requiring an `agents:` list in the local config:
