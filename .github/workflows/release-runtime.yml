@@ -5,93 +5,117 @@ on:
     tags:
       - 'v*'
 
-# Distribution model (v0.6.0-alpha.4+): pure node npm package, no per-platform
-# binaries. Primary install path (v0.8.1+):
-#
-#   npm install -g @cordfuse/crosstalk-runtime
-#
-# Fallback / pinned-version install via the GitHub release tarball:
-#
-#   npm install -g https://github.com/cordfuse/crosstalk-runtime/releases/download/vX.Y.Z/cordfuse-crosstalk-runtime-X.Y.Z.tgz
-#
-# **NOT supported: git-URL install** (e.g. `npm install -g cordfuse/crosstalk-runtime#tag`).
-# npm runs the package's `prepare` lifecycle on git-URL installs BEFORE
-# installing devDependencies in the temp clone — so `tsc` isn't on PATH
-# when prepare fires. The .tgz install path works because CI runs
-# `npm install` (with devDeps) BEFORE `npm pack`, baking dist/ into the
-# tarball. End users just consume pre-built dist/ from the .tgz.
-#
-# @homebridge's install script fetches/builds the right native PTY for the
-# user's host platform automatically (no cross-compile, no .node bundling).
-
 jobs:
+  build-binaries:
+    name: Build binaries
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.vinfo.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Extract version
+        id: vinfo
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build all platform binaries
+        run: |
+          bun build --compile --target=bun-linux-x64    ./src/runner.ts --outfile crosstalk-linux-x64
+          bun build --compile --target=bun-linux-arm64  ./src/runner.ts --outfile crosstalk-linux-arm64
+          bun build --compile --target=bun-darwin-x64   ./src/runner.ts --outfile crosstalk-darwin-x64
+          bun build --compile --target=bun-darwin-arm64 ./src/runner.ts --outfile crosstalk-darwin-arm64
+
+      - name: Smoke test (linux-x64)
+        run: ./crosstalk-linux-x64 --version
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: |
+            crosstalk-linux-x64
+            crosstalk-linux-arm64
+            crosstalk-darwin-x64
+            crosstalk-darwin-arm64
+
+  package-linux:
+    name: Package Linux
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+
+      - name: Install packaging tools
+        run: sudo apt-get install -y dpkg-dev rpm
+
+      - name: Make binaries executable
+        run: chmod +x crosstalk-linux-*
+
+      - name: Build .deb (amd64)
+        run: |
+          chmod +x packaging/build-deb.sh
+          ./packaging/build-deb.sh ./crosstalk-linux-x64 ${{ needs.build-binaries.outputs.version }} amd64
+
+      - name: Build .deb (arm64)
+        run: ./packaging/build-deb.sh ./crosstalk-linux-arm64 ${{ needs.build-binaries.outputs.version }} arm64
+
+      - name: Build .rpm (x86_64)
+        run: |
+          chmod +x packaging/build-rpm.sh
+          ./packaging/build-rpm.sh ./crosstalk-linux-x64 ${{ needs.build-binaries.outputs.version }} x86_64
+
+      - name: Build .rpm (aarch64)
+        run: ./packaging/build-rpm.sh ./crosstalk-linux-arm64 ${{ needs.build-binaries.outputs.version }} aarch64
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            *.deb
+            *.rpm
+
   release:
+    name: Create GitHub Release
+    needs: [build-binaries, package-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v6
+      - uses: actions/download-artifact@v4
         with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
+          name: binaries
 
-      - name: Install dependencies (runs prepare → tsc)
-        run: npm install
-
-      - name: Smoke-test compiled output
-        run: node --input-type=module -e "await import('./dist/config.js')"
-
-      - name: Pack tarball
-        run: npm pack
-
-      - name: List artifacts
-        run: ls -la *.tgz
-
-      - name: Compute version-without-v for tarball URL
-        id: vinfo
-        run: echo "vnum=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+      - uses: actions/download-artifact@v4
         with:
-          tag_name: ${{ github.ref_name }}
-          name: Runtime ${{ github.ref_name }}
-          body: |
-            Crosstalk runtime ${{ github.ref_name }} — v2 lean runtime.
+          name: linux-packages
 
-            **Install:**
+      - name: Make binaries executable
+        run: chmod +x crosstalk-linux-* crosstalk-darwin-*
 
-            ```sh
-            npm install -g @cordfuse/crosstalk-runtime
-            ```
-
-            **Run:**
-
-            ```sh
-            crosstalk --config config.yaml
-            ```
-
-            Copy `config.example.yaml` → `config.yaml`, fill in your transport path, channel GUID, and agent CLI, then start. See [SPEC-runtime-v2.md](https://github.com/cordfuse/crosstalk-runtime/blob/main/SPEC-runtime-v2.md) for the full design.
-
-            **Pinned-version fallback:**
-
-            ```sh
-            npm install -g https://github.com/cordfuse/crosstalk-runtime/releases/download/${{ github.ref_name }}/cordfuse-crosstalk-runtime-${{ steps.vinfo.outputs.vnum }}.tgz
-            ```
-
-            **Why not git URL install?** npm runs `prepare` before devDependencies are installed — `tsc` isn't on PATH when it fires. Use npm or the tarball above.
-
-            See [WHATSNEW.md](https://github.com/cordfuse/crosstalk/blob/main/WHATSNEW.md) for changes — runtime changelog lives in the operator-facing repo.
-          files: |
-            cordfuse-crosstalk-runtime-*.tgz
+      - name: Compute SHA256s
+        id: sha
+        run: |
+          echo "linux_x64=$(sha256sum crosstalk-linux-x64 | cut -d' ' -f1)"       >> $GITHUB_OUTPUT
+          echo "linux_arm64=$(sha256sum crosstalk-linux-arm64 | cut -d' ' -f1)"   >> $GITHUB_OUTPUT
+          echo "darwin_x64=$(sha256sum crosstalk-darwin-x64 | cut -d' ' -f1)"     >> $GITHUB_OUTPUT
+          echo "darwin_arm64=$(sha256sum crosstalk-darwin-arm64 | cut -d' ' -f1)" >> $GITHUB_OUTPUT
 
       - name: Determine npm dist-tag
         id: npmtag
-        # Pre-releases (anything with `-` after the patch number, e.g. 0.9.0-alpha.1)
-        # publish under the `next` tag so default `npm install -g <pkg>` keeps
-        # resolving to the most recent stable. Stable releases publish under `latest`.
         run: |
           if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
             echo "tag=next" >> "$GITHUB_OUTPUT"
@@ -99,9 +123,90 @@ jobs:
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Publish to npm
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Runtime ${{ github.ref_name }}
+          body: |
+            ## Crosstalk Runtime ${{ github.ref_name }}
+
+            ### Install
+
+            **Arch / CachyOS:**
+            ```sh
+            yay -S crosstalk-runtime
+            ```
+
+            **Debian / Ubuntu:**
+            ```sh
+            curl -LO https://github.com/cordfuse/crosstalk-runtime/releases/download/${{ github.ref_name }}/crosstalk-runtime_${{ needs.build-binaries.outputs.version }}_amd64.deb
+            sudo apt install ./crosstalk-runtime_${{ needs.build-binaries.outputs.version }}_amd64.deb
+            ```
+
+            **Fedora / RHEL:**
+            ```sh
+            sudo dnf install https://github.com/cordfuse/crosstalk-runtime/releases/download/${{ github.ref_name }}/crosstalk-runtime-${{ needs.build-binaries.outputs.version }}-1.x86_64.rpm
+            ```
+
+            **macOS (Homebrew):**
+            ```sh
+            brew install cordfuse/tap/crosstalk-runtime
+            sudo brew services start cordfuse/tap/crosstalk-runtime
+            ```
+
+            **After installing, add a transport:**
+            ```sh
+            sudo crosstalk add-transport <git-url>
+            sudo systemctl start crosstalk   # Linux
+            ```
+
+            ### SHA256
+            | Binary | SHA256 |
+            |--------|--------|
+            | `crosstalk-linux-x64`    | `${{ steps.sha.outputs.linux_x64 }}` |
+            | `crosstalk-linux-arm64`  | `${{ steps.sha.outputs.linux_arm64 }}` |
+            | `crosstalk-darwin-x64`   | `${{ steps.sha.outputs.darwin_x64 }}` |
+            | `crosstalk-darwin-arm64` | `${{ steps.sha.outputs.darwin_arm64 }}` |
+          files: |
+            crosstalk-linux-x64
+            crosstalk-linux-arm64
+            crosstalk-darwin-x64
+            crosstalk-darwin-arm64
+            *.deb
+            *.rpm
+            packaging/PKGBUILD
+            packaging/crosstalk-runtime.install
+
+      - name: Update Homebrew formula SHA256s
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          git clone https://x-access-token:${GH_TOKEN}@github.com/cordfuse/homebrew-cordfuse.git tap
+          sed -i "s/PLACEHOLDER_LINUX_X64/${{ steps.sha.outputs.linux_x64 }}/"       tap/Formula/crosstalk-runtime.rb
+          sed -i "s/PLACEHOLDER_LINUX_ARM64/${{ steps.sha.outputs.linux_arm64 }}/"   tap/Formula/crosstalk-runtime.rb
+          sed -i "s/PLACEHOLDER_DARWIN_X64/${{ steps.sha.outputs.darwin_x64 }}/"     tap/Formula/crosstalk-runtime.rb
+          sed -i "s/PLACEHOLDER_DARWIN_ARM64/${{ steps.sha.outputs.darwin_arm64 }}/" tap/Formula/crosstalk-runtime.rb
+          sed -i "s/version \".*\"/version \"${{ needs.build-binaries.outputs.version }}\"/" tap/Formula/crosstalk-runtime.rb
+          cd tap
+          git config user.email "ci@cordfuse.ai"
+          git config user.name "Cordfuse CI"
+          git add Formula/crosstalk-runtime.rb
+          git diff --staged --quiet || git commit -m "chore: update crosstalk-runtime to ${{ github.ref_name }}"
+          git push
+
+      - name: Publish to npm (fallback install path)
         if: ${{ env.NPM_TOKEN != '' }}
-        run: npm publish --access public --tag ${{ steps.npmtag.outputs.tag }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: npm install + publish
+        if: ${{ env.NPM_TOKEN != '' }}
+        run: |
+          npm install
+          npm publish --access public --tag ${{ steps.npmtag.outputs.tag }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -1,0 +1,50 @@
+# Maintainer: Cordfuse <hello@cordfuse.ai>
+pkgname=crosstalk-runtime
+pkgver=3.0.0
+pkgrel=1
+pkgdesc="AI agent messaging daemon for Crosstalk transports"
+arch=('x86_64' 'aarch64')
+url="https://github.com/cordfuse/crosstalk-runtime"
+license=('MIT')
+depends=('git' 'openssh')
+backup=('etc/crosstalk/config.yaml')
+install=crosstalk-runtime.install
+
+source_x86_64=("crosstalk-linux-x64::https://github.com/cordfuse/crosstalk-runtime/releases/download/v${pkgver}/crosstalk-linux-x64")
+source_aarch64=("crosstalk-linux-arm64::https://github.com/cordfuse/crosstalk-runtime/releases/download/v${pkgver}/crosstalk-linux-arm64")
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+
+package() {
+    # Determine binary based on arch
+    if [ "$CARCH" = "x86_64" ]; then
+        _bin="crosstalk-linux-x64"
+    else
+        _bin="crosstalk-linux-arm64"
+    fi
+
+    install -Dm755 "${srcdir}/${_bin}" "${pkgdir}/usr/bin/crosstalk"
+
+    # Systemd service unit
+    install -Dm644 /dev/stdin "${pkgdir}/usr/lib/systemd/system/crosstalk.service" << 'EOF'
+[Unit]
+Description=Crosstalk Runtime — AI agent messaging daemon
+After=network.target
+
+[Service]
+Type=simple
+User=crosstalk
+ExecStart=/usr/bin/crosstalk --config /etc/crosstalk/config.yaml
+Restart=always
+RestartSec=10
+Environment=HOME=/var/lib/crosstalk
+Environment=GIT_SSH_COMMAND=ssh -i /var/lib/crosstalk/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/var/lib/crosstalk/.ssh/known_hosts
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Config and data dirs (empty, owned by package)
+    install -dm755 "${pkgdir}/etc/crosstalk"
+    install -dm750 "${pkgdir}/var/lib/crosstalk"
+}

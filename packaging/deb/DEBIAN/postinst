@@ -1,0 +1,31 @@
+#!/bin/sh
+set -e
+
+# Create system user
+if ! id -u crosstalk >/dev/null 2>&1; then
+  useradd --system --no-create-home --shell /usr/sbin/nologin \
+    --home-dir /var/lib/crosstalk crosstalk
+fi
+
+# Create directories
+mkdir -p /etc/crosstalk /var/lib/crosstalk/transports /var/lib/crosstalk/.ssh
+chown -R crosstalk /var/lib/crosstalk
+chmod 700 /var/lib/crosstalk/.ssh
+
+# Write default config if absent
+if [ ! -f /etc/crosstalk/config.yaml ]; then
+  printf 'transports: []\n' > /etc/crosstalk/config.yaml
+  chown root:crosstalk /etc/crosstalk/config.yaml
+  chmod 640 /etc/crosstalk/config.yaml
+fi
+
+# Enable service (don't start — user must add a transport first)
+systemctl daemon-reload
+systemctl enable crosstalk.service >/dev/null 2>&1 || true
+
+echo ""
+echo "crosstalk-runtime installed."
+echo "Next: generate an SSH key and add a transport:"
+echo "  sudo crosstalk add-transport <git-url>"
+echo "  sudo systemctl start crosstalk"
+echo ""
