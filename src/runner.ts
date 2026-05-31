@@ -2,9 +2,8 @@
 import { resolve, join } from 'path';
 import { readFile, access, watch } from 'fs/promises';
 import { hostname as osHostname } from 'os';
-import { createRequire } from 'module';
-const _require = createRequire(import.meta.url);
-const { version } = _require('../package.json') as { version: string };
+import pkg from '../package.json' with { type: 'json' };
+const { version } = pkg;
 import { loadConfig, loadPlatformConfig, configFromFlags, findHostFile, expandHostFile, type AgentConfig, type RuntimeConfig, type HostFile } from './config.js';
 import { runInstall, runUninstall, runAddTransport, runRemoveTransport, runStatus as runStatusCmd } from './install.js';
 import { readCursor, writeCursor, cursorExists, listMessages, messagesAfterCursor, currentTip, discoverChannels } from './cursor.js';
