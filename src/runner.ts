@@ -369,7 +369,7 @@ function stopAgent(name: string): void {
 }
 
 async function startAgent(config: RuntimeConfig, agent: AgentConfig): Promise<void> {
-  const transportPath = resolve(config.transport);
+  const transportPath = resolve(config.transports[0].path);
   const systemPrompt  = await resolveSystemPrompt(transportPath, agent);
   const gitIdentity   = await resolveGitIdentity(transportPath, agent.name, agent.systemPromptFile, config.hostAlias);
 
