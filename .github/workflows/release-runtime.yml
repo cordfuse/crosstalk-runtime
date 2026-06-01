@@ -203,12 +203,15 @@ jobs:
 
             ### Install
 
-            **One-line installer (all platforms):**
+            **Linux / macOS — one-line installer:**
             ```sh
             curl -fsSL https://github.com/cordfuse/crosstalk-runtime/releases/latest/download/install.sh | bash
             ```
 
-            The installer detects your OS and package manager, downloads the right package, and installs locally.
+            **Windows — one-line installer (elevated PowerShell):**
+            ```powershell
+            iex (irm https://github.com/cordfuse/crosstalk-runtime/releases/latest/download/install.ps1)
+            ```
 
             ---
 
@@ -255,6 +258,7 @@ jobs:
             | `crosstalk-windows-x64.exe` | `${{ steps.sha.outputs.windows_x64 }}` |
           files: |
             install.sh
+            install.ps1
             crosstalk-linux-x64
             crosstalk-linux-arm64
             crosstalk-darwin-x64

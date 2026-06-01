@@ -8,13 +8,21 @@ System daemon that watches Crosstalk transport repos, dispatches messages to AI 
 
 ## Install
 
-**One-line installer (all platforms):**
+**Linux / macOS — one-line installer:**
 
 ```sh
 curl -fsSL https://github.com/cordfuse/crosstalk-runtime/releases/latest/download/install.sh | bash
 ```
 
 Detects your OS and package manager, downloads the right package, and installs it.
+
+**Windows — one-line installer (elevated PowerShell):**
+
+```powershell
+iex (irm https://github.com/cordfuse/crosstalk-runtime/releases/latest/download/install.ps1)
+```
+
+Downloads and silently runs the Inno Setup installer, then prints next steps.
 
 **Manual:**
 
