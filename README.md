@@ -49,9 +49,11 @@ sudo crosstalk install https://github.com/you/your-transport.git
 # 2. Add a project repo as a workspace
 crosstalk add-workspace https://github.com/you/your-project.git
 
-# 3. Open an interactive session with your concierge agent
+# 3. Issue marching orders
 crosstalk open
 ```
+
+`crosstalk open` drops you into a session with the concierge. Type your directive — "fix the auth bug, route frontend tickets to junior-developer" — and the swarm acts on it. The concierge delegates, agents execute, replies come back as git commits.
 
 The daemon runs as a system service (`crosstalk.service`) and starts automatically on boot.
 
@@ -128,11 +130,13 @@ journalctl -u crosstalk -f
 
 Most orchestrators define agent workflows in code or a visual graph — you wire nodes together and the routing is structural. Crosstalk is different: **orchestration lives in the standing orders**.
 
-Each actor has a system prompt (`manifest/custom/actors/<name>.md` in the transport). That prompt is where you describe how the agent should delegate, escalate, and collaborate. The concierge might say:
+Each actor has a system prompt (`manifest/custom/actors/<name>.md` in the transport). That prompt defines who they are, how they delegate, and how they escalate. The concierge might say:
 
 > *"When you receive an engineering task, delegate it to `junior-developer`. If it involves security or production infrastructure, escalate to `senior-engineer` instead."*
 
-That prose **is** the routing table. Change the orchestration by editing a markdown file — no redeploy, no graph editor, no code change. Non-engineers can read and modify it directly.
+That prose **is** the routing table. Change the orchestration by editing a markdown file — no redeploy, no graph editor, no code change.
+
+**Execution happens through `crosstalk open`.** You open a session, give the concierge a directive — "fix the auth bug this sprint, deprioritise everything else" — and the standing orders determine what happens next: who gets delegated to, what gets escalated, how the swarm organises around the task. The directive is the marching order; the standing orders are the rules of engagement.
 
 The tradeoff vs code-defined graphs: prompt-driven routing uses agent judgment, not deterministic if-else. For async workflows that's usually a feature, not a bug.
 
