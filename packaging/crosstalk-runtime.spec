@@ -1,3 +1,7 @@
+# Bun self-contained binary — skip strip/debug-package post-install hooks
+%global __strip /bin/true
+%global debug_package %{nil}
+
 Name:           crosstalk-runtime
 Version:        %{version_placeholder}
 Release:        1%{?dist}
