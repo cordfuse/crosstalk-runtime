@@ -14,6 +14,9 @@ PKGDIR="$WORKDIR/crosstalk-runtime_${VERSION}_${ARCH}"
 
 cp -r "$(dirname "$0")/deb" "$PKGDIR"
 
+# Ensure usr/bin exists (git doesn't track empty dirs)
+mkdir -p "$PKGDIR/usr/bin"
+
 # Inject binary
 cp "$BINARY" "$PKGDIR/usr/bin/crosstalk"
 chmod 755 "$PKGDIR/usr/bin/crosstalk"
