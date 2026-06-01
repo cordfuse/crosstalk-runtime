@@ -50,11 +50,27 @@ function createSystemUser(platform: PlatformInfo): void {
 
 function setOwnership(platform: PlatformInfo): void {
   if (platform.id === 'windows') return;
-  const { dataDir, sshDir } = platform.paths;
+  const { dataDir, sshDir, transportDir, workspacesDir } = platform.paths;
   const user = platform.serviceUser;
-  execSync(`chown -R ${user} ${dataDir}`);
+  execSync(`chown -R ${user}:${user} ${dataDir}`);
   chmodSync(sshDir, 0o700);
-  console.log(`[install] ownership set to '${user}'`);
+
+  // Make transport + workspaces group-writable so the operator can write without sudo
+  for (const dir of [transportDir, workspacesDir]) {
+    execSync(`chmod -R g+w ${dir}`);
+    execSync(`find ${dir} -type d -exec chmod g+s {} +`); // setgid — new files inherit group
+  }
+
+  // Add the invoking operator to the service group
+  const operator = process.env['SUDO_USER'];
+  if (operator) {
+    try {
+      execSync(`usermod -aG ${user} ${operator}`);
+      console.log(`[install] user '${operator}' added to '${user}' group — re-login to activate`);
+    } catch {}
+  }
+
+  console.log(`[install] ownership set to '${user}', transport + workspaces group-writable`);
 }
 
 function generateSshKey(platform: PlatformInfo): string {
@@ -88,7 +104,9 @@ function cloneTransport(platform: PlatformInfo, gitUrl: string): string {
   execSync(`GIT_SSH_COMMAND="${gitSsh}" git clone ${gitUrl} ${dest}`, { stdio: 'inherit' });
 
   if (platform.id !== 'windows') {
-    execSync(`chown -R ${platform.serviceUser} ${dest}`);
+    execSync(`chown -R ${platform.serviceUser}:${platform.serviceUser} ${dest}`);
+    execSync(`chmod -R g+w ${dest}`);
+    execSync(`find ${dest} -type d -exec chmod g+s {} +`);
   }
   console.log('[install] transport cloned');
   return dest;
@@ -102,8 +120,8 @@ function writeConfig(platform: PlatformInfo, transportPath: string): void {
   existing.transport  = transportPath;
   existing.workspaces = existing.workspaces ?? [];
 
-  // 644: config has no secrets (SSH keys live in .ssh/); must be readable by non-root for `crosstalk with`
-  writeFileSync(platform.paths.configFile, stringifyYaml(existing), { mode: 0o644 });
+  // 664 root:crosstalk — group members (operator) can update workspaces without sudo
+  writeFileSync(platform.paths.configFile, stringifyYaml(existing), { mode: 0o664 });
   if (platform.id !== 'windows') {
     execSync(`chown root:${platform.serviceUser} ${platform.paths.configFile}`);
   }
@@ -206,7 +224,6 @@ export async function runUninstall(argv: string[]): Promise<void> {
 
 export async function runAddWorkspace(argv: string[]): Promise<void> {
   const platform = detectPlatform();
-  requireRoot(platform);
 
   const gitUrl = argv[0];
   if (!gitUrl) {
@@ -245,7 +262,6 @@ export async function runAddWorkspace(argv: string[]): Promise<void> {
 
 export async function runRemoveWorkspace(argv: string[]): Promise<void> {
   const platform = detectPlatform();
-  requireRoot(platform);
 
   const name = argv[0];
   if (!name) {

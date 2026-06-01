@@ -18,8 +18,8 @@ const HELP = `
 Usage:
   crosstalk install <git-url>                Install daemon + clone transport (requires sudo/admin)
   crosstalk uninstall [--purge]              Remove the daemon (--purge also wipes data/config)
-  crosstalk add-workspace <git-url>          Clone a project repo and register it (requires sudo/admin)
-  crosstalk remove-workspace <name>          Unregister a workspace (requires sudo/admin)
+  crosstalk add-workspace <git-url>          Clone a project repo and register it
+  crosstalk remove-workspace <name>          Unregister a workspace
   crosstalk open [--agent <name>] [--workspace <name>] [--actor <name>]
                                              Open an interactive agent session (default actor: concierge)
   crosstalk status                           Show daemon status, transport, and workspaces
