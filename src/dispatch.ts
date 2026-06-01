@@ -4,6 +4,7 @@ import { spawn } from 'child_process';
 import { createHash } from 'crypto';
 import { parseFrontmatter } from './frontmatter.js';
 import { messageFilename, messageDatePath } from './filenames.js';
+import { loadMarchingOrders } from './orders.js';
 import type { AgentConfig } from './config.js';
 
 interface ParsedMessage {
@@ -74,6 +75,16 @@ function isAddressedTo(
 function renderMessage(msg: ParsedMessage): string {
   const to = Array.isArray(msg.to) ? msg.to.join(', ') : msg.to;
   return `[${msg.from} → ${to}, ${msg.timestamp}]\n${msg.body}`;
+}
+
+function buildStdin(systemPrompt: string | undefined, marchingOrders: string | null, identity: string, context: string): string {
+  const parts = [
+    systemPrompt ?? null,
+    marchingOrders ? `--- marching orders ---\n\n${marchingOrders}` : null,
+    identity,
+    context,
+  ].filter((p): p is string => p !== null);
+  return parts.join('\n\n');
 }
 
 function renderContext(context: ParsedMessage[], target: ParsedMessage): string {
@@ -189,10 +200,11 @@ export async function dispatchSingle(opts: {
     if (m && m.type === 'text') contextMessages.push(m);
   }
 
-  const context  = renderContext(contextMessages, msg);
-  const identity = `Your agent name is ${actorName}.`;
-  const stdin    = systemPrompt ? `${systemPrompt}\n\n${identity}\n\n${context}` : `${identity}\n\n${context}`;
-  const spawnCwd = opts.spawnCwd ?? transportPath;
+  const context        = renderContext(contextMessages, msg);
+  const identity       = `Your agent name is ${actorName}.`;
+  const marchingOrders = loadMarchingOrders(transportPath, actorName);
+  const stdin          = buildStdin(systemPrompt, marchingOrders, identity, context);
+  const spawnCwd       = opts.spawnCwd ?? transportPath;
 
   let reply: string;
   try {
@@ -263,13 +275,11 @@ export async function dispatchTick(opts: {
       if (m && m.type === 'text') contextMessages.push(m);
     }
 
-    const context = renderContext(contextMessages, msg);
-    const identity = `Your agent name is ${agent.name}.`;
-    const stdin = systemPrompt
-      ? `${systemPrompt}\n\n${identity}\n\n${context}`
-      : `${identity}\n\n${context}`;
-
-    const spawnCwd = agent.spawnCwd ?? transportPath;
+    const context        = renderContext(contextMessages, msg);
+    const identity       = `Your agent name is ${agent.name}.`;
+    const marchingOrders = loadMarchingOrders(transportPath, agent.name);
+    const stdin          = buildStdin(systemPrompt, marchingOrders, identity, context);
+    const spawnCwd       = agent.spawnCwd ?? transportPath;
     let reply: string;
     try {
       reply = await spawnCli(agent.cli, stdin, spawnCwd);
