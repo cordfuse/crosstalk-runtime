@@ -2,6 +2,51 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.1.1 — 2026-06-01
+
+Reverts the marching orders feature (v3.1.0) — the use case for persistent per-actor directives stored in the transport does not exist yet. `crosstalk open` is the marching orders mechanism: the message you send at session open is the directive. No protocol change; README updated to make this explicit.
+
+## v3.1.0 — 2026-06-01
+
+*(Reverted in v3.1.1)* Marching orders CLI — `crosstalk orders set/show/clear <actor>` stored operational directives in `manifest/orders/<actor>.md` and injected them at dispatch between standing orders and conversation context.
+
+## v3.0.6 — 2026-06-01
+
+Windows one-liner installer (`install.ps1`) — elevation check, fetches latest release from GitHub API, downloads and silently runs the Inno Setup `.exe`, prints next steps. README install section split by platform: Linux/macOS `curl` vs Windows `iex (irm ...)`. Prompt-driven orchestration framing added to README.
+
+## v3.0.5 — 2026-06-01
+
+**Fix: npm publish** — `continue-on-error: true` on the publish step so a missing token does not fail the release workflow.
+
+## v3.0.4 — 2026-06-01
+
+**Fix: CI** — gate npm publish on `env.NPM_TOKEN` (not `secrets.NPM_TOKEN` — secrets context is invalid in step `if` conditions).
+
+## v3.0.3 — 2026-06-01
+
+**Fix: CI** — disable RPM strip/debuginfo hooks that corrupt the cross-architecture Bun binary during `.rpm` packaging.
+
+## v3.0.2 — 2026-06-01
+
+**Fix: CI** — `mkdir -p usr/bin` in `build-deb.sh`; skip Windows smoke test (turnq FFI requires `libc.so.6`, absent on Windows runners).
+
+## v3.0.1 — 2026-06-01
+
+**Fix: legacy config path** — resolve `config.transport` → `config.transports[0].path` in `startAgent` for operators migrating from v2 single-transport configs. Windows Inno Setup installer added to CI (package-windows job).
+
+## v3.0.0 — 2026-06-01
+
+**System daemon rewrite.** Crosstalk Runtime v3 installs as a native system service and ships as platform packages instead of an npm global.
+
+- **Install wizard** (`sudo crosstalk install <git-url>`) — clones transport, installs binary, registers systemd/launchd/Windows service, generates SSH key
+- **Native packages** — `.deb` (Debian/Ubuntu), `.rpm` (Fedora/RHEL), `.pkg.tar.zst` (Arch/CachyOS), Homebrew formula (macOS), Inno Setup `.exe` (Windows); pipe installer (`install.sh` / `install.ps1`) detects platform and installs the right package
+- **Operator commands** — `add-workspace`, `remove-workspace`, `status`, `open`, `init`, `uninstall`
+- **`crosstalk open`** — opens an interactive session with the concierge (or any actor/tier) in the context of a registered workspace; strips headless flags so the agent CLI runs interactively
+- **Multi-transport** — `add-transport` / `remove-transport`; daemon polls all registered transports concurrently
+- **Host files** — actor and tier configuration lives in `manifest/hosts/<alias>.md` in the transport (shared, visible to all operators); local config shrinks to transport path + host alias
+- **`crosstalk init`** — interactive scaffold: prompts for host alias, actor name, CLI command; writes host file to transport, commits, pushes
+- **v2 legacy compatibility** — `agents:` array in local config still works; daemon prints `[v2 legacy]` banner
+
 ## v2.4.3 — 2026-05-31
 
 **Fix: CI packaging** — switch `@cordfuse/turnq` dependency from `file:../turnq` to the npm-published `^0.3.3`. The local path reference caused CI builds to fail (sibling directory absent in the runner), which prevented 2.3.0–2.4.2 from publishing to npm. First npm-published release since v2.2.0.
