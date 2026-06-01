@@ -119,9 +119,44 @@ jobs:
           name: arch-packages
           path: "*.pkg.tar.zst"
 
+  package-windows:
+    name: Package Windows (.exe installer)
+    needs: build-binaries
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build Windows binary
+        run: bun build --compile --target=bun-windows-x64 ./src/runner.ts --outfile crosstalk-windows-x64.exe
+
+      - name: Smoke test
+        run: .\crosstalk-windows-x64.exe --version
+
+      - name: Build Inno Setup installer
+        shell: pwsh
+        run: |
+          $version = "${{ needs.build-binaries.outputs.version }}"
+          Copy-Item crosstalk-windows-x64.exe packaging\crosstalk-windows-x64.exe
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=$version packaging\crosstalk.iss
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            crosstalk-windows-x64.exe
+            packaging/Output/*.exe
+
   release:
     name: Create GitHub Release
-    needs: [build-binaries, package-linux, package-arch]
+    needs: [build-binaries, package-linux, package-arch, package-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -140,16 +175,21 @@ jobs:
         with:
           name: arch-packages
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+
       - name: Make binaries executable
         run: chmod +x crosstalk-linux-* crosstalk-darwin-*
 
       - name: Compute SHA256s
         id: sha
         run: |
-          echo "linux_x64=$(sha256sum crosstalk-linux-x64 | cut -d' ' -f1)"       >> $GITHUB_OUTPUT
-          echo "linux_arm64=$(sha256sum crosstalk-linux-arm64 | cut -d' ' -f1)"   >> $GITHUB_OUTPUT
-          echo "darwin_x64=$(sha256sum crosstalk-darwin-x64 | cut -d' ' -f1)"     >> $GITHUB_OUTPUT
-          echo "darwin_arm64=$(sha256sum crosstalk-darwin-arm64 | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+          echo "linux_x64=$(sha256sum crosstalk-linux-x64 | cut -d' ' -f1)"             >> $GITHUB_OUTPUT
+          echo "linux_arm64=$(sha256sum crosstalk-linux-arm64 | cut -d' ' -f1)"         >> $GITHUB_OUTPUT
+          echo "darwin_x64=$(sha256sum crosstalk-darwin-x64 | cut -d' ' -f1)"           >> $GITHUB_OUTPUT
+          echo "darwin_arm64=$(sha256sum crosstalk-darwin-arm64 | cut -d' ' -f1)"       >> $GITHUB_OUTPUT
+          echo "windows_x64=$(sha256sum crosstalk-windows-x64.exe | cut -d' ' -f1)"     >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -190,14 +230,17 @@ jobs:
             brew install cordfuse/tap/crosstalk-runtime
             ```
 
+            **Manual — Windows:**
+            Download `crosstalk-runtime-setup-${{ needs.build-binaries.outputs.version }}-x64.exe` and run as Administrator. Then open an elevated terminal and run `crosstalk install <git-url>`.
+
             ---
 
             ### After installing
 
             ```sh
-            sudo crosstalk install <git-url>      # clone transport, generate SSH key, register service
-            sudo crosstalk add-workspace <git-url> # add a project repo
-            crosstalk with                         # open an interactive session
+            sudo crosstalk install <git-url>       # clone transport, generate SSH key, register service
+            crosstalk add-workspace <git-url>      # add a project repo
+            crosstalk open                         # open an interactive session
             ```
 
             ### SHA256
@@ -207,15 +250,18 @@ jobs:
             | `crosstalk-linux-arm64`  | `${{ steps.sha.outputs.linux_arm64 }}` |
             | `crosstalk-darwin-x64`   | `${{ steps.sha.outputs.darwin_x64 }}` |
             | `crosstalk-darwin-arm64` | `${{ steps.sha.outputs.darwin_arm64 }}` |
+            | `crosstalk-windows-x64.exe` | `${{ steps.sha.outputs.windows_x64 }}` |
           files: |
             install.sh
             crosstalk-linux-x64
             crosstalk-linux-arm64
             crosstalk-darwin-x64
             crosstalk-darwin-arm64
+            crosstalk-windows-x64.exe
             *.deb
             *.rpm
             *.pkg.tar.zst
+            packaging/Output/*.exe
 
       - name: Update Homebrew formula SHA256s
         env:
