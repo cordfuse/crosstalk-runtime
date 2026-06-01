@@ -6,7 +6,7 @@ import pkg from '../package.json' with { type: 'json' };
 const { version } = pkg;
 import { loadConfig, loadPlatformConfig, configFromFlags, findHostFile, expandHostFile, type AgentConfig, type RuntimeConfig, type HostFile } from './config.js';
 import { runInstall, runUninstall, runAddWorkspace, runRemoveWorkspace, runStatus as runStatusCmd } from './install.js';
-import { runWith } from './with.js';
+import { runOpen } from './open.js';
 import { readCursor, writeCursor, cursorExists, listMessages, messagesAfterCursor, currentTip, discoverChannels } from './cursor.js';
 import { pull, commitAndPush, initCoordinator } from './git.js';
 import { dispatchTick, dispatchSingle } from './dispatch.js';
@@ -20,14 +20,14 @@ Usage:
   crosstalk uninstall [--purge]              Remove the daemon (--purge also wipes data/config)
   crosstalk add-workspace <git-url>          Clone a project repo and register it (requires sudo/admin)
   crosstalk remove-workspace <name>          Unregister a workspace (requires sudo/admin)
-  crosstalk with [--agent <name>] [--workspace <name>] [--actor <name>]
+  crosstalk open [--agent <name>] [--workspace <name>] [--actor <name>]
                                              Open an interactive agent session (default actor: concierge)
   crosstalk status                           Show daemon status, transport, and workspaces
   crosstalk init                             Scaffold a new transport repo
   crosstalk --config <path>                  Run daemon with a specific config file
   crosstalk --transport <path> --agent ...   Run daemon in flag mode (no config file)
 
-Options (with):
+Options (open):
   --agent <name>          Agent to use (matches tier name in host file, e.g. claude, agy)
   --workspace <name>      Workspace repo to open in (required if multiple workspaces registered)
   --actor <name>          Actor to spawn (default: concierge)
@@ -452,7 +452,7 @@ async function runDaemon(config: RuntimeConfig): Promise<void> {
 async function main(): Promise<void> {
   const sub = process.argv[2];
 
-  if (sub === 'with')              { await runWith(process.argv.slice(3)); return; }
+  if (sub === 'open')              { await runOpen(process.argv.slice(3)); return; }
   if (sub === 'install')          { await runInstall(process.argv.slice(3)); return; }
   if (sub === 'uninstall')        { await runUninstall(process.argv.slice(3)); return; }
   if (sub === 'add-workspace')    { await runAddWorkspace(process.argv.slice(3)); return; }
@@ -464,6 +464,8 @@ async function main(): Promise<void> {
     console.log(version);
     return;
   }
+
+  if (!sub) { console.log(HELP); return; }
 
   const { config, configPath } = await resolveConfig();
 

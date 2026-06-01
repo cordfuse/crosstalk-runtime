@@ -110,15 +110,29 @@ function writeConfig(platform: PlatformInfo, transportPath: string): void {
   console.log(`[install] config written to ${platform.paths.configFile}`);
 }
 
-function resolveBinaryPath(): string {
-  const bin = process.execPath;
-  if (bin.includes('node') || bin.includes('bun')) {
+function installBinary(platform: PlatformInfo): string {
+  const dest = platform.id === 'windows'
+    ? 'C:\\Program Files\\crosstalk\\crosstalk.exe'
+    : '/usr/local/bin/crosstalk';
+
+  let src = process.execPath;
+
+  // Running under interpreter (dev mode) — locate the compiled binary via which
+  if (src.includes('node') || src.includes('bun')) {
     try {
-      const which = execSync('which crosstalk 2>/dev/null || where crosstalk 2>nul', { encoding: 'utf-8' }).trim();
-      if (which) return which;
+      const which = execSync('which crosstalk 2>/dev/null', { encoding: 'utf-8' }).trim();
+      if (which) src = which;
     } catch {}
   }
-  return bin;
+
+  if (src !== dest) {
+    mkdirSync(join(dest, '..'), { recursive: true });
+    execSync(`cp ${src} ${dest}`);
+    chmodSync(dest, 0o755);
+    console.log(`[install] binary installed to ${dest}`);
+  }
+
+  return dest;
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────
@@ -143,7 +157,7 @@ export async function runInstall(argv: string[]): Promise<void> {
   const transportPath = cloneTransport(platform, gitUrl);
   writeConfig(platform, transportPath);
 
-  const binaryPath = resolveBinaryPath();
+  const binaryPath = installBinary(platform);
 
   if (platform.serviceManager === 'systemd') {
     systemd.install(platform.paths, binaryPath);
@@ -169,9 +183,16 @@ export async function runUninstall(argv: string[]): Promise<void> {
   const platform = detectPlatform();
   requireRoot(platform);
 
-  if (platform.serviceManager === 'systemd')        systemd.uninstall();
-  else if (platform.serviceManager === 'launchd')   launchd.uninstall();
+  if (platform.serviceManager === 'systemd')          systemd.uninstall();
+  else if (platform.serviceManager === 'launchd')     launchd.uninstall();
   else if (platform.serviceManager === 'windows-scm') winSvc.uninstall();
+
+  // Remove system user
+  if (platform.id === 'linux' || platform.id === 'wsl') {
+    try { execSync(`userdel ${platform.serviceUser}`); console.log(`[uninstall] user '${platform.serviceUser}' removed`); } catch {}
+  } else if (platform.id === 'macos') {
+    try { execSync(`dscl . -delete /Users/${platform.serviceUser}`); console.log(`[uninstall] user '${platform.serviceUser}' removed`); } catch {}
+  }
 
   const wipeData = argv.includes('--purge');
   if (wipeData) {
@@ -219,7 +240,7 @@ export async function runAddWorkspace(argv: string[]): Promise<void> {
   writeFileSync(platform.paths.configFile, stringifyYaml(config));
 
   console.log(`[add-workspace] registered: ${dest}`);
-  console.log(`\nOpen a session:\n  crosstalk with --workspace ${repoName}\n`);
+  console.log(`\nOpen a session:\n  crosstalk open --workspace ${repoName}\n`);
 }
 
 export async function runRemoveWorkspace(argv: string[]): Promise<void> {
