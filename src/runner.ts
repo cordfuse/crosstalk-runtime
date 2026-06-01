@@ -7,7 +7,6 @@ const { version } = pkg;
 import { loadConfig, loadPlatformConfig, configFromFlags, findHostFile, expandHostFile, type AgentConfig, type RuntimeConfig, type HostFile } from './config.js';
 import { runInstall, runUninstall, runAddTransport, runRemoveTransport, runAddWorkspace, runRemoveWorkspace, runStatus as runStatusCmd } from './install.js';
 import { runOpen } from './open.js';
-import { runOrders } from './orders.js';
 import { readCursor, writeCursor, cursorExists, listMessages, messagesAfterCursor, currentTip, discoverChannels } from './cursor.js';
 import { pull, commitAndPush, initCoordinator } from './git.js';
 import { dispatchTick, dispatchSingle } from './dispatch.js';
@@ -28,9 +27,6 @@ Usage:
                                              Unregister a workspace
   crosstalk open [--transport <name>] [--workspace <name>] [--agent <name>] [--actor <name>]
                                              Open an interactive agent session (default actor: concierge)
-  crosstalk orders <actor> [message] [--transport <name>]
-                                             Set marching orders for an actor (injected at dispatch, separate from standing orders)
-  crosstalk orders <actor> --clear           Clear marching orders for an actor
   crosstalk status                           Show daemon status, transports, and workspaces
   crosstalk init                             Scaffold a new transport repo
   crosstalk --config <path>                  Run daemon with a specific config file
@@ -476,7 +472,6 @@ async function main(): Promise<void> {
   if (sub === 'remove-transport') { await runRemoveTransport(process.argv.slice(3)); return; }
   if (sub === 'add-workspace')    { await runAddWorkspace(process.argv.slice(3)); return; }
   if (sub === 'remove-workspace') { await runRemoveWorkspace(process.argv.slice(3)); return; }
-  if (sub === 'orders')           { await runOrders(process.argv.slice(3)); return; }
   if (sub === 'status')           { await runStatusCmd(); return; }
   if (sub === 'init')             { await runInit(process.argv.slice(3)); return; }
 
