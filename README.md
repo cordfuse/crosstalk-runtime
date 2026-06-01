@@ -1,6 +1,8 @@
 # crosstalk-runtime
 
-System daemon that watches Crosstalk transport repos, dispatches messages to AI agent CLIs (Claude, Gemini, agy, etc.), and commits replies back.
+**Prompt-driven multi-agent orchestration.** A system daemon that delivers messages between humans and AI agents using a git repo as the message bus. Agents coordinate through their standing orders — plain-language system prompts that define how they delegate, escalate, and collaborate. No code graphs. No visual builder. The markdown file is the workflow.
+
+Watches Crosstalk transport repos, dispatches messages to agent CLIs (Claude, Gemini, agy, etc.), and commits replies back — all as git commits.
 
 **Haven't set up a transport yet?** Start there first → [cordfuse/crosstalk](https://github.com/cordfuse/crosstalk)
 
@@ -119,6 +121,20 @@ journalctl -u crosstalk -f
 ## SSH / Git auth
 
 `crosstalk install` generates an SSH key at `/var/lib/crosstalk/.ssh/id_ed25519` and prints the public key. Add it to GitHub as a **user-level SSH key** (Settings → SSH and GPG keys) — one key covers all repos, no per-repo deploy keys needed.
+
+---
+
+## How orchestration works
+
+Most orchestrators define agent workflows in code or a visual graph — you wire nodes together and the routing is structural. Crosstalk is different: **orchestration lives in the standing orders**.
+
+Each actor has a system prompt (`manifest/custom/actors/<name>.md` in the transport). That prompt is where you describe how the agent should delegate, escalate, and collaborate. The concierge might say:
+
+> *"When you receive an engineering task, delegate it to `junior-developer`. If it involves security or production infrastructure, escalate to `senior-engineer` instead."*
+
+That prose **is** the routing table. Change the orchestration by editing a markdown file — no redeploy, no graph editor, no code change. Non-engineers can read and modify it directly.
+
+The tradeoff vs code-defined graphs: prompt-driven routing uses agent judgment, not deterministic if-else. For async workflows that's usually a feature, not a bug.
 
 ---
 
