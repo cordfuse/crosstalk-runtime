@@ -283,14 +283,15 @@ jobs:
           git push
 
       - name: Publish to npm (fallback install path)
-        if: ${{ env.NPM_TOKEN != '' }}
+        if: ${{ secrets.NPM_TOKEN != '' }}
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
       - name: npm install + publish
-        if: ${{ env.NPM_TOKEN != '' }}
+        if: ${{ secrets.NPM_TOKEN != '' }}
+        continue-on-error: true
         run: |
           npm install
           npm publish --access public --tag latest
