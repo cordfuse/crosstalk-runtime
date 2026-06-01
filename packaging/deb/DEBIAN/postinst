@@ -8,15 +8,15 @@ if ! id -u crosstalk >/dev/null 2>&1; then
 fi
 
 # Create directories
-mkdir -p /etc/crosstalk /var/lib/crosstalk/transports /var/lib/crosstalk/.ssh
+mkdir -p /etc/crosstalk /var/lib/crosstalk/transports /var/lib/crosstalk/workspaces /var/lib/crosstalk/.ssh
 chown -R crosstalk /var/lib/crosstalk
 chmod 700 /var/lib/crosstalk/.ssh
 
 # Write default config if absent
 if [ ! -f /etc/crosstalk/config.yaml ]; then
-  printf 'transports: []\n' > /etc/crosstalk/config.yaml
+  printf 'transports: []\nworkspaces: []\n' > /etc/crosstalk/config.yaml
   chown root:crosstalk /etc/crosstalk/config.yaml
-  chmod 640 /etc/crosstalk/config.yaml
+  chmod 644 /etc/crosstalk/config.yaml
 fi
 
 # Enable service (don't start — user must add a transport first)

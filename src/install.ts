@@ -20,7 +20,7 @@ function requireRoot(platform: PlatformInfo): void {
 }
 
 function createDirs(paths: PlatformInfo['paths']): void {
-  for (const dir of [paths.configDir, paths.dataDir, paths.transportsDir, paths.sshDir]) {
+  for (const dir of [paths.configDir, paths.dataDir, paths.transportsDir, paths.workspacesDir, paths.sshDir]) {
     mkdirSync(dir, { recursive: true });
   }
   console.log('[install] directories created');
@@ -79,8 +79,9 @@ function writeInitialConfig(platform: PlatformInfo): void {
     console.log('[install] config already exists — skipping');
     return;
   }
-  const config = { transports: [] as string[] };
-  writeFileSync(platform.paths.configFile, stringifyYaml(config), { mode: 0o640 });
+  const config = { transports: [] as string[], workspaces: [] as string[] };
+  // 644: config contains only paths/settings (no secrets); needs to be readable by non-root users for `crosstalk with`
+  writeFileSync(platform.paths.configFile, stringifyYaml(config), { mode: 0o644 });
   if (platform.id !== 'windows') {
     execSync(`chown root:${platform.serviceUser} ${platform.paths.configFile}`);
   }
@@ -225,12 +226,76 @@ export async function runRemoveTransport(argv: string[]): Promise<void> {
   console.log(`[remove-transport] removed from config. Data at ${join(platform.paths.transportsDir, name)} is preserved.`);
 }
 
+export async function runAddWorkspace(argv: string[]): Promise<void> {
+  const platform = detectPlatform();
+  requireRoot(platform);
+
+  const gitUrl = argv[0];
+  if (!gitUrl) {
+    console.error('usage: crosstalk add-workspace <git-url>');
+    process.exit(1);
+  }
+
+  const repoName = gitUrl.replace(/\.git$/, '').split(/[/:]/).at(-1)!;
+  const dest     = join(platform.paths.workspacesDir, repoName);
+
+  if (existsSync(dest)) {
+    console.error(`[add-workspace] already exists: ${dest}`);
+    process.exit(1);
+  }
+
+  const sshKey     = join(platform.paths.sshDir, 'id_ed25519');
+  const knownHosts = join(platform.paths.sshDir, 'known_hosts');
+  const gitSsh     = `ssh -i ${sshKey} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${knownHosts}`;
+
+  console.log(`[add-workspace] cloning ${gitUrl} → ${dest}`);
+  execSync(`GIT_SSH_COMMAND="${gitSsh}" git clone ${gitUrl} ${dest}`, { stdio: 'inherit' });
+
+  if (platform.id !== 'windows') {
+    execSync(`chown -R ${platform.serviceUser} ${dest}`);
+  }
+
+  const raw        = existsSync(platform.paths.configFile) ? readFileSync(platform.paths.configFile, 'utf-8') : '';
+  const config     = raw ? parseYaml(raw) : {};
+  const workspaces: string[] = config.workspaces ?? [];
+  config.workspaces = [...workspaces, dest];
+  writeFileSync(platform.paths.configFile, stringifyYaml(config));
+
+  console.log(`[add-workspace] registered: ${dest}`);
+  console.log(`\nOpen a session:\n  crosstalk with --workspace ${repoName}\n`);
+}
+
+export async function runRemoveWorkspace(argv: string[]): Promise<void> {
+  const platform = detectPlatform();
+  requireRoot(platform);
+
+  const name = argv[0];
+  if (!name) {
+    console.error('usage: crosstalk remove-workspace <name-or-path>');
+    process.exit(1);
+  }
+
+  const raw    = readFileSync(platform.paths.configFile, 'utf-8');
+  const config = parseYaml(raw);
+  const before: string[] = config.workspaces ?? [];
+  const after  = before.filter(w => !w.includes(name));
+
+  if (before.length === after.length) {
+    console.error(`[remove-workspace] no workspace matching "${name}" found`);
+    process.exit(1);
+  }
+
+  config.workspaces = after;
+  writeFileSync(platform.paths.configFile, stringifyYaml(config));
+  console.log(`[remove-workspace] removed from config. Data at ${join(platform.paths.workspacesDir, name)} is preserved.`);
+}
+
 export async function runStatus(): Promise<void> {
   const platform = detectPlatform();
   let svcStatus  = '';
 
-  if (platform.serviceManager === 'systemd')      svcStatus = systemd.status();
-  else if (platform.serviceManager === 'launchd') svcStatus = launchd.status();
+  if (platform.serviceManager === 'systemd')          svcStatus = systemd.status();
+  else if (platform.serviceManager === 'launchd')     svcStatus = launchd.status();
   else if (platform.serviceManager === 'windows-scm') svcStatus = winSvc.status();
   else svcStatus = 'no supported service manager';
 
@@ -238,6 +303,29 @@ export async function runStatus(): Promise<void> {
   console.log(`service-manager:  ${platform.serviceManager}`);
   console.log(`config:           ${platform.paths.configFile}`);
   console.log(`transports-dir:   ${platform.paths.transportsDir}`);
+  console.log(`workspaces-dir:   ${platform.paths.workspacesDir}`);
+
+  const raw    = existsSync(platform.paths.configFile) ? readFileSync(platform.paths.configFile, 'utf-8') : '';
+  const config = raw ? parseYaml(raw) : {};
+  const transports: string[] = config.transports ?? (config.transport ? [config.transport] : []);
+  const workspaces: string[] = config.workspaces ?? [];
+
+  console.log('');
+  if (transports.length === 0) {
+    console.log('transports:       (none)');
+  } else {
+    console.log('transports:');
+    for (const t of transports) console.log(`  ${t}`);
+  }
+
+  console.log('');
+  if (workspaces.length === 0) {
+    console.log('workspaces:       (none)');
+  } else {
+    console.log('workspaces:');
+    for (const w of workspaces) console.log(`  ${w}`);
+  }
+
   console.log('');
   console.log(svcStatus);
 }

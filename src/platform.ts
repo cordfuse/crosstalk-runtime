@@ -8,6 +8,7 @@ export interface PlatformPaths {
   configDir: string;       // /etc/crosstalk
   dataDir: string;         // /var/lib/crosstalk
   transportsDir: string;   // /var/lib/crosstalk/transports
+  workspacesDir: string;   // /var/lib/crosstalk/workspaces
   sshDir: string;          // /var/lib/crosstalk/.ssh
   configFile: string;      // /etc/crosstalk/config.yaml
 }
@@ -38,17 +39,19 @@ function unixPaths(): PlatformPaths {
   const configDir     = '/etc/crosstalk';
   const dataDir       = '/var/lib/crosstalk';
   const transportsDir = join(dataDir, 'transports');
+  const workspacesDir = join(dataDir, 'workspaces');
   const sshDir        = join(dataDir, '.ssh');
   const configFile    = join(configDir, 'config.yaml');
-  return { configDir, dataDir, transportsDir, sshDir, configFile };
+  return { configDir, dataDir, transportsDir, workspacesDir, sshDir, configFile };
 }
 
 function windowsPaths(): PlatformPaths {
   const base          = join(process.env.PROGRAMDATA ?? 'C:\\ProgramData', 'crosstalk');
   const transportsDir = join(base, 'transports');
+  const workspacesDir = join(base, 'workspaces');
   const sshDir        = join(base, '.ssh');
   const configFile    = join(base, 'config.yaml');
-  return { configDir: base, dataDir: base, transportsDir, sshDir, configFile };
+  return { configDir: base, dataDir: base, transportsDir, workspacesDir, sshDir, configFile };
 }
 
 export function detectPlatform(): PlatformInfo {

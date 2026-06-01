@@ -5,7 +5,8 @@ import { hostname as osHostname } from 'os';
 import pkg from '../package.json' with { type: 'json' };
 const { version } = pkg;
 import { loadConfig, loadPlatformConfig, configFromFlags, findHostFile, expandHostFile, type AgentConfig, type RuntimeConfig, type HostFile } from './config.js';
-import { runInstall, runUninstall, runAddTransport, runRemoveTransport, runStatus as runStatusCmd } from './install.js';
+import { runInstall, runUninstall, runAddTransport, runRemoveTransport, runAddWorkspace, runRemoveWorkspace, runStatus as runStatusCmd } from './install.js';
+import { runWith } from './with.js';
 import { readCursor, writeCursor, cursorExists, listMessages, messagesAfterCursor, currentTip, discoverChannels } from './cursor.js';
 import { pull, commitAndPush, initCoordinator } from './git.js';
 import { dispatchTick, dispatchSingle } from './dispatch.js';
@@ -15,16 +16,25 @@ import { runInit } from './init.js';
 
 const HELP = `
 Usage:
+  crosstalk with [--agent <name>] [--workspace <name>] [--actor <name>]
+                                             Open an interactive agent session (default actor: concierge)
   crosstalk install                          Install as a system daemon (requires sudo/admin)
   crosstalk uninstall [--purge]              Remove the system daemon (--purge also wipes data)
   crosstalk add-transport <git-url>          Clone a transport and register it (requires sudo/admin)
   crosstalk remove-transport <name>          Unregister a transport (requires sudo/admin)
-  crosstalk status                           Show daemon status and registered transports
+  crosstalk add-workspace <git-url>          Clone a workspace repo and register it (requires sudo/admin)
+  crosstalk remove-workspace <name>          Unregister a workspace (requires sudo/admin)
+  crosstalk status                           Show daemon status, transports, and workspaces
   crosstalk init [--transport <path>]        Scaffold a new transport repo
-  crosstalk --config <path>                  Run with a specific config file
-  crosstalk --transport <path> --agent ...   Run in flag mode (no config file)
+  crosstalk --config <path>                  Run daemon with a specific config file
+  crosstalk --transport <path> --agent ...   Run daemon in flag mode (no config file)
 
-Options:
+Options (with):
+  --agent <name>          Agent to use (matches tier name in host file, e.g. claude, agy)
+  --workspace <name>      Workspace repo to open in (required if multiple workspaces registered)
+  --actor <name>          Actor to spawn (default: concierge)
+
+Options (daemon):
   --config <path>         Load config from YAML file (default: platform config or config.yaml in CWD)
   --transport <path>      Path to transport repo (flag mode — no YAML needed)
   --agent "name:cli"      Agent definition; repeat for multiple agents
@@ -464,10 +474,13 @@ async function runAllTransports(config: RuntimeConfig): Promise<void> {
 async function main(): Promise<void> {
   const sub = process.argv[2];
 
+  if (sub === 'with')              { await runWith(process.argv.slice(3)); return; }
   if (sub === 'install')          { await runInstall(process.argv.slice(3)); return; }
   if (sub === 'uninstall')        { await runUninstall(process.argv.slice(3)); return; }
   if (sub === 'add-transport')    { await runAddTransport(process.argv.slice(3)); return; }
   if (sub === 'remove-transport') { await runRemoveTransport(process.argv.slice(3)); return; }
+  if (sub === 'add-workspace')    { await runAddWorkspace(process.argv.slice(3)); return; }
+  if (sub === 'remove-workspace') { await runRemoveWorkspace(process.argv.slice(3)); return; }
   if (sub === 'status')           { await runStatusCmd(); return; }
   if (sub === 'init')             { await runInit(process.argv.slice(3)); return; }
 
