@@ -1,0 +1,15 @@
+[Unit]
+Description=Crosstalk Runtime — AI agent messaging daemon
+After=network.target
+
+[Service]
+Type=simple
+User=crosstalk
+ExecStart=/usr/bin/crosstalk --config /etc/crosstalk/config.yaml
+Restart=always
+RestartSec=10
+Environment=HOME=/var/lib/crosstalk
+Environment=GIT_SSH_COMMAND=ssh -i /var/lib/crosstalk/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/var/lib/crosstalk/.ssh/known_hosts
+
+[Install]
+WantedBy=multi-user.target

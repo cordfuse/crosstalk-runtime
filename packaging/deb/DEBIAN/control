@@ -1,0 +1,9 @@
+Package: crosstalk-runtime
+Version: VERSION_PLACEHOLDER
+Architecture: ARCH_PLACEHOLDER
+Maintainer: Cordfuse <hello@cordfuse.ai>
+Depends: git, openssh-client
+Description: Crosstalk Runtime — AI agent messaging daemon
+ Watches Crosstalk transport repos, dispatches messages to AI agent CLIs
+ (Claude, Gemini, etc.), and commits replies back. Runs as a system daemon.
+Homepage: https://github.com/cordfuse/crosstalk-runtime
