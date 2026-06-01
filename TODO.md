@@ -1,6 +1,6 @@
 # TODO — Crosstalk Runtime v3.x
 
-## Current release: v3.1.1
+## Current release: v3.2.0
 
 v3.x is the system daemon generation. Ships as native packages (deb/rpm/pkg/Homebrew/Windows exe), installs via a one-line pipe installer, and runs as a system service.
 

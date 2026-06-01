@@ -2,6 +2,12 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.2.0 — 2026-06-01
+
+**Adaptive polling** — the coordinator re-polls after 1 second when a cycle dispatched work, falling back to the full quiet interval only when the transport has nothing new. During active conversations the daemon picks up follow-up messages nearly immediately instead of waiting for the next tick.
+
+Default interval reduced from 60s → 30s. Operators running high-throughput workloads can set `interval: 5` in their local config.
+
 ## v3.1.1 — 2026-06-01
 
 Reverts the marching orders feature (v3.1.0) — the use case for persistent per-actor directives stored in the transport does not exist yet. `crosstalk open` is the marching orders mechanism: the message you send at session open is the directive. No protocol change; README updated to make this explicit.

@@ -44,7 +44,7 @@ Options (daemon):
   --agent "name:cli"      Agent definition; repeat for multiple agents
   --turnq-url <url>       turnq server URL for distributed push serialization
   --turnq-channel <name>  turnq channel name (default: crosstalk:push)
-  --interval <seconds>    Tick interval per agent (default: 60)
+  --interval <seconds>    Quiet-tick poll interval in seconds (default: 30); active ticks re-poll after 1s
   --channels-dir <path>   Channels dir relative to transport (default: data/channels)
   --help                  Show this message
 `.trim();
@@ -167,12 +167,12 @@ async function runCoordinator(config: RuntimeConfig, hostFile: HostFile): Promis
     ? { url: config.turnq.url, apiKey: config.turnq.apiKey, channel: config.turnq.channel }
     : undefined);
 
-  async function cycle(): Promise<void> {
+  async function cycle(): Promise<boolean> {
     try {
       await pull(transportPath);
     } catch {
       console.error('[v3] git pull failed — skipping cycle');
-      return;
+      return false;
     }
 
     const channels = await discoverChannels(transportPath, config.channelsDir);
@@ -200,7 +200,7 @@ async function runCoordinator(config: RuntimeConfig, hostFile: HostFile): Promis
       }
     }
 
-    if (queue.pendingCount() === 0 && queue.inFlightCount() === 0) return;
+    if (queue.pendingCount() === 0 && queue.inFlightCount() === 0) return false;
 
     // Dispatch: for each actor, drain up to totalCount concurrent jobs
     const promises: Promise<void>[] = [];
@@ -254,15 +254,16 @@ async function runCoordinator(config: RuntimeConfig, hostFile: HostFile): Promis
     }
 
     await Promise.all(promises);
+    return promises.length > 0;
   }
 
-  // Main loop
+  // Main loop — adaptive: re-poll after 1s when work was done, full interval when quiet
   const interval = config.interval;
-  console.log(`[v3] coordinator running — interval=${interval}s`);
+  console.log(`[v3] coordinator running — interval=${interval}s (adaptive)`);
 
   while (true) {
-    await cycle();
-    await new Promise(r => setTimeout(r, interval * 1000));
+    const hadWork = await cycle();
+    await new Promise(r => setTimeout(r, hadWork ? 1000 : interval * 1000));
   }
 }
 

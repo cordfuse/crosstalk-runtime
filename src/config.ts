@@ -32,7 +32,7 @@ export interface TransportEntry {
 export interface RuntimeConfig {
   transports: TransportEntry[]; // one or more registered transports
   channelsDir: string;          // channels dir relative to transport; default: data/channels
-  interval: number;             // default tick interval seconds; default: 60
+  interval: number;             // quiet-tick poll interval seconds; default: 30
   turnq?: TurnqConfig;          // distributed coordinator URL; omit to use local file lock
   agents: AgentConfig[];        // expanded from host file or declared directly
   hostAlias?: string;           // resolved alias from manifest/hosts/<alias>.md; undefined in flag/legacy mode
@@ -157,7 +157,7 @@ export function configFromFlags(argv: string[]): RuntimeConfig {
   return {
     transports: [{ path: transport, workspaces: [] }],
     channelsDir: get('--channels-dir') ?? 'data/channels',
-    interval:    Number(get('--interval') ?? 60),
+    interval:    Number(get('--interval') ?? 30),
     turnq,
     agents,
   };
@@ -189,7 +189,7 @@ export function loadConfig(path: string): RuntimeConfig {
   const base: Omit<RuntimeConfig, 'agents'> = {
     transports,
     channelsDir: String(data.channelsDir ?? 'data/channels'),
-    interval:    Number(data.interval ?? 60),
+    interval:    Number(data.interval ?? 30),
     turnq,
     hostAlias:   data.host ? String(data.host) : undefined,
   };
