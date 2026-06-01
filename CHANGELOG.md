@@ -2,6 +2,20 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.3.0 — 2026-06-01
+
+**`crosstalk auth <cli>`** — authenticates an agent CLI as the daemon user so the daemon can invoke it without manual credential setup.
+
+Runs the specified CLI (e.g. `claude`, `gemini`, `agy`) as the daemon service user with `HOME` set to the daemon data directory. The operator completes whatever login flow the CLI presents — OAuth browser prompt, device code, API key entry — then exits. Credentials land in the daemon user's home and are found automatically on the next dispatch.
+
+```sh
+sudo crosstalk auth claude   # complete OAuth, then exit Claude Code
+sudo crosstalk auth gemini
+sudo systemctl restart crosstalk
+```
+
+Requires sudo. No API key needed for CLIs with OAuth flows.
+
 ## v3.2.0 — 2026-06-01
 
 **Adaptive polling** — the coordinator re-polls after 1 second when a cycle dispatched work, falling back to the full quiet interval only when the transport has nothing new. During active conversations the daemon picks up follow-up messages nearly immediately instead of waiting for the next tick.

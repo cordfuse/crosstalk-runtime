@@ -13,10 +13,12 @@ import { dispatchTick, dispatchSingle } from './dispatch.js';
 import { parseFrontmatter } from './frontmatter.js';
 import { JobQueue, type Job } from './queue.js';
 import { runInit } from './init.js';
+import { runAuth } from './auth.js';
 
 const HELP = `
 Usage:
   crosstalk install <git-url>                Install daemon + clone primary transport (requires sudo)
+  crosstalk auth <cli>                       Authenticate an agent CLI as the daemon user (requires sudo)
   crosstalk uninstall [--purge]              Remove the daemon (--purge also wipes data/config)
   crosstalk add-transport <git-url> [--name <alias>]
                                              Clone and register an additional transport
@@ -467,6 +469,7 @@ async function main(): Promise<void> {
   const sub = process.argv[2];
 
   if (sub === 'open')              { await runOpen(process.argv.slice(3)); return; }
+  if (sub === 'auth')             { await runAuth(process.argv.slice(3)); return; }
   if (sub === 'install')          { await runInstall(process.argv.slice(3)); return; }
   if (sub === 'uninstall')        { await runUninstall(process.argv.slice(3)); return; }
   if (sub === 'add-transport')    { await runAddTransport(process.argv.slice(3)); return; }
