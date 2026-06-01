@@ -7,25 +7,17 @@ if ! id -u crosstalk >/dev/null 2>&1; then
     --home-dir /var/lib/crosstalk crosstalk
 fi
 
-# Create directories
-mkdir -p /etc/crosstalk /var/lib/crosstalk/transports /var/lib/crosstalk/workspaces /var/lib/crosstalk/.ssh
+# Create base directories (transport is cloned by `crosstalk install <git-url>`)
+mkdir -p /etc/crosstalk /var/lib/crosstalk/workspaces /var/lib/crosstalk/.ssh
 chown -R crosstalk /var/lib/crosstalk
 chmod 700 /var/lib/crosstalk/.ssh
 
-# Write default config if absent
-if [ ! -f /etc/crosstalk/config.yaml ]; then
-  printf 'transports: []\nworkspaces: []\n' > /etc/crosstalk/config.yaml
-  chown root:crosstalk /etc/crosstalk/config.yaml
-  chmod 644 /etc/crosstalk/config.yaml
-fi
-
-# Enable service (don't start — user must add a transport first)
+# Enable service unit (don't start — no transport yet)
 systemctl daemon-reload
 systemctl enable crosstalk.service >/dev/null 2>&1 || true
 
 echo ""
 echo "crosstalk-runtime installed."
-echo "Next: generate an SSH key and add a transport:"
-echo "  sudo crosstalk add-transport <git-url>"
-echo "  sudo systemctl start crosstalk"
+echo "Next: run the setup command with your transport repo URL:"
+echo "  sudo crosstalk install <git-url>"
 echo ""

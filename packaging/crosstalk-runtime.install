@@ -1,5 +1,4 @@
 pre_install() {
-    # Create system user
     if ! id -u crosstalk >/dev/null 2>&1; then
         useradd --system --no-create-home --shell /usr/bin/nologin \
             --home-dir /var/lib/crosstalk crosstalk
@@ -7,23 +6,16 @@ pre_install() {
 }
 
 post_install() {
-    mkdir -p /var/lib/crosstalk/transports /var/lib/crosstalk/workspaces /var/lib/crosstalk/.ssh
+    mkdir -p /var/lib/crosstalk/workspaces /var/lib/crosstalk/.ssh
     chown -R crosstalk /var/lib/crosstalk
     chmod 700 /var/lib/crosstalk/.ssh
-
-    if [ ! -f /etc/crosstalk/config.yaml ]; then
-        printf 'transports: []\nworkspaces: []\n' > /etc/crosstalk/config.yaml
-        chown root:crosstalk /etc/crosstalk/config.yaml
-        chmod 644 /etc/crosstalk/config.yaml
-    fi
 
     systemctl daemon-reload
     systemctl enable crosstalk.service
 
     echo ""
     echo "  crosstalk-runtime installed."
-    echo "  Next: sudo crosstalk add-transport <git-url>"
-    echo "        sudo systemctl start crosstalk"
+    echo "  Next: sudo crosstalk install <git-url>"
     echo ""
 }
 

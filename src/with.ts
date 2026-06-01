@@ -24,15 +24,15 @@ export async function runWith(argv: string[]): Promise<void> {
     die('[with] crosstalk is not installed. Run: sudo crosstalk install');
 
   const raw    = readFileSync(platform.paths.configFile, 'utf-8');
-  const config = parseYaml(raw) as { transports?: string[]; workspaces?: string[] };
+  const config = parseYaml(raw) as { transport?: string; workspaces?: string[] };
 
-  const transports: string[] = config.transports ?? [];
+  const transport: string | undefined = config.transport;
   const workspaces: string[] = config.workspaces ?? [];
 
-  if (transports.length === 0)
-    die('[with] no transports registered. Run: sudo crosstalk add-transport <git-url>');
+  if (!transport)
+    die('[with] no transport registered. Run: sudo crosstalk install <git-url>');
 
-  const transportPath = resolve(transports[0]);
+  const transportPath = resolve(transport);
   const hostFile = findHostFile(transportPath);
   if (!hostFile)
     die(`[with] no host file found for this machine in ${transportPath}/manifest/hosts/`);

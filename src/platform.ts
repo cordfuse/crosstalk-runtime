@@ -7,7 +7,7 @@ export type PlatformId = 'linux' | 'macos' | 'wsl' | 'windows';
 export interface PlatformPaths {
   configDir: string;       // /etc/crosstalk
   dataDir: string;         // /var/lib/crosstalk
-  transportsDir: string;   // /var/lib/crosstalk/transports
+  transportDir: string;    // /var/lib/crosstalk/transport  (single transport)
   workspacesDir: string;   // /var/lib/crosstalk/workspaces
   sshDir: string;          // /var/lib/crosstalk/.ssh
   configFile: string;      // /etc/crosstalk/config.yaml
@@ -36,22 +36,22 @@ function hasSystemd(): boolean {
 }
 
 function unixPaths(): PlatformPaths {
-  const configDir     = '/etc/crosstalk';
-  const dataDir       = '/var/lib/crosstalk';
-  const transportsDir = join(dataDir, 'transports');
+  const configDir    = '/etc/crosstalk';
+  const dataDir      = '/var/lib/crosstalk';
+  const transportDir = join(dataDir, 'transport');
   const workspacesDir = join(dataDir, 'workspaces');
-  const sshDir        = join(dataDir, '.ssh');
-  const configFile    = join(configDir, 'config.yaml');
-  return { configDir, dataDir, transportsDir, workspacesDir, sshDir, configFile };
+  const sshDir       = join(dataDir, '.ssh');
+  const configFile   = join(configDir, 'config.yaml');
+  return { configDir, dataDir, transportDir, workspacesDir, sshDir, configFile };
 }
 
 function windowsPaths(): PlatformPaths {
-  const base          = join(process.env.PROGRAMDATA ?? 'C:\\ProgramData', 'crosstalk');
-  const transportsDir = join(base, 'transports');
+  const base         = join(process.env.PROGRAMDATA ?? 'C:\\ProgramData', 'crosstalk');
+  const transportDir = join(base, 'transport');
   const workspacesDir = join(base, 'workspaces');
-  const sshDir        = join(base, '.ssh');
-  const configFile    = join(base, 'config.yaml');
-  return { configDir: base, dataDir: base, transportsDir, workspacesDir, sshDir, configFile };
+  const sshDir       = join(base, '.ssh');
+  const configFile   = join(base, 'config.yaml');
+  return { configDir: base, dataDir: base, transportDir, workspacesDir, sshDir, configFile };
 }
 
 export function detectPlatform(): PlatformInfo {

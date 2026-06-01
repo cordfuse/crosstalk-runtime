@@ -29,23 +29,16 @@ getent passwd crosstalk >/dev/null || \
 exit 0
 
 %post
-mkdir -p /var/lib/crosstalk/transports /var/lib/crosstalk/workspaces /var/lib/crosstalk/.ssh
+mkdir -p /var/lib/crosstalk/workspaces /var/lib/crosstalk/.ssh
 chown -R crosstalk /var/lib/crosstalk
 chmod 700 /var/lib/crosstalk/.ssh
-
-if [ ! -f /etc/crosstalk/config.yaml ]; then
-  printf 'transports: []\nworkspaces: []\n' > /etc/crosstalk/config.yaml
-  chown root:crosstalk /etc/crosstalk/config.yaml
-  chmod 644 /etc/crosstalk/config.yaml
-fi
 
 systemctl daemon-reload >/dev/null 2>&1 || true
 systemctl enable crosstalk.service >/dev/null 2>&1 || true
 
 echo ""
 echo "crosstalk-runtime installed."
-echo "Next: sudo crosstalk add-transport <git-url>"
-echo "      sudo systemctl start crosstalk"
+echo "Next: sudo crosstalk install <git-url>"
 echo ""
 
 %preun

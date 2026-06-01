@@ -7,7 +7,6 @@ arch=('x86_64' 'aarch64')
 url="https://github.com/cordfuse/crosstalk-runtime"
 license=('MIT')
 depends=('git' 'openssh')
-backup=('etc/crosstalk/config.yaml')
 install=crosstalk-runtime.install
 
 source_x86_64=("crosstalk-linux-x64::https://github.com/cordfuse/crosstalk-runtime/releases/download/v${pkgver}/crosstalk-linux-x64")

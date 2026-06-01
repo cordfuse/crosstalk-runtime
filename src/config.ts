@@ -25,8 +25,7 @@ export interface AgentConfig {
 }
 
 export interface RuntimeConfig {
-  transport: string;       // primary transport path (kept for backwards compat)
-  transports: string[];    // all transport paths — v3 system daemon may watch several
+  transport: string;       // path to the single registered transport
   channelsDir: string;     // channels dir relative to transport; default: data/channels
   interval: number;        // default tick interval seconds; default: 60
   turnq?: TurnqConfig;     // distributed coordinator URL; omit to use local file lock
@@ -152,7 +151,6 @@ export function configFromFlags(argv: string[]): RuntimeConfig {
 
   return {
     transport,
-    transports: [transport],
     channelsDir: get('--channels-dir') ?? 'data/channels',
     interval:    Number(get('--interval') ?? 60),
     turnq,
@@ -164,23 +162,16 @@ export function loadConfig(path: string): RuntimeConfig {
   const raw  = readFileSync(path, 'utf-8');
   const data = parseYaml(raw) as Record<string, unknown>;
 
-  // Resolve transport list — support both singular transport: and plural transports:
-  const transportsSingle: string[] = data.transport ? [String(data.transport)] : [];
-  const transportsArray: string[]  = Array.isArray(data.transports)
-    ? (data.transports as unknown[]).map(String)
-    : [];
-  const transports = transportsArray.length > 0 ? transportsArray : transportsSingle;
-
-  if (transports.length === 0) throw new Error('config: transport or transports is required');
+  const transport = data.transport ? String(data.transport) : undefined;
+  if (!transport) throw new Error('config: transport is required');
 
   const turnqYaml = data.turnq as { url?: string; channel?: string } | undefined;
   const turnq: TurnqConfig | undefined = turnqYaml?.url
-    ? { url: turnqYaml?.url, channel: turnqYaml.channel ?? 'crosstalk:push', apiKey: process.env.TURNQ_API_KEY ?? '' }
+    ? { url: turnqYaml.url, channel: turnqYaml.channel ?? 'crosstalk:push', apiKey: process.env.TURNQ_API_KEY ?? '' }
     : undefined;
 
   const base: Omit<RuntimeConfig, 'agents'> = {
-    transport:   transports[0],
-    transports,
+    transport,
     channelsDir: String(data.channelsDir ?? 'data/channels'),
     interval:    Number(data.interval ?? 60),
     turnq,
