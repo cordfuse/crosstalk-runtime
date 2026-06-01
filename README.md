@@ -66,7 +66,16 @@ The daemon runs as a system service (`crosstalk.service`) and starts automatical
 ```
 sudo crosstalk install <git-url>          Clone primary transport, install binary, register service
 sudo crosstalk uninstall [--purge]        Stop and remove the service (--purge wipes /var/lib/crosstalk)
+
+sudo crosstalk agent install <cli>        Install an agent CLI into the daemon user home
+sudo crosstalk agent upgrade <cli>        Upgrade an installed agent CLI to latest
+sudo crosstalk agent uninstall <cli>      Remove an agent CLI from the daemon user home
+crosstalk agent list                      Show known agents and installation status
+
+sudo crosstalk auth <cli>                 Authenticate an agent CLI as the daemon user (OAuth / API key flow)
 ```
+
+Supported agents: `claude`, `agy`, `gemini`, `codex`, `qwen`, `opencode`.
 
 ### Operator day-to-day (no sudo needed)
 
@@ -120,9 +129,50 @@ journalctl -u crosstalk -f
 
 ---
 
+## Agent setup
+
+After `crosstalk install`, set up each agent CLI the daemon will use:
+
+```sh
+# 1. Install the CLI into the daemon user home
+sudo crosstalk agent install claude
+
+# 2. Authenticate (OAuth browser flow or API key entry — runs as the daemon user)
+sudo crosstalk auth claude
+
+# 3. Restart so the daemon picks up the new binary and credentials
+sudo systemctl restart crosstalk
+```
+
+All CLIs must be invoked with a headless skip-permissions flag in your host file:
+
+| CLI | Flag |
+|---|---|
+| `claude` / `agy` | `--dangerously-skip-permissions` |
+| `gemini` / `qwen` | `--yolo` |
+| `codex` | `-s danger-full-access` |
+| `opencode` | *(none)* |
+
+Example host file entry:
+
+```yaml
+actors:
+  concierge:
+    sonnet:
+      cli: claude --model claude-sonnet-4-6 --print --dangerously-skip-permissions
+```
+
+---
+
 ## SSH / Git auth
 
 `crosstalk install` generates an SSH key at `/var/lib/crosstalk/.ssh/id_ed25519` and prints the public key. Add it to GitHub as a **user-level SSH key** (Settings → SSH and GPG keys) — one key covers all repos, no per-repo deploy keys needed.
+
+After adding the key, verify the connection before starting the daemon:
+
+```sh
+sudo -Hu crosstalk ssh -T git@github.com
+```
 
 ---
 

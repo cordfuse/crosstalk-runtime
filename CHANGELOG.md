@@ -2,6 +2,31 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.4.0 — 2026-06-01
+
+**`crosstalk agent install/upgrade/uninstall/list`** — manages agent CLIs in the daemon user home so the daemon is fully self-contained.
+
+```sh
+sudo crosstalk agent install claude    # npm install -g @anthropic-ai/claude-code → /var/lib/crosstalk/.local/bin/
+sudo crosstalk agent install agy       # curl installer → same bin dir
+sudo crosstalk agent upgrade claude    # re-installs latest
+sudo crosstalk agent uninstall claude  # removes from daemon home
+crosstalk agent list                   # shows installed/missing for all known agents
+```
+
+Supported agents: `claude`, `agy`, `gemini`, `codex`, `qwen`, `opencode`.
+
+**`crosstalk auth` fix** — `mkdirSync` runs as root; any credential subdirs it created were root-owned and unreadable by the daemon user. Auth now chowns `$HOME/.claude`, `.config`, `.gemini`, `.local`, and `.npm` to the daemon user before spawning the CLI.
+
+**Headless permission flags** — all CLIs require a skip-permissions flag when running headless. Quick reference:
+
+| CLI | Flag |
+|---|---|
+| `claude` / `agy` | `--dangerously-skip-permissions` |
+| `gemini` / `qwen` | `--yolo` |
+| `codex` | `-s danger-full-access` |
+| `opencode` | *(none)* |
+
 ## v3.3.0 — 2026-06-01
 
 **`crosstalk auth <cli>`** — authenticates an agent CLI as the daemon user so the daemon can invoke it without manual credential setup.

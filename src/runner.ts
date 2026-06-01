@@ -14,10 +14,15 @@ import { parseFrontmatter } from './frontmatter.js';
 import { JobQueue, type Job } from './queue.js';
 import { runInit } from './init.js';
 import { runAuth } from './auth.js';
+import { runAgent } from './agent.js';
 
 const HELP = `
 Usage:
   crosstalk install <git-url>                Install daemon + clone primary transport (requires sudo)
+  crosstalk agent install <cli>              Install an agent CLI into the daemon user home (requires sudo)
+  crosstalk agent upgrade <cli>              Upgrade an installed agent CLI (requires sudo)
+  crosstalk agent uninstall <cli>            Remove an agent CLI from the daemon user home (requires sudo)
+  crosstalk agent list                       List known agents and installation status
   crosstalk auth <cli>                       Authenticate an agent CLI as the daemon user (requires sudo)
   crosstalk uninstall [--purge]              Remove the daemon (--purge also wipes data/config)
   crosstalk add-transport <git-url> [--name <alias>]
@@ -469,7 +474,8 @@ async function main(): Promise<void> {
   const sub = process.argv[2];
 
   if (sub === 'open')              { await runOpen(process.argv.slice(3)); return; }
-  if (sub === 'auth')             { await runAuth(process.argv.slice(3)); return; }
+  if (sub === 'auth')              { await runAuth(process.argv.slice(3)); return; }
+  if (sub === 'agent')             { await runAgent(process.argv.slice(3)); return; }
   if (sub === 'install')          { await runInstall(process.argv.slice(3)); return; }
   if (sub === 'uninstall')        { await runUninstall(process.argv.slice(3)); return; }
   if (sub === 'add-transport')    { await runAddTransport(process.argv.slice(3)); return; }

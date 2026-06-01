@@ -45,13 +45,36 @@ export async function runAuth(argv: string[]): Promise<void> {
     process.exit(1);
   }
 
-  // Ensure daemon home exists with correct ownership
+  // Ensure daemon home exists and is owned by the daemon user.
+  // mkdirSync runs as root; chown fixes both the home dir and any
+  // credential subdirs that a prior root operation may have created.
   mkdirSync(platform.paths.dataDir, { recursive: true });
+  execSync(`chown ${uid}:${gid} "${platform.paths.dataDir}"`);
+  for (const sub of ['.claude', '.config', '.gemini', '.local', '.npm']) {
+    try { execSync(`chown -R ${uid}:${gid} "${platform.paths.dataDir}/${sub}"`); } catch { /* not yet created */ }
+  }
 
-  console.log(`[auth] running ${cli} as ${user} (uid=${uid}) — complete the login flow, then exit`);
+  // Resolve CLI to absolute path. sudo strips PATH, so build a search path
+  // that includes the original operator user's local bin directories.
+  let cliBin = cli;
+  if (!cli.startsWith('/')) {
+    const sudoUser = process.env.SUDO_USER;
+    const extraPaths = sudoUser
+      ? [`/home/${sudoUser}/.local/bin`, `/home/${sudoUser}/.npm-global/bin`]
+      : [];
+    const searchPath = [...extraPaths, '/usr/local/bin', '/usr/bin', '/bin'].join(':');
+    try {
+      cliBin = execSync(`which ${cli}`, { env: { PATH: searchPath }, encoding: 'utf-8' }).trim();
+    } catch {
+      console.error(`[auth] '${cli}' not found — pass the full path or ensure it is installed`);
+      process.exit(1);
+    }
+  }
+
+  console.log(`[auth] running ${cliBin} as ${user} (uid=${uid}) — complete the login flow, then exit`);
   console.log(`[auth] credentials will be stored in ${platform.paths.dataDir}`);
 
-  const result = spawnSync(cli, [], {
+  const result = spawnSync(cliBin, [], {
     stdio: 'inherit',
     uid,
     gid,
@@ -63,6 +86,11 @@ export async function runAuth(argv: string[]): Promise<void> {
       ...(process.env.DISPLAY ? { DISPLAY: process.env.DISPLAY } : {}),
     },
   });
+
+  // Re-chown after the CLI exits — it may have created new credential files as root
+  for (const sub of ['.claude', '.config', '.gemini', '.local', '.npm']) {
+    try { execSync(`chown -R ${uid}:${gid} "${platform.paths.dataDir}/${sub}"`); } catch { /* not yet created */ }
+  }
 
   if (result.error) {
     console.error(`[auth] failed to run '${cli}': ${result.error.message}`);
