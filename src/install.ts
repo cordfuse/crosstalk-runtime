@@ -20,7 +20,7 @@ function requireRoot(platform: PlatformInfo): void {
 }
 
 function createDirs(paths: PlatformInfo['paths']): void {
-  for (const dir of [paths.configDir, paths.dataDir, paths.transportDir, paths.workspacesDir, paths.sshDir]) {
+  for (const dir of [paths.configDir, paths.dataDir, paths.transportDir, paths.transportsDir, paths.workspacesDir, paths.sshDir]) {
     mkdirSync(dir, { recursive: true });
   }
   console.log('[install] directories created');
@@ -50,15 +50,17 @@ function createSystemUser(platform: PlatformInfo): void {
 
 function setOwnership(platform: PlatformInfo): void {
   if (platform.id === 'windows') return;
-  const { dataDir, sshDir, transportDir, workspacesDir } = platform.paths;
+  const { dataDir, sshDir, transportDir, transportsDir, workspacesDir } = platform.paths;
   const user = platform.serviceUser;
   execSync(`chown -R ${user}:${user} ${dataDir}`);
   chmodSync(sshDir, 0o700);
 
-  // Make transport + workspaces group-writable so the operator can write without sudo
-  for (const dir of [transportDir, workspacesDir]) {
-    execSync(`chmod -R g+w ${dir}`);
-    execSync(`find ${dir} -type d -exec chmod g+s {} +`); // setgid — new files inherit group
+  // Make transport dirs + workspaces group-writable so the operator can write without sudo
+  for (const dir of [transportDir, transportsDir, workspacesDir]) {
+    if (existsSync(dir)) {
+      execSync(`chmod -R g+w ${dir}`);
+      execSync(`find ${dir} -type d -exec chmod g+s {} +`); // setgid — new files inherit group
+    }
   }
 
   // Add the invoking operator to the service group
@@ -89,18 +91,12 @@ function generateSshKey(platform: PlatformInfo): string {
   return readFileSync(`${keyPath}.pub`, 'utf-8').trim();
 }
 
-function cloneTransport(platform: PlatformInfo, gitUrl: string): string {
-  const dest   = platform.paths.transportDir;
+function cloneRepo(platform: PlatformInfo, gitUrl: string, dest: string): void {
   const sshKey     = join(platform.paths.sshDir, 'id_ed25519');
   const knownHosts = join(platform.paths.sshDir, 'known_hosts');
   const gitSsh     = `ssh -i ${sshKey} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${knownHosts}`;
 
-  if (existsSync(join(dest, '.git'))) {
-    console.log(`[install] transport already cloned at ${dest} — skipping`);
-    return dest;
-  }
-
-  console.log(`[install] cloning transport ${gitUrl} → ${dest}`);
+  console.log(`[install] cloning ${gitUrl} → ${dest}`);
   execSync(`GIT_SSH_COMMAND="${gitSsh}" git clone ${gitUrl} ${dest}`, { stdio: 'inherit' });
 
   if (platform.id !== 'windows') {
@@ -108,24 +104,29 @@ function cloneTransport(platform: PlatformInfo, gitUrl: string): string {
     execSync(`chmod -R g+w ${dest}`);
     execSync(`find ${dest} -type d -exec chmod g+s {} +`);
   }
-  console.log('[install] transport cloned');
-  return dest;
 }
 
-function writeConfig(platform: PlatformInfo, transportPath: string): void {
-  const existing = existsSync(platform.paths.configFile)
-    ? parseYaml(readFileSync(platform.paths.configFile, 'utf-8'))
-    : {};
+// Read config as raw object, normalising old single-transport format to new array format.
+function readRawConfig(configFile: string): Record<string, unknown> {
+  if (!existsSync(configFile)) return { transports: [] };
+  const raw = parseYaml(readFileSync(configFile, 'utf-8')) as Record<string, unknown>;
+  // Migrate old format
+  if (raw.transport && !raw.transports) {
+    const oldWorkspaces = Array.isArray(raw.workspaces) ? raw.workspaces : [];
+    raw.transports = [{ path: raw.transport, workspaces: oldWorkspaces }];
+    delete raw.transport;
+    delete raw.workspaces;
+  }
+  if (!Array.isArray(raw.transports)) raw.transports = [];
+  return raw;
+}
 
-  existing.transport  = transportPath;
-  existing.workspaces = existing.workspaces ?? [];
-
-  // 664 root:crosstalk — group members (operator) can update workspaces without sudo
-  writeFileSync(platform.paths.configFile, stringifyYaml(existing), { mode: 0o664 });
+function saveConfig(platform: PlatformInfo, config: Record<string, unknown>): void {
+  // 664 root:crosstalk — group members (operator) can update without sudo
+  writeFileSync(platform.paths.configFile, stringifyYaml(config), { mode: 0o664 });
   if (platform.id !== 'windows') {
     execSync(`chown root:${platform.serviceUser} ${platform.paths.configFile}`);
   }
-  console.log(`[install] config written to ${platform.paths.configFile}`);
 }
 
 function installBinary(platform: PlatformInfo): string {
@@ -172,8 +173,21 @@ export async function runInstall(argv: string[]): Promise<void> {
   createSystemUser(platform);
   setOwnership(platform);
   const pubKey = generateSshKey(platform);
-  const transportPath = cloneTransport(platform, gitUrl);
-  writeConfig(platform, transportPath);
+
+  const transportPath = platform.paths.transportDir;
+  if (!existsSync(join(transportPath, '.git'))) {
+    cloneRepo(platform, gitUrl, transportPath);
+  } else {
+    console.log(`[install] transport already cloned at ${transportPath} — skipping`);
+  }
+
+  const config = readRawConfig(platform.paths.configFile);
+  const transports = config.transports as Array<{ path: string; workspaces: string[] }>;
+  if (!transports.some(t => t.path === transportPath)) {
+    transports.push({ path: transportPath, workspaces: [] });
+  }
+  saveConfig(platform, config);
+  console.log(`[install] config written to ${platform.paths.configFile}`);
 
   const binaryPath = installBinary(platform);
 
@@ -189,10 +203,10 @@ export async function runInstall(argv: string[]): Promise<void> {
   }
 
   console.log('\n[install] done.\n');
-  console.log('Add this SSH public key as a deploy key (read/write) on your transport repo:');
+  console.log('Add this SSH public key to your GitHub account (Settings → SSH keys):');
   console.log('\n' + pubKey + '\n');
   console.log('Then add a workspace and start:');
-  console.log('  sudo crosstalk add-workspace <git-url>');
+  console.log('  crosstalk add-workspace <git-url>');
   if (platform.serviceManager === 'systemd') console.log('  sudo systemctl start crosstalk');
   if (platform.serviceManager === 'launchd') console.log('  sudo launchctl load -w /Library/LaunchDaemons/ai.cordfuse.crosstalk.plist');
 }
@@ -222,12 +236,91 @@ export async function runUninstall(argv: string[]): Promise<void> {
   }
 }
 
-export async function runAddWorkspace(argv: string[]): Promise<void> {
+export async function runAddTransport(argv: string[]): Promise<void> {
   const platform = detectPlatform();
 
   const gitUrl = argv[0];
+  if (!gitUrl || gitUrl.startsWith('-')) {
+    console.error('usage: crosstalk add-transport <git-url> [--name <alias>]');
+    process.exit(1);
+  }
+
+  const nameFlag  = argv[argv.indexOf('--name') + 1];
+  const repoName  = nameFlag ?? gitUrl.replace(/\.git$/, '').split(/[/:]/).at(-1)!;
+  const dest      = join(platform.paths.transportsDir, repoName);
+
+  if (existsSync(join(dest, '.git'))) {
+    console.error(`[add-transport] already exists: ${dest}`);
+    process.exit(1);
+  }
+
+  mkdirSync(platform.paths.transportsDir, { recursive: true });
+  cloneRepo(platform, gitUrl, dest);
+
+  const config = readRawConfig(platform.paths.configFile);
+  const transports = config.transports as Array<{ path: string; workspaces: string[] }>;
+  transports.push({ path: dest, workspaces: [] });
+  saveConfig(platform, config);
+
+  console.log(`[add-transport] registered: ${dest}`);
+  console.log(`\nOpen a session:\n  crosstalk open --transport ${repoName}\n`);
+}
+
+export async function runRemoveTransport(argv: string[]): Promise<void> {
+  const platform = detectPlatform();
+
+  const name = argv[0];
+  if (!name) {
+    console.error('usage: crosstalk remove-transport <name-or-path>');
+    process.exit(1);
+  }
+
+  const config = readRawConfig(platform.paths.configFile);
+  const before = config.transports as Array<{ path: string; workspaces: string[] }>;
+  const after  = before.filter(t => !t.path.includes(name));
+
+  if (before.length === after.length) {
+    console.error(`[remove-transport] no transport matching "${name}" found`);
+    process.exit(1);
+  }
+
+  config.transports = after;
+  saveConfig(platform, config);
+  console.log(`[remove-transport] removed from config. Data preserved — delete manually if needed.`);
+}
+
+export async function runAddWorkspace(argv: string[]): Promise<void> {
+  const platform = detectPlatform();
+
+  const gitUrl = argv.find(a => !a.startsWith('-'));
   if (!gitUrl) {
-    console.error('usage: crosstalk add-workspace <git-url>');
+    console.error('usage: crosstalk add-workspace <git-url> [--transport <name>]');
+    process.exit(1);
+  }
+
+  const transportFlag = argv[argv.indexOf('--transport') + 1] as string | undefined;
+
+  const config    = readRawConfig(platform.paths.configFile);
+  const transports = config.transports as Array<{ path: string; workspaces: string[] }>;
+
+  if (transports.length === 0) {
+    console.error('[add-workspace] no transports registered. Run: sudo crosstalk install <git-url>');
+    process.exit(1);
+  }
+
+  let transportEntry: { path: string; workspaces: string[] } | undefined;
+  if (transportFlag) {
+    transportEntry = transports.find(t => t.path === transportFlag || t.path.endsWith('/' + transportFlag));
+    if (!transportEntry) {
+      const names = transports.map(t => t.path.split('/').pop()).join(', ');
+      console.error(`[add-workspace] transport "${transportFlag}" not found. Registered: ${names}`);
+      process.exit(1);
+    }
+  } else if (transports.length === 1) {
+    transportEntry = transports[0];
+  } else {
+    const names = transports.map(t => t.path.split('/').pop()).join(', ');
+    console.error(`[add-workspace] multiple transports registered — specify one:\n  crosstalk add-workspace <git-url> --transport <name>\nAvailable: ${names}`);
     process.exit(1);
   }
 
@@ -239,48 +332,41 @@ export async function runAddWorkspace(argv: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const sshKey     = join(platform.paths.sshDir, 'id_ed25519');
-  const knownHosts = join(platform.paths.sshDir, 'known_hosts');
-  const gitSsh     = `ssh -i ${sshKey} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${knownHosts}`;
-
-  console.log(`[add-workspace] cloning ${gitUrl} → ${dest}`);
-  execSync(`GIT_SSH_COMMAND="${gitSsh}" git clone ${gitUrl} ${dest}`, { stdio: 'inherit' });
-
-  if (platform.id !== 'windows') {
-    execSync(`chown -R ${platform.serviceUser} ${dest}`);
-  }
-
-  const raw        = existsSync(platform.paths.configFile) ? readFileSync(platform.paths.configFile, 'utf-8') : '';
-  const config     = raw ? parseYaml(raw) : {};
-  const workspaces: string[] = config.workspaces ?? [];
-  config.workspaces = [...workspaces, dest];
-  writeFileSync(platform.paths.configFile, stringifyYaml(config));
+  cloneRepo(platform, gitUrl, dest);
+  transportEntry.workspaces = [...(transportEntry.workspaces ?? []), dest];
+  saveConfig(platform, config);
 
   console.log(`[add-workspace] registered: ${dest}`);
-  console.log(`\nOpen a session:\n  crosstalk open --workspace ${repoName}\n`);
+  const transportName = transportEntry.path.split('/').pop();
+  const transportArg  = transports.length > 1 ? ` --transport ${transportName}` : '';
+  console.log(`\nOpen a session:\n  crosstalk open --workspace ${repoName}${transportArg}\n`);
 }
 
 export async function runRemoveWorkspace(argv: string[]): Promise<void> {
   const platform = detectPlatform();
 
-  const name = argv[0];
+  const name = argv.find(a => !a.startsWith('-'));
   if (!name) {
-    console.error('usage: crosstalk remove-workspace <name-or-path>');
+    console.error('usage: crosstalk remove-workspace <name-or-path> [--transport <name>]');
     process.exit(1);
   }
 
-  const raw    = readFileSync(platform.paths.configFile, 'utf-8');
-  const config = parseYaml(raw);
-  const before: string[] = config.workspaces ?? [];
-  const after  = before.filter((w: string) => !w.includes(name));
+  const config     = readRawConfig(platform.paths.configFile);
+  const transports = config.transports as Array<{ path: string; workspaces: string[] }>;
 
-  if (before.length === after.length) {
+  let removed = false;
+  for (const t of transports) {
+    const before = t.workspaces ?? [];
+    const after  = before.filter((w: string) => !w.includes(name));
+    if (after.length < before.length) { t.workspaces = after; removed = true; }
+  }
+
+  if (!removed) {
     console.error(`[remove-workspace] no workspace matching "${name}" found`);
     process.exit(1);
   }
 
-  config.workspaces = after;
-  writeFileSync(platform.paths.configFile, stringifyYaml(config));
+  saveConfig(platform, config);
   console.log(`[remove-workspace] removed from config. Data at ${join(platform.paths.workspacesDir, name)} is preserved.`);
 }
 
@@ -296,19 +382,24 @@ export async function runStatus(): Promise<void> {
   console.log(`platform:         ${platform.id}`);
   console.log(`service-manager:  ${platform.serviceManager}`);
   console.log(`config:           ${platform.paths.configFile}`);
-
-  const raw    = existsSync(platform.paths.configFile) ? readFileSync(platform.paths.configFile, 'utf-8') : '';
-  const config = raw ? parseYaml(raw) : {};
-  const transport: string  = config.transport ?? '(none)';
-  const workspaces: string[] = config.workspaces ?? [];
-
-  console.log(`transport:        ${transport}`);
   console.log('');
-  if (workspaces.length === 0) {
-    console.log('workspaces:       (none)');
+
+  const config     = readRawConfig(platform.paths.configFile);
+  const transports = config.transports as Array<{ path: string; workspaces: string[] }>;
+
+  if (transports.length === 0) {
+    console.log('transports:       (none)');
   } else {
-    console.log('workspaces:');
-    for (const w of workspaces) console.log(`  ${w}`);
+    for (const t of transports) {
+      const name = t.path.split('/').pop();
+      console.log(`transport:        ${t.path}`);
+      const ws = t.workspaces ?? [];
+      if (ws.length === 0) {
+        console.log(`  workspaces:     (none)`);
+      } else {
+        for (const w of ws) console.log(`  workspace:      ${w}`);
+      }
+    }
   }
 
   console.log('');

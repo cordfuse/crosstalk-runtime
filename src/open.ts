@@ -16,6 +16,7 @@ export async function runOpen(argv: string[]): Promise<void> {
 
   const agentFlag     = get('--agent');
   const workspaceFlag = get('--workspace');
+  const transportFlag = get('--transport');
   const actorFlag     = get('--actor') ?? 'concierge';
 
   const platform = detectPlatform();
@@ -24,16 +25,39 @@ export async function runOpen(argv: string[]): Promise<void> {
     die('[open] crosstalk is not installed. Run: sudo crosstalk install');
 
   const raw    = readFileSync(platform.paths.configFile, 'utf-8');
-  const config = parseYaml(raw) as { transport?: string; workspaces?: string[] };
+  const rawConfig = parseYaml(raw) as Record<string, unknown>;
 
-  const transport: string | undefined = config.transport;
-  const workspaces: string[] = config.workspaces ?? [];
+  // Normalise old single-transport format
+  type TransportEntry = { path: string; workspaces: string[] };
+  let transports: TransportEntry[];
+  if (rawConfig.transport && !rawConfig.transports) {
+    const oldWorkspaces = Array.isArray(rawConfig.workspaces) ? rawConfig.workspaces as string[] : [];
+    transports = [{ path: String(rawConfig.transport), workspaces: oldWorkspaces }];
+  } else {
+    transports = (rawConfig.transports as TransportEntry[] | undefined) ?? [];
+  }
 
-  if (!transport)
-    die('[open] no transport registered. Run: sudo crosstalk install <git-url>');
+  if (transports.length === 0)
+    die('[open] no transports registered. Run: sudo crosstalk install <git-url>');
 
-  const transportPath = resolve(transport);
-  const hostFile = findHostFile(transportPath);
+  let transportEntry: TransportEntry;
+  if (transportFlag) {
+    const match = transports.find(t => t.path === transportFlag || t.path.endsWith('/' + transportFlag));
+    if (!match) {
+      const names = transports.map(t => t.path.split('/').pop()).join(', ');
+      die(`[open] transport "${transportFlag}" not found. Registered: ${names}`);
+    }
+    transportEntry = match;
+  } else if (transports.length === 1) {
+    transportEntry = transports[0];
+  } else {
+    const names = transports.map(t => t.path.split('/').pop()).join(', ');
+    die(`[open] multiple transports registered — specify one:\n  crosstalk open --transport <name>\nAvailable: ${names}`);
+  }
+
+  const transportPath = resolve(transportEntry.path);
+  const workspaces    = transportEntry.workspaces ?? [];
+  const hostFile      = findHostFile(transportPath);
   if (!hostFile)
     die(`[open] no host file found for this machine in ${transportPath}/manifest/hosts/`);
 
