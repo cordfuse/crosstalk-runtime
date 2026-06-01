@@ -2,6 +2,10 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.4.1 — 2026-06-01
+
+**`git pull --autostash`** — pull now passes `--autostash` so unstaged local changes (cursor files, temp state) no longer silently block the poll cycle. Previously the daemon appeared to start but never dispatched after accumulating any local writes.
+
 ## v3.4.0 — 2026-06-01
 
 **`crosstalk agent install/upgrade/uninstall/list`** — manages agent CLIs in the daemon user home so the daemon is fully self-contained.

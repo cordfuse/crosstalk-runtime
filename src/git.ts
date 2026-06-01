@@ -21,7 +21,7 @@ function git(cwd: string, args: string[]): Promise<GitResult> {
 }
 
 export async function pull(transportPath: string): Promise<void> {
-  await git(transportPath, ['pull', '--rebase', 'origin', 'main']);
+  await git(transportPath, ['pull', '--rebase', '--autostash', 'origin', 'main']);
 }
 
 let _coordinator: Coordinator | null = null;
