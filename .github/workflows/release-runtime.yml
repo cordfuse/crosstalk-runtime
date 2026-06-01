@@ -46,7 +46,7 @@ jobs:
             crosstalk-darwin-arm64
 
   package-linux:
-    name: Package Linux
+    name: Package Linux (.deb / .rpm)
     needs: build-binaries
     runs-on: ubuntu-latest
     steps:
@@ -86,9 +86,42 @@ jobs:
             *.deb
             *.rpm
 
+  package-arch:
+    name: Package Arch (.pkg.tar.zst)
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Install build tools
+        run: pacman -Sy --noconfirm base-devel git
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+
+      - name: Make binaries executable
+        run: chmod +x crosstalk-linux-*
+
+      - name: Build .pkg.tar.zst (x86_64)
+        run: |
+          chmod +x packaging/build-pkg.sh
+          ./packaging/build-pkg.sh ./crosstalk-linux-x64 ${{ needs.build-binaries.outputs.version }} x86_64
+
+      - name: Build .pkg.tar.zst (aarch64)
+        run: ./packaging/build-pkg.sh ./crosstalk-linux-arm64 ${{ needs.build-binaries.outputs.version }} aarch64
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch-packages
+          path: "*.pkg.tar.zst"
+
   release:
     name: Create GitHub Release
-    needs: [build-binaries, package-linux]
+    needs: [build-binaries, package-linux, package-arch]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -103,6 +136,10 @@ jobs:
         with:
           name: linux-packages
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: arch-packages
+
       - name: Make binaries executable
         run: chmod +x crosstalk-linux-* crosstalk-darwin-*
 
@@ -114,15 +151,6 @@ jobs:
           echo "darwin_x64=$(sha256sum crosstalk-darwin-x64 | cut -d' ' -f1)"     >> $GITHUB_OUTPUT
           echo "darwin_arm64=$(sha256sum crosstalk-darwin-arm64 | cut -d' ' -f1)" >> $GITHUB_OUTPUT
 
-      - name: Determine npm dist-tag
-        id: npmtag
-        run: |
-          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
-            echo "tag=next" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -133,32 +161,43 @@ jobs:
 
             ### Install
 
-            **Arch / CachyOS:**
+            **One-line installer (all platforms):**
             ```sh
-            yay -S crosstalk-runtime
+            curl -fsSL https://github.com/cordfuse/crosstalk-runtime/releases/latest/download/install.sh | bash
             ```
 
-            **Debian / Ubuntu:**
+            The installer detects your OS and package manager, downloads the right package, and installs locally.
+
+            ---
+
+            **Manual — Arch / CachyOS:**
             ```sh
-            curl -LO https://github.com/cordfuse/crosstalk-runtime/releases/download/${{ github.ref_name }}/crosstalk-runtime_${{ needs.build-binaries.outputs.version }}_amd64.deb
+            sudo pacman -U https://github.com/cordfuse/crosstalk-runtime/releases/download/${{ github.ref_name }}/crosstalk-runtime-bin-${{ needs.build-binaries.outputs.version }}-1-x86_64.pkg.tar.zst
+            ```
+
+            **Manual — Debian / Ubuntu:**
+            ```sh
             sudo apt install ./crosstalk-runtime_${{ needs.build-binaries.outputs.version }}_amd64.deb
             ```
 
-            **Fedora / RHEL:**
+            **Manual — Fedora / RHEL:**
             ```sh
-            sudo dnf install https://github.com/cordfuse/crosstalk-runtime/releases/download/${{ github.ref_name }}/crosstalk-runtime-${{ needs.build-binaries.outputs.version }}-1.x86_64.rpm
+            sudo dnf install ./crosstalk-runtime-${{ needs.build-binaries.outputs.version }}-1.x86_64.rpm
             ```
 
-            **macOS (Homebrew):**
+            **Manual — macOS / Linux (Homebrew):**
             ```sh
             brew install cordfuse/tap/crosstalk-runtime
-            sudo brew services start cordfuse/tap/crosstalk-runtime
             ```
 
-            **After installing, add a transport:**
+            ---
+
+            ### After installing
+
             ```sh
-            sudo crosstalk add-transport <git-url>
-            sudo systemctl start crosstalk   # Linux
+            sudo crosstalk install <git-url>      # clone transport, generate SSH key, register service
+            sudo crosstalk add-workspace <git-url> # add a project repo
+            crosstalk with                         # open an interactive session
             ```
 
             ### SHA256
@@ -169,14 +208,14 @@ jobs:
             | `crosstalk-darwin-x64`   | `${{ steps.sha.outputs.darwin_x64 }}` |
             | `crosstalk-darwin-arm64` | `${{ steps.sha.outputs.darwin_arm64 }}` |
           files: |
+            install.sh
             crosstalk-linux-x64
             crosstalk-linux-arm64
             crosstalk-darwin-x64
             crosstalk-darwin-arm64
             *.deb
             *.rpm
-            packaging/PKGBUILD
-            packaging/crosstalk-runtime.install
+            *.pkg.tar.zst
 
       - name: Update Homebrew formula SHA256s
         env:
@@ -206,7 +245,7 @@ jobs:
         if: ${{ env.NPM_TOKEN != '' }}
         run: |
           npm install
-          npm publish --access public --tag ${{ steps.npmtag.outputs.tag }}
+          npm publish --access public --tag latest
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
