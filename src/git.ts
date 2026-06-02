@@ -22,8 +22,15 @@ function git(cwd: string, args: string[]): Promise<GitResult> {
 }
 
 export async function pull(transportPath: string): Promise<void> {
-  const { code, stderr } = await git(transportPath, ['pull', '--rebase', '--autostash', 'origin', 'main']);
-  if (code !== 0) log.error('pull_failed', { stderr: stderr.trim().slice(0, 200) });
+  // fetch + reset --hard is used instead of pull --rebase --autostash because
+  // the daemon never has legitimate unstaged tracked-file changes; reset --hard
+  // is predictable and avoids stash-pop conflicts when host files change upstream.
+  const fetch = await git(transportPath, ['fetch', 'origin', 'main']);
+  if (fetch.code !== 0) {
+    log.error('pull_failed', { stderr: fetch.stderr.trim().slice(0, 200) });
+    return;
+  }
+  await git(transportPath, ['reset', '--hard', 'origin/main']);
 }
 
 let _coordinator: Coordinator | null = null;

@@ -168,8 +168,8 @@ function pickCli(meta: ActorMeta): { tier: string; cli: string } {
 
 async function runCoordinator(config: RuntimeConfig, hostFile: HostFile): Promise<void> {
   const transportPath = resolve(config.transports[0].path);
-  const hostAlias     = hostFile.alias;
-  const actorMeta     = await buildActorMeta(transportPath, hostFile, hostAlias);
+  let hostAlias       = hostFile.alias;
+  let actorMeta       = await buildActorMeta(transportPath, hostFile, hostAlias);
   const queue         = new JobQueue();
 
   console.log(`[v3] host=${hostAlias} actors=${[...actorMeta.keys()].join(', ')}`);
@@ -179,11 +179,19 @@ async function runCoordinator(config: RuntimeConfig, hostFile: HostFile): Promis
     : undefined);
 
   async function cycle(): Promise<boolean> {
-    try {
-      await pull(transportPath);
-    } catch {
-      console.error('[v3] git pull failed — skipping cycle');
-      return false;
+    await pull(transportPath);
+
+    // Reload host file after each pull so actor/CLI changes take effect without restart
+    const reloaded = findHostFile(transportPath, config.hostAlias);
+    if (reloaded) {
+      const newMeta = await buildActorMeta(transportPath, reloaded, reloaded.alias);
+      const oldActors = [...actorMeta.keys()].join(', ');
+      const newActors = [...newMeta.keys()].join(', ');
+      if (oldActors !== newActors || reloaded.alias !== hostAlias) {
+        log.info('host_file_reloaded', { host: reloaded.alias, actors: newActors });
+      }
+      hostAlias = reloaded.alias;
+      actorMeta = newMeta;
     }
 
     const channels = await discoverChannels(transportPath, config.channelsDir);

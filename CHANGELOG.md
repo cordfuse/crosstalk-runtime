@@ -2,6 +2,12 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.7.0 — 2026-06-02
+
+**Pull strategy: `fetch + reset --hard`** — replaced `git pull --rebase --autostash` with `git fetch` + `git reset --hard origin/main`. The daemon transport has no legitimate local tracked-file changes; `--autostash` caused stash-pop conflicts when a host file changed upstream at the same time as local state was stashed. `reset --hard` is predictable, conflict-free, and correct for a daemon whose transport should always mirror the remote.
+
+**Host file hot-reload** — actor configuration is now reloaded after every pull. Adding or changing actors, CLI commands, or tier counts takes effect on the next poll cycle without restarting the daemon. A `host_file_reloaded` log event is emitted when the actor list or host alias changes.
+
 ## v3.6.0 — 2026-06-02
 
 **Dead Letter Queue** — failed dispatches are no longer silently dropped.
