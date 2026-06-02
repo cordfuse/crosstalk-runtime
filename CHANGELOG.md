@@ -2,6 +2,12 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.9.1 — 2026-06-02
+
+**Fix: path separator bugs on Windows** — `open.ts` and `install.ts` used `split('/')` and `endsWith('/' + name)` to extract and match the last path component. Both break on Windows (backslash separators). Replaced with `path.basename()` throughout. Also replaced the equivalent logic in `runAddTransport`, `runAddWorkspace`, and `runStatus` in install.ts.
+
+**CI: Windows smoke test is now mandatory** — removed `continue-on-error: true` and the stale turnq FFI comment. `@cordfuse/turnq` uses an in-process JS mutex (`coordinator-node.js`) with no POSIX FFI dependency; the Windows binary passes `--version` and `--help` cleanly.
+
 ## v3.9.0 — 2026-06-02
 
 **Windows compatibility** — the daemon and all operator commands now run on Windows.

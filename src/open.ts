@@ -1,5 +1,5 @@
 import { readFileSync, existsSync } from 'fs';
-import { resolve } from 'path';
+import { resolve, basename } from 'path';
 import { spawnSync } from 'child_process';
 import { parse as parseYaml } from 'yaml';
 import { detectPlatform } from './platform.js';
@@ -42,16 +42,16 @@ export async function runOpen(argv: string[]): Promise<void> {
 
   let transportEntry: TransportEntry;
   if (transportFlag) {
-    const match = transports.find(t => t.path === transportFlag || t.path.endsWith('/' + transportFlag));
+    const match = transports.find(t => t.path === transportFlag || basename(t.path) === transportFlag);
     if (!match) {
-      const names = transports.map(t => t.path.split('/').pop()).join(', ');
+      const names = transports.map(t => basename(t.path)).join(', ');
       die(`[open] transport "${transportFlag}" not found. Registered: ${names}`);
     }
     transportEntry = match;
   } else if (transports.length === 1) {
     transportEntry = transports[0];
   } else {
-    const names = transports.map(t => t.path.split('/').pop()).join(', ');
+    const names = transports.map(t => basename(t.path)).join(', ');
     die(`[open] multiple transports registered — specify one:\n  crosstalk open --transport <name>\nAvailable: ${names}`);
   }
 
@@ -84,9 +84,9 @@ export async function runOpen(argv: string[]): Promise<void> {
   // Resolve workspace dir: explicit flag > single registered workspace > transport
   let cwd: string;
   if (workspaceFlag) {
-    const match = workspaces.find(w => w === workspaceFlag || w.endsWith('/' + workspaceFlag));
+    const match = workspaces.find(w => w === workspaceFlag || basename(w) === workspaceFlag);
     if (!match) {
-      const names = workspaces.map(w => w.split('/').pop() ?? w).join(', ');
+      const names = workspaces.map(w => basename(w) || w).join(', ');
       die(workspaces.length === 0
         ? `[open] no workspaces registered. Run: sudo crosstalk add-workspace <git-url>`
         : `[open] workspace "${workspaceFlag}" not found. Registered: ${names}`);
@@ -95,7 +95,7 @@ export async function runOpen(argv: string[]): Promise<void> {
   } else if (workspaces.length === 1) {
     cwd = workspaces[0];
   } else if (workspaces.length > 1) {
-    const names = workspaces.map(w => w.split('/').pop() ?? w).join(', ');
+    const names = workspaces.map(w => basename(w) || w).join(', ');
     die(`[open] multiple workspaces registered — specify one:\n  crosstalk open --workspace <name>\nAvailable: ${names}`);
   } else {
     cwd = transportPath;

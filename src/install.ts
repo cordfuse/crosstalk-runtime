@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, copyFileSync, rmSync } from 'fs';
 import { execSync } from 'child_process';
-import { join } from 'path';
+import { join, basename } from 'path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { detectPlatform, isRoot, type PlatformInfo } from './platform.js';
 import * as systemd  from './service/systemd.js';
@@ -269,7 +269,7 @@ export async function runAddTransport(argv: string[]): Promise<void> {
   saveConfig(platform, config);
 
   console.log(`[add-transport] registered: ${dest}`);
-  console.log(`\nOpen a session:\n  crosstalk open --transport ${repoName}\n`);
+  console.log(`\nOpen a session:\n  crosstalk open --transport ${basename(dest)}\n`);
 }
 
 export async function runRemoveTransport(argv: string[]): Promise<void> {
@@ -316,16 +316,16 @@ export async function runAddWorkspace(argv: string[]): Promise<void> {
 
   let transportEntry: { path: string; workspaces: string[] } | undefined;
   if (transportFlag) {
-    transportEntry = transports.find(t => t.path === transportFlag || t.path.endsWith('/' + transportFlag));
+    transportEntry = transports.find(t => t.path === transportFlag || basename(t.path) === transportFlag);
     if (!transportEntry) {
-      const names = transports.map(t => t.path.split('/').pop()).join(', ');
+      const names = transports.map(t => basename(t.path)).join(', ');
       console.error(`[add-workspace] transport "${transportFlag}" not found. Registered: ${names}`);
       process.exit(1);
     }
   } else if (transports.length === 1) {
     transportEntry = transports[0];
   } else {
-    const names = transports.map(t => t.path.split('/').pop()).join(', ');
+    const names = transports.map(t => basename(t.path)).join(', ');
     console.error(`[add-workspace] multiple transports registered — specify one:\n  crosstalk add-workspace <git-url> --transport <name>\nAvailable: ${names}`);
     process.exit(1);
   }
@@ -343,7 +343,7 @@ export async function runAddWorkspace(argv: string[]): Promise<void> {
   saveConfig(platform, config);
 
   console.log(`[add-workspace] registered: ${dest}`);
-  const transportName = transportEntry.path.split('/').pop();
+  const transportName = basename(transportEntry.path);
   const transportArg  = transports.length > 1 ? ` --transport ${transportName}` : '';
   console.log(`\nOpen a session:\n  crosstalk open --workspace ${repoName}${transportArg}\n`);
 }
@@ -397,7 +397,7 @@ export async function runStatus(): Promise<void> {
     console.log('transports:       (none)');
   } else {
     for (const t of transports) {
-      const name = t.path.split('/').pop();
+      const name = basename(t.path);
       console.log(`transport:        ${t.path}`);
       const ws = t.workspaces ?? [];
       if (ws.length === 0) {

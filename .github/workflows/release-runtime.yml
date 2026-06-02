@@ -137,9 +137,9 @@ jobs:
         run: bun build --compile --target=bun-windows-x64 ./src/runner.ts --outfile crosstalk-windows-x64.exe
 
       - name: Smoke test
-        # continue-on-error: @cordfuse/turnq FFI loads libc.so.6 at startup on Windows (tracked separately)
-        continue-on-error: true
-        run: .\crosstalk-windows-x64.exe --version
+        run: |
+          .\crosstalk-windows-x64.exe --version
+          .\crosstalk-windows-x64.exe --help
 
       - name: Build Inno Setup installer
         shell: pwsh
