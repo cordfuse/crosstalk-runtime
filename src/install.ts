@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync } from 'fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, copyFileSync, rmSync } from 'fs';
 import { execSync } from 'child_process';
 import { join } from 'path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
@@ -97,7 +97,10 @@ function cloneRepo(platform: PlatformInfo, gitUrl: string, dest: string): void {
   const gitSsh     = `ssh -i ${sshKey} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${knownHosts}`;
 
   console.log(`[install] cloning ${gitUrl} → ${dest}`);
-  execSync(`GIT_SSH_COMMAND="${gitSsh}" git clone ${gitUrl} ${dest}`, { stdio: 'inherit' });
+  execSync(`git clone ${gitUrl} ${dest}`, {
+    stdio: 'inherit',
+    env: { ...process.env, GIT_SSH_COMMAND: gitSsh },
+  });
 
   if (platform.id !== 'windows') {
     execSync(`chown -R ${platform.serviceUser}:${platform.serviceUser} ${dest}`);
@@ -136,18 +139,19 @@ function installBinary(platform: PlatformInfo): string {
 
   let src = process.execPath;
 
-  // Running under interpreter (dev mode) — locate the compiled binary via which
+  // Running under interpreter (dev mode) — locate the compiled binary
   if (src.includes('node') || src.includes('bun')) {
     try {
-      const which = execSync('which crosstalk 2>/dev/null', { encoding: 'utf-8' }).trim();
-      if (which) src = which;
+      const whichCmd = platform.id === 'windows' ? 'where crosstalk' : 'which crosstalk 2>/dev/null';
+      const found = execSync(whichCmd, { encoding: 'utf-8' }).trim().split('\n')[0].trim();
+      if (found) src = found;
     } catch {}
   }
 
   if (src !== dest) {
     mkdirSync(join(dest, '..'), { recursive: true });
-    execSync(`cp ${src} ${dest}`);
-    chmodSync(dest, 0o755);
+    copyFileSync(src, dest);
+    if (platform.id !== 'windows') chmodSync(dest, 0o755);
     console.log(`[install] binary installed to ${dest}`);
   }
 
@@ -228,8 +232,10 @@ export async function runUninstall(argv: string[]): Promise<void> {
 
   const wipeData = argv.includes('--purge');
   if (wipeData) {
-    execSync(`rm -rf ${platform.paths.dataDir}`);
-    execSync(`rm -rf ${platform.paths.configDir}`);
+    rmSync(platform.paths.dataDir, { recursive: true, force: true });
+    if (platform.paths.configDir !== platform.paths.dataDir) {
+      rmSync(platform.paths.configDir, { recursive: true, force: true });
+    }
     console.log('[uninstall] data and config removed');
   } else {
     console.log(`[uninstall] data preserved at ${platform.paths.dataDir} — run with --purge to remove`);

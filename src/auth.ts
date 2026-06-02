@@ -11,6 +11,17 @@ function lookupGid(username: string): number {
 }
 
 export async function runAuth(argv: string[]): Promise<void> {
+  if (process.platform === 'win32') {
+    console.error(
+      '[auth] Windows: authentication must be done manually.\n' +
+      'Run the agent CLI yourself to complete login, then restart the service:\n\n' +
+      '  claude   (complete OAuth, then exit)\n\n' +
+      'After authenticating:\n' +
+      '  sc.exe stop crosstalk && sc.exe start crosstalk'
+    );
+    process.exit(1);
+  }
+
   const cli = argv[0];
 
   if (!cli) {

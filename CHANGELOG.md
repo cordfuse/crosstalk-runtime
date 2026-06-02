@@ -2,6 +2,16 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.9.0 — 2026-06-02
+
+**Windows compatibility** — the daemon and all operator commands now run on Windows.
+
+- **Wake signal**: Unix domain socket (`/tmp/crosstalk.wake`) replaced with a named pipe (`\\.\pipe\crosstalk-wake`) on Windows; `unlinkSync`/`chmodSync` skipped on Windows (named pipes don't need them)
+- **Install**: `GIT_SSH_COMMAND` is now passed via the `env` option to `execSync` instead of as a shell variable prefix (the shell prefix syntax doesn't work in Windows cmd); `cp` → `fs.copyFileSync`; `which` → `where` on Windows; `rm -rf` → `fs.rmSync({ recursive: true, force: true })` for `--purge`; `chmodSync` on the binary skipped on Windows
+- **`crosstalk auth`**: prints a clear error on Windows explaining that CLI authentication must be done manually (uid/gid/chown not available)
+- **`crosstalk agent`**: `requireSudo` now uses `isRoot()` (via `net session`) on Windows; uid/gid are omitted from `spawnSync` on Windows (service runs as current elevated user); `rm -f` → `unlinkSync`; curl-based installs (agy) print an error with the installer URL on Windows
+- **Note**: `@cordfuse/turnq` coordinator uses an in-process JS mutex — no POSIX FFI involved; the Windows FFI note in TODO was stale and has been removed
+
 ## v3.8.1 — 2026-06-02
 
 **Fix: cursor files gitignored** — `.cursor/` was not in the transport `.gitignore`. Cursor files were committed on each write and then reset by `git reset --hard origin/main` on the next pull cycle, causing the daemon to re-scan already-processed messages every cycle (`hadWork: true` spin with no dispatches). Fix: add `.cursor/` to `.gitignore`, untrack committed cursor files with `git rm -r --cached .cursor/`.
