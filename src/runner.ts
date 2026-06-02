@@ -15,6 +15,8 @@ import { JobQueue, type Job } from './queue.js';
 import { runInit } from './init.js';
 import { log, initLogger } from './log.js';
 import { detectPlatform } from './platform.js';
+import { writeDlqEntry, runDlq } from './dlq.js';
+import { DispatchError } from './dispatch.js';
 import { runAuth } from './auth.js';
 import { runAgent } from './agent.js';
 
@@ -247,11 +249,28 @@ async function runCoordinator(config: RuntimeConfig, hostFile: HostFile): Promis
               if (ok) {
                 await writeCursor(transportPath, job.actor, job.channelGuid, job.messageRelPath);
               } else {
-                console.error(`[${job.actor}] push failed — will retry next cycle`);
+                log.error('push_retry', { actor: job.actor });
               }
             } else {
-              // No reply staged (skipped or failed) — advance cursor anyway
+              // Skipped (not addressed, non-text, empty reply) — advance cursor
               await writeCursor(transportPath, job.actor, job.channelGuid, job.messageRelPath);
+            }
+          } catch (err) {
+            if (err instanceof DispatchError) {
+              const id = writeDlqEntry({
+                actor: job.actor,
+                channel: job.channelGuid,
+                messageRelPath: job.messageRelPath,
+                transportPath,
+                channelsDir: config.channelsDir,
+                cli: job.cli,
+                systemPrompt: meta.systemPrompt,
+                error: err.message,
+              });
+              log.error('dlq_write', { actor: job.actor, id });
+              await writeCursor(transportPath, job.actor, job.channelGuid, job.messageRelPath);
+            } else {
+              log.error('cycle_error', { actor: job.actor, error: String(err) });
             }
           } finally {
             queue.complete(job);
@@ -481,6 +500,7 @@ async function main(): Promise<void> {
   if (sub === 'open')              { await runOpen(process.argv.slice(3)); return; }
   if (sub === 'auth')              { await runAuth(process.argv.slice(3)); return; }
   if (sub === 'agent')             { await runAgent(process.argv.slice(3)); return; }
+  if (sub === 'dlq')               { await runDlq(process.argv.slice(3)); return; }
   if (sub === 'install')          { await runInstall(process.argv.slice(3)); return; }
   if (sub === 'uninstall')        { await runUninstall(process.argv.slice(3)); return; }
   if (sub === 'add-transport')    { await runAddTransport(process.argv.slice(3)); return; }

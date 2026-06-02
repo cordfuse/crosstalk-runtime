@@ -7,6 +7,13 @@ import { messageFilename, messageDatePath } from './filenames.js';
 import type { AgentConfig } from './config.js';
 import { log, traceId } from './log.js';
 
+export class DispatchError extends Error {
+  constructor(message: string, public readonly cli: string) {
+    super(message);
+    this.name = 'DispatchError';
+  }
+}
+
 interface ParsedMessage {
   relPath: string;
   from: string;
@@ -207,7 +214,7 @@ export async function dispatchSingle(opts: {
     const durationMs = Date.now() - t0;
     const errMsg = err instanceof Error ? err.message : String(err);
     log.error('dispatch_failed', { actor: actorName, channel: channelGuid.slice(0, 8), trace, durationMs, error: errMsg.slice(0, 200) });
-    return [];
+    throw new DispatchError(errMsg, cli);
   }
 
   if (!reply) {

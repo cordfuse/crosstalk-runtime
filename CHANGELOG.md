@@ -2,6 +2,18 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.6.0 — 2026-06-02
+
+**Dead Letter Queue** — failed dispatches are no longer silently dropped.
+
+- `DispatchError` thrown on CLI failure; runner catches and writes a JSON entry to `/var/lib/crosstalk/dlq/`
+- Each entry records: actor, channel, messageRelPath, CLI command, error message, attempt count
+- `crosstalk dlq list` — show all pending entries
+- `crosstalk dlq retry <id>` — re-dispatch immediately; drops entry on success, increments attempts on failure
+- `crosstalk dlq drop <id>` — discard entry
+- `crosstalk dlq drop --all` — clear queue
+- Cursor still advances on failure so the daemon doesn't retry endlessly
+
 ## v3.5.0 — 2026-06-02
 
 **Structured JSON logging** — all dispatch events now emit JSON lines to stdout (journald) and `/var/lib/crosstalk/logs/crosstalk.log`.
