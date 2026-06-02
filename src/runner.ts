@@ -17,6 +17,8 @@ import { log, initLogger } from './log.js';
 import { detectPlatform } from './platform.js';
 import { writeDlqEntry, runDlq } from './dlq.js';
 import { DispatchError } from './dispatch.js';
+import { initWakeSocket, sendWake } from './wake.js';
+import { runSend } from './send.js';
 import { runAuth } from './auth.js';
 import { runAgent } from './agent.js';
 
@@ -293,14 +295,22 @@ async function runCoordinator(config: RuntimeConfig, hostFile: HostFile): Promis
     return promises.length > 0;
   }
 
-  // Main loop — adaptive: re-poll after 1s when work was done, full interval when quiet
+  // Main loop — adaptive: re-poll after 1s when work was done, full interval when quiet.
+  // Wake socket allows external callers (crosstalk send) to interrupt the sleep immediately.
   const interval = config.interval;
   console.log(`[v3] coordinator running — interval=${interval}s (adaptive)`);
+
+  let wakeResolve: (() => void) | null = null;
+  initWakeSocket(() => { if (wakeResolve) { wakeResolve(); wakeResolve = null; } });
 
   while (true) {
     const hadWork = await cycle();
     if (hadWork) log.info('poll_cycle', { host: hostAlias, hadWork });
-    await new Promise(r => setTimeout(r, hadWork ? 1000 : interval * 1000));
+    const delayMs = hadWork ? 1000 : interval * 1000;
+    await Promise.race([
+      new Promise<void>(r => setTimeout(r, delayMs)),
+      new Promise<void>(r => { wakeResolve = r; }),
+    ]);
   }
 }
 
@@ -509,6 +519,8 @@ async function main(): Promise<void> {
   if (sub === 'auth')              { await runAuth(process.argv.slice(3)); return; }
   if (sub === 'agent')             { await runAgent(process.argv.slice(3)); return; }
   if (sub === 'dlq')               { await runDlq(process.argv.slice(3)); return; }
+  if (sub === 'send')              { await runSend(process.argv.slice(3)); return; }
+  if (sub === 'wake')              { sendWake(); return; }
   if (sub === 'install')          { await runInstall(process.argv.slice(3)); return; }
   if (sub === 'uninstall')        { await runUninstall(process.argv.slice(3)); return; }
   if (sub === 'add-transport')    { await runAddTransport(process.argv.slice(3)); return; }

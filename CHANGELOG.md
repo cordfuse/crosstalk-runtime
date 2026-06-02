@@ -2,6 +2,16 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.8.0 — 2026-06-02
+
+**`crosstalk send` + Unix wake socket** — sub-second inbound delivery on a single host.
+
+- Daemon opens a Unix socket at `/tmp/crosstalk.wake` on startup (chmod 0666 — any local user can signal it)
+- Poll sleep is now interruptible: a write to the socket cancels the current idle wait and triggers an immediate cycle
+- `crosstalk send --to <actor> [--from <name>] [--channel <uuid>] [--transport <path>] <message>` — writes a message file, commits, pushes, then signals the wake socket
+- `crosstalk wake` — standalone signal for when you push manually and want instant pickup
+- Multi-host note: wake socket only wakes the local daemon; remote hosts still poll at their configured interval
+
 ## v3.7.0 — 2026-06-02
 
 **Pull strategy: `fetch + reset --hard`** — replaced `git pull --rebase --autostash` with `git fetch` + `git reset --hard origin/main`. The daemon transport has no legitimate local tracked-file changes; `--autostash` caused stash-pop conflicts when a host file changed upstream at the same time as local state was stashed. `reset --hard` is predictable, conflict-free, and correct for a daemon whose transport should always mirror the remote.
