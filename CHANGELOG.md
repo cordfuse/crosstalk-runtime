@@ -2,6 +2,10 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.8.1 — 2026-06-02
+
+**Fix: cursor files gitignored** — `.cursor/` was not in the transport `.gitignore`. Cursor files were committed on each write and then reset by `git reset --hard origin/main` on the next pull cycle, causing the daemon to re-scan already-processed messages every cycle (`hadWork: true` spin with no dispatches). Fix: add `.cursor/` to `.gitignore`, untrack committed cursor files with `git rm -r --cached .cursor/`.
+
 ## v3.8.0 — 2026-06-02
 
 **`crosstalk send` + Unix wake socket** — sub-second inbound delivery on a single host.
