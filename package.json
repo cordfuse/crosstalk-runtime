@@ -1,6 +1,6 @@
 {
   "name": "@cordfuse/crosstalk-runtime",
-  "version": "3.9.2",
+  "version": "3.9.3",
   "description": "Crosstalk runtime — lean scheduler that dispatches agent CLIs on a shared git transport",
   "type": "module",
   "main": "dist/runner.js",
@@ -24,7 +24,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@cordfuse/turnq": "^0.3.3",
+    "@cordfuse/turnq": "^0.3.4",
     "yaml": "^2.7.0"
   },
   "devDependencies": {
