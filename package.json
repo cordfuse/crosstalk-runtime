@@ -24,7 +24,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@cordfuse/turnq": "^0.3.3",
+    "@cordfuse/turnq": "^0.3.4",
     "yaml": "^2.7.0"
   },
   "devDependencies": {
