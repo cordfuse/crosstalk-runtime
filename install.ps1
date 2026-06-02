@@ -25,8 +25,12 @@ $release  = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/lates
 $version  = $release.tag_name -replace '^v', ''
 Write-Step "Installing v$version"
 
+# ── Detect architecture ────────────────────────────────────────────────────
+$arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+Write-Step "Detected architecture: $arch"
+
 # ── Download installer ─────────────────────────────────────────────────────
-$installerName = "crosstalk-runtime-setup-$version-x64.exe"
+$installerName = "crosstalk-runtime-setup-$version-$arch.exe"
 $url           = "https://github.com/$Repo/releases/download/v$version/$installerName"
 $tmp           = Join-Path $env:TEMP $installerName
 

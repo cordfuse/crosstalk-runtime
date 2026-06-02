@@ -2,6 +2,15 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.9.2 — 2026-06-02
+
+**Windows ARM64 support** — `crosstalk-windows-arm64.exe` is now built and released alongside the x64 binary.
+
+- `build-binaries` CI job cross-compiles both `bun-windows-x64` and `bun-windows-arm64` from the ubuntu runner; `package-windows` no longer builds its own binary, just runs the Inno Setup installers
+- `packaging/crosstalk-arm64.iss` — Inno Setup script for ARM64 (sets `ArchitecturesAllowed=arm64`, `ArchitecturesInstallIn64BitMode=arm64`)
+- `install.ps1` — detects `PROCESSOR_ARCHITECTURE=ARM64` and downloads the matching installer
+- Release notes updated with separate x64/arm64 download instructions and both SHA256s
+
 ## v3.9.1 — 2026-06-02
 
 **Fix: path separator bugs on Windows** — `open.ts` and `install.ts` used `split('/')` and `endsWith('/' + name)` to extract and match the last path component. Both break on Windows (backslash separators). Replaced with `path.basename()` throughout. Also replaced the equivalent logic in `runAddTransport`, `runAddWorkspace`, and `runStatus` in install.ts.
