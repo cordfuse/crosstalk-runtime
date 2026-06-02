@@ -5,6 +5,7 @@ import { createHash } from 'crypto';
 import { parseFrontmatter } from './frontmatter.js';
 import { messageFilename, messageDatePath } from './filenames.js';
 import type { AgentConfig } from './config.js';
+import { log, traceId } from './log.js';
 
 interface ParsedMessage {
   relPath: string;
@@ -194,16 +195,24 @@ export async function dispatchSingle(opts: {
   const stdin    = systemPrompt ? `${systemPrompt}\n\n${identity}\n\n${context}` : `${identity}\n\n${context}`;
   const spawnCwd = opts.spawnCwd ?? transportPath;
 
+  const trace = traceId(messageRelPath);
+  const cliName = cli.split(' ')[0];
+  log.info('dispatch_start', { actor: actorName, channel: channelGuid.slice(0, 8), trace, cli: cliName, msg: messageRelPath });
+  const t0 = Date.now();
+
   let reply: string;
   try {
     reply = await spawnCli(cli, stdin, spawnCwd);
   } catch (err) {
-    console.error(`[${actorName}] dispatch failed for ${messageRelPath}:`, err);
+    const durationMs = Date.now() - t0;
+    const errMsg = err instanceof Error ? err.message : String(err);
+    log.error('dispatch_failed', { actor: actorName, channel: channelGuid.slice(0, 8), trace, durationMs, error: errMsg.slice(0, 200) });
     return [];
   }
 
   if (!reply) {
-    console.warn(`[${actorName}] empty reply for ${messageRelPath} — skipping`);
+    const durationMs = Date.now() - t0;
+    log.warn('dispatch_skipped', { actor: actorName, channel: channelGuid.slice(0, 8), trace, durationMs, reason: 'empty_reply' });
     return [];
   }
 
@@ -224,6 +233,7 @@ export async function dispatchSingle(opts: {
   await writeFile(join(channelDir, receiptRelPath), readReceiptFile(actorName, msg.from, messageRelPath, receiptNow), 'utf-8');
   stagedFiles.push(`${channelBase}/${receiptRelPath}`);
 
+  log.info('dispatch_complete', { actor: actorName, channel: channelGuid.slice(0, 8), trace, durationMs: Date.now() - t0 });
   return stagedFiles;
 }
 
@@ -270,16 +280,24 @@ export async function dispatchTick(opts: {
       : `${identity}\n\n${context}`;
 
     const spawnCwd = agent.spawnCwd ?? transportPath;
+    const trace = traceId(relPath);
+    const cliName = agent.cli.split(' ')[0];
+    log.info('dispatch_start', { actor: agent.name, channel: channelGuid.slice(0, 8), trace, cli: cliName, msg: relPath });
+    const t0 = Date.now();
+
     let reply: string;
     try {
       reply = await spawnCli(agent.cli, stdin, spawnCwd);
     } catch (err) {
-      console.error(`[${agent.name}] dispatch failed for ${relPath}:`, err);
+      const durationMs = Date.now() - t0;
+      const errMsg = err instanceof Error ? err.message : String(err);
+      log.error('dispatch_failed', { actor: agent.name, channel: channelGuid.slice(0, 8), trace, durationMs, error: errMsg.slice(0, 200) });
       continue;
     }
 
     if (!reply) {
-      console.warn(`[${agent.name}] empty reply for ${relPath} — advancing cursor without filing reply`);
+      const durationMs = Date.now() - t0;
+      log.warn('dispatch_skipped', { actor: agent.name, channel: channelGuid.slice(0, 8), trace, durationMs, reason: 'empty_reply' });
       lastProcessed = relPath;
       continue;
     }
@@ -301,7 +319,7 @@ export async function dispatchTick(opts: {
     await mkdir(join(channelDir, receiptDatePath), { recursive: true });
     await writeFile(join(channelDir, receiptRelPath), readReceiptFile(agent.name, msg.from, relPath, receiptNow), 'utf-8');
     stagedFiles.push(`${channelBase}/${receiptRelPath}`);
-
+    log.info('dispatch_complete', { actor: agent.name, channel: channelGuid.slice(0, 8), trace, durationMs: Date.now() - t0 });
     lastProcessed = relPath;
   }
 

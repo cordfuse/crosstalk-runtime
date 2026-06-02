@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import { createCoordinator, type Coordinator, type CoordinatorOptions } from '@cordfuse/turnq/coordinator';
+import { log } from './log.js';
 
 interface GitResult {
   code: number;
@@ -21,7 +22,8 @@ function git(cwd: string, args: string[]): Promise<GitResult> {
 }
 
 export async function pull(transportPath: string): Promise<void> {
-  await git(transportPath, ['pull', '--rebase', '--autostash', 'origin', 'main']);
+  const { code, stderr } = await git(transportPath, ['pull', '--rebase', '--autostash', 'origin', 'main']);
+  if (code !== 0) log.error('pull_failed', { stderr: stderr.trim().slice(0, 200) });
 }
 
 let _coordinator: Coordinator | null = null;
@@ -61,7 +63,11 @@ export async function commitAndPush(opts: {
     ]);
     if (commitCode !== 0) return true;
     const { code, stderr } = await git(transportPath, ['push', 'origin', 'main']);
-    if (code !== 0) throw new Error(`git push failed: ${stderr}`);
+    if (code !== 0) {
+      log.error('push_failed', { stderr: stderr.trim().slice(0, 200) });
+      throw new Error(`git push failed: ${stderr}`);
+    }
+    log.info('push_complete', { files: files.length });
     return true;
   });
 }

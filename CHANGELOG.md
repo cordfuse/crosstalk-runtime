@@ -2,6 +2,19 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.5.0 — 2026-06-02
+
+**Structured JSON logging** — all dispatch events now emit JSON lines to stdout (journald) and `/var/lib/crosstalk/logs/crosstalk.log`.
+
+Events: `dispatch_start`, `dispatch_complete`, `dispatch_failed`, `dispatch_skipped`, `pull_failed`, `push_complete`, `push_failed`, `poll_cycle`.
+
+Each dispatch event carries a deterministic `trace` field (sha256 of the message path, first 8 chars) for cross-event correlation. Example:
+
+```json
+{"ts":"2026-06-02T12:39:51Z","level":"info","event":"dispatch_start","actor":"junior-developer","channel":"a3e6e4c1","trace":"d81dfe9c","cli":"claude","msg":"2026/06/02/mc4-01.md"}
+{"ts":"2026-06-02T12:39:54Z","level":"info","event":"dispatch_complete","actor":"junior-developer","channel":"a3e6e4c1","trace":"d81dfe9c","durationMs":2841}
+```
+
 ## v3.4.1 — 2026-06-01
 
 **`git pull --autostash`** — pull now passes `--autostash` so unstaged local changes (cursor files, temp state) no longer silently block the poll cycle. Previously the daemon appeared to start but never dispatched after accumulating any local writes.

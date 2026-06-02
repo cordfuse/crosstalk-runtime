@@ -13,6 +13,8 @@ import { dispatchTick, dispatchSingle } from './dispatch.js';
 import { parseFrontmatter } from './frontmatter.js';
 import { JobQueue, type Job } from './queue.js';
 import { runInit } from './init.js';
+import { log, initLogger } from './log.js';
+import { detectPlatform } from './platform.js';
 import { runAuth } from './auth.js';
 import { runAgent } from './agent.js';
 
@@ -270,6 +272,7 @@ async function runCoordinator(config: RuntimeConfig, hostFile: HostFile): Promis
 
   while (true) {
     const hadWork = await cycle();
+    if (hadWork) log.info('poll_cycle', { host: hostAlias, hadWork });
     await new Promise(r => setTimeout(r, hadWork ? 1000 : interval * 1000));
   }
 }
@@ -450,6 +453,8 @@ async function watchConfig(configPath: string): Promise<void> {
 
 async function runDaemon(config: RuntimeConfig): Promise<void> {
   const active: Array<Promise<void>> = [];
+  const platform = detectPlatform();
+  initLogger(join(platform.paths.dataDir, 'logs', 'crosstalk.log'));
 
   for (const entry of config.transports) {
     const transportPath = resolve(entry.path);
