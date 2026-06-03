@@ -26,6 +26,7 @@ Changes:
 - `install.ps1` — replaced with WSL2 redirect (URL stays stable for bookmarks)
 - `README.md` — Windows install section replaced with WSL2 instructions
 - CI — `package-windows` job removed; Windows binaries dropped from build
+- `packaging/crosstalk.iss` / `packaging/crosstalk-arm64.iss` — Inno Setup installers deleted (orphaned; no Windows binary is built)
 
 ## v3.10.3 — 2026-06-03
 

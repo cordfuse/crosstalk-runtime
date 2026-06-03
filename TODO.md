@@ -2,15 +2,15 @@
 
 ## Current release: v3.9.0
 
-v3.x is the system daemon generation. Ships as native packages (deb/rpm/pkg/Homebrew/Windows exe), installs via a one-line pipe installer, and runs as a system service.
+v3.x is the system daemon generation. Ships as native packages (deb/rpm/pkg/Homebrew), installs via a one-line pipe installer, and runs as a system service. **Linux and macOS only — Windows users run inside WSL2 (treated as Linux).**
 
 ---
 
 ## Shipped in v3.x
 
-- [x] System daemon — platform paths, systemd/launchd/Windows service registration
-- [x] Native packaging — `.deb`, `.rpm`, `.pkg.tar.zst`, Homebrew formula, Inno Setup `.exe`
-- [x] Pipe installers — `install.sh` (Linux/macOS), `install.ps1` (Windows)
+- [x] System daemon — platform paths, systemd/launchd service registration
+- [x] Native packaging — `.deb`, `.rpm`, `.pkg.tar.zst`, Homebrew formula
+- [x] Pipe installer — `install.sh` (Linux/macOS); `install.ps1` is a WSL2 redirect stub
 - [x] `sudo crosstalk install <git-url>` — clones transport, installs binary, registers service, generates SSH key
 - [x] `crosstalk open` — interactive agent session in a registered workspace
 - [x] `crosstalk init` — interactive host file scaffold
@@ -19,7 +19,7 @@ v3.x is the system daemon generation. Ships as native packages (deb/rpm/pkg/Home
 - [x] Host files (`manifest/hosts/<alias>.md`) — actor + tier config in the transport
 - [x] Multi-transport — daemon polls all registered transports concurrently
 - [x] v2 legacy `agents:` array compatibility
-- [x] Windows compatibility — named pipe wake signal, cross-platform install/uninstall, Windows guards on Unix-only commands
+- [x] Windows support dropped — `detectPlatform()` hard-stops `win32` with a WSL2 pointer; WSL is treated as Linux (see CHANGELOG v3.11.0)
 - [x] `crosstalk agent install/upgrade/uninstall/list` — daemon-local CLI management
 - [x] `crosstalk auth` ownership fix — chown credential dirs to daemon user
 - [x] Headless skip-permissions flags documented (claude/agy/gemini/qwen/codex)
@@ -30,8 +30,6 @@ v3.x is the system daemon generation. Ships as native packages (deb/rpm/pkg/Home
 
 - [ ] **Tests** — unit tests for `cursor.ts`, `frontmatter.ts`, `filenames.ts`, `dispatch.ts`
 - [ ] **`config.example.yaml`** — keep in sync with README config reference as v3 thin-config format stabilises
-- [ ] **Windows smoke test in CI** — re-enable now that the blocking issues are fixed; confirm daemon starts and wake pipe connects
-- [ ] **`crosstalk auth` on Windows** — currently prints a manual-auth message; a proper implementation would use `runas` or a service-account credential store
 
 ---
 

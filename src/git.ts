@@ -10,9 +10,8 @@ interface GitResult {
 }
 
 // Build GIT_SSH_COMMAND pointing to the crosstalk deploy key so that git
-// operations work when the daemon runs as a service account (e.g. LocalSystem
-// on Windows or a system user on Linux/macOS) that has no SSH agent or
-// user-level credentials configured.
+// operations work when the daemon runs as a system service account
+// (Linux/macOS) that has no SSH agent or user-level credentials configured.
 function sshEnv(): Record<string, string> {
   const { paths } = detectPlatform();
   const key        = join(paths.sshDir, 'id_ed25519');

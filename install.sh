@@ -110,7 +110,7 @@ elif [ "$OS" = "Linux" ]; then
   fi
 
 else
-  die "Unsupported OS: $OS (Windows users: see GitHub Releases for manual install)"
+  die "Unsupported OS: $OS (Windows users: install WSL2 with 'wsl --install', then re-run this script inside a WSL terminal)"
 fi
 
 # ── Post-install instructions ──────────────────────────────────────────────
