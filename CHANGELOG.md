@@ -2,6 +2,10 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.9.5 — 2026-06-03
+
+**Fix: `install.ps1` post-install instructions now reflect the `keygen` → `install` two-step flow.** Step numbering updated (5 steps), SSH key instruction corrected to point at repo Deploy keys rather than account SSH keys.
+
 ## v3.9.4 — 2026-06-03
 
 **Fix: `crosstalk install` no longer generates the SSH key itself.** The original flow generated the key, immediately tried to clone the transport (which failed — the key wasn't on GitHub yet), and only printed the public key after the crash. Split into two explicit steps:
