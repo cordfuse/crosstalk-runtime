@@ -2,6 +2,15 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.11.1 — 2026-06-03
+
+**v3.11.0 mop-up.** Polish from the Windows drop.
+
+- `install.sh` and `src/git.ts` — stale Windows code paths replaced with the WSL2 path
+- `TODO.md` — corrected stale Windows references
+- `packaging/crosstalk.iss` / `packaging/crosstalk-arm64.iss` — orphaned Inno Setup installers deleted (also retro-noted in the v3.11.0 entry below)
+- v3.11.0 changelog — clarified that the `PlatformId` change is a breaking type-narrowing for callers matching on `id === 'linux'`
+
 ## v3.11.0 — 2026-06-03
 
 **Windows support dropped. Use WSL2.**
@@ -18,7 +27,7 @@ curl -fsSL https://github.com/cordfuse/crosstalk-runtime/releases/latest/downloa
 ```
 
 Changes:
-- `src/platform.ts` — `'windows'` removed; `detectPlatform()` throws a clear error on `win32` pointing to WSL2
+- `src/platform.ts` — `PlatformId` is now `'linux' | 'macos' | 'wsl'` (was `'linux' | 'macos' | 'windows'`); `detectPlatform()` throws a clear error on `win32` pointing to WSL2. **Breaking:** callers branching on `id === 'linux'` will now miss WSL2 hosts — use `id === 'linux' || id === 'wsl'` if the distinction doesn't matter
 - `src/service/windows.ts` — deleted
 - `src/install.ts` — all Windows branches removed
 - `src/agent.ts` / `src/auth.ts` — Windows early-exit blocks removed
