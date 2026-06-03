@@ -2,6 +2,10 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.10.1 — 2026-06-03
+
+**CI maintenance** — npm publish now correctly gates on `secrets.NPM_TOKEN` (was `env.NPM_TOKEN`, causing `setup-node` to be skipped and `ENEEDAUTH` on publish). GitHub Actions bumped: `actions/checkout@v6`, `actions/download-artifact@v8`, `actions/setup-node@v6`, `actions/upload-artifact@v7`, `softprops/action-gh-release@v3`.
+
 ## v3.10.0 — 2026-06-03
 
 **`owner/repo` directory structure for transports and workspaces.** Eliminates the conflict risk where two repos with the same name from different owners clobber each other.
