@@ -2,6 +2,13 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.9.4 — 2026-06-03
+
+**Fix: `crosstalk install` no longer generates the SSH key itself.** The original flow generated the key, immediately tried to clone the transport (which failed — the key wasn't on GitHub yet), and only printed the public key after the crash. Split into two explicit steps:
+
+- `crosstalk keygen` — generates the SSH key and prints the public key. Run this first, add the key as a deploy key on your transport repo, then proceed.
+- `crosstalk install <git-url>` — now requires the key to exist (hard-stops with a clear message pointing to `keygen` if not). Also adds `sc.exe start crosstalk` to the Windows post-install hint.
+
 ## v3.9.2 — 2026-06-02
 
 **Windows ARM64 support** — `crosstalk-windows-arm64.exe` is now built and released alongside the x64 binary.

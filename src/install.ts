@@ -160,23 +160,44 @@ function installBinary(platform: PlatformInfo): string {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
+export async function runKeygen(): Promise<void> {
+  const platform = detectPlatform();
+  requireRoot(platform);
+
+  mkdirSync(platform.paths.sshDir, { recursive: true });
+  const pubKey = generateSshKey(platform);
+
+  console.log('\nAdd this SSH public key as a deploy key on your transport repo');
+  console.log('(GitHub → repo Settings → Deploy keys → Add deploy key, allow write access):\n');
+  console.log(pubKey);
+  console.log('\nThen run:');
+  console.log('  sudo crosstalk install <git-url>');
+}
+
 export async function runInstall(argv: string[]): Promise<void> {
   const gitUrl = argv[0];
   if (!gitUrl || gitUrl.startsWith('-')) {
     console.error('usage: sudo crosstalk install <git-url>');
-    console.error('       git-url: SSH URL of your Crosstalk transport repo');
+    console.error('       Run "sudo crosstalk keygen" first to generate and register the SSH deploy key.');
     process.exit(1);
   }
 
   const platform = detectPlatform();
   requireRoot(platform);
 
+  const keyPath = join(platform.paths.sshDir, 'id_ed25519');
+  if (!existsSync(keyPath)) {
+    console.error('[install] no SSH key found. Generate one first:\n');
+    console.error('  sudo crosstalk keygen');
+    console.error('\nAdd the printed key as a deploy key on your transport repo, then re-run install.');
+    process.exit(1);
+  }
+
   console.log(`[install] platform=${platform.id} service-manager=${platform.serviceManager}`);
 
   createDirs(platform.paths);
   createSystemUser(platform);
   setOwnership(platform);
-  const pubKey = generateSshKey(platform);
 
   const transportPath = platform.paths.transportDir;
   if (!existsSync(join(transportPath, '.git'))) {
@@ -206,13 +227,12 @@ export async function runInstall(argv: string[]): Promise<void> {
     console.warn('[install] start the daemon manually: crosstalk --config /etc/crosstalk/config.yaml');
   }
 
-  console.log('\n[install] done.\n');
-  console.log('Add this SSH public key to your GitHub account (Settings → SSH keys):');
-  console.log('\n' + pubKey + '\n');
-  console.log('Then add a workspace and start:');
+  console.log('\n[install] done.');
+  console.log('\nAdd a workspace and start the daemon:');
   console.log('  crosstalk add-workspace <git-url>');
   if (platform.serviceManager === 'systemd') console.log('  sudo systemctl start crosstalk');
   if (platform.serviceManager === 'launchd') console.log('  sudo launchctl load -w /Library/LaunchDaemons/ai.cordfuse.crosstalk.plist');
+  if (platform.serviceManager === 'windows-scm') console.log('  sc.exe start crosstalk');
 }
 
 export async function runUninstall(argv: string[]): Promise<void> {

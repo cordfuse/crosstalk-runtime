@@ -5,7 +5,7 @@ import { hostname as osHostname } from 'os';
 import pkg from '../package.json' with { type: 'json' };
 const { version } = pkg;
 import { loadConfig, loadPlatformConfig, configFromFlags, findHostFile, expandHostFile, type AgentConfig, type RuntimeConfig, type HostFile } from './config.js';
-import { runInstall, runUninstall, runAddTransport, runRemoveTransport, runAddWorkspace, runRemoveWorkspace, runStatus as runStatusCmd } from './install.js';
+import { runKeygen, runInstall, runUninstall, runAddTransport, runRemoveTransport, runAddWorkspace, runRemoveWorkspace, runStatus as runStatusCmd } from './install.js';
 import { runOpen } from './open.js';
 import { readCursor, writeCursor, cursorExists, listMessages, messagesAfterCursor, currentTip, discoverChannels } from './cursor.js';
 import { pull, commitAndPush, initCoordinator } from './git.js';
@@ -24,7 +24,8 @@ import { runAgent } from './agent.js';
 
 const HELP = `
 Usage:
-  crosstalk install <git-url>                Install daemon + clone primary transport (requires sudo)
+  crosstalk keygen                           Generate SSH deploy key + print public key (requires sudo)
+  crosstalk install <git-url>                Clone transport + register service (requires sudo; run keygen first)
   crosstalk agent install <cli>              Install an agent CLI into the daemon user home (requires sudo)
   crosstalk agent upgrade <cli>              Upgrade an installed agent CLI (requires sudo)
   crosstalk agent uninstall <cli>            Remove an agent CLI from the daemon user home (requires sudo)
@@ -521,6 +522,7 @@ async function main(): Promise<void> {
   if (sub === 'dlq')               { await runDlq(process.argv.slice(3)); return; }
   if (sub === 'send')              { await runSend(process.argv.slice(3)); return; }
   if (sub === 'wake')              { sendWake(); return; }
+  if (sub === 'keygen')            { await runKeygen(); return; }
   if (sub === 'install')          { await runInstall(process.argv.slice(3)); return; }
   if (sub === 'uninstall')        { await runUninstall(process.argv.slice(3)); return; }
   if (sub === 'add-transport')    { await runAddTransport(process.argv.slice(3)); return; }
