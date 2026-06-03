@@ -255,7 +255,8 @@ jobs:
             ### After installing
 
             ```sh
-            sudo crosstalk install <git-url>       # clone transport, generate SSH key, register service
+            sudo crosstalk keygen                  # generate SSH deploy key — add printed key to GitHub
+            sudo crosstalk install <git-url>       # clone transport + register service
             crosstalk add-workspace <git-url>      # add a project repo
             crosstalk open                         # open an interactive session
             ```
