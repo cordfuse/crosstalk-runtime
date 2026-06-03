@@ -38,7 +38,7 @@ jobs:
         run: ./crosstalk-linux-x64 --version
 
       - name: Upload binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: binaries
           path: |
@@ -83,7 +83,7 @@ jobs:
         run: ./packaging/build-rpm.sh ./crosstalk-linux-arm64 ${{ needs.build-binaries.outputs.version }} aarch64
 
       - name: Upload packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-packages
           path: |
@@ -118,7 +118,7 @@ jobs:
         run: ./packaging/build-pkg.sh ./crosstalk-linux-arm64 ${{ needs.build-binaries.outputs.version }} aarch64
 
       - name: Upload packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: arch-packages
           path: "*.pkg.tar.zst"
@@ -154,7 +154,7 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=$version packaging\crosstalk-arm64.iss
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-installer
           path: |
