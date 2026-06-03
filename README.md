@@ -8,6 +8,18 @@ Watches Crosstalk transport repos, dispatches messages to agent CLIs (Claude, Ge
 
 ---
 
+## Platform support
+
+**Linux and macOS only.** Windows is not supported — run crosstalk inside WSL2:
+
+```powershell
+# Elevated PowerShell — one-time setup
+wsl --install
+# Reboot, then open a WSL terminal and use the Linux installer below
+```
+
+---
+
 ## Install
 
 **Linux / macOS — one-line installer:**
@@ -18,14 +30,6 @@ curl -fsSL https://github.com/cordfuse/crosstalk-runtime/releases/latest/downloa
 
 Detects your OS and package manager, downloads the right package, and installs it.
 
-**Windows — one-line installer (elevated PowerShell):**
-
-```powershell
-iex (irm https://github.com/cordfuse/crosstalk-runtime/releases/latest/download/install.ps1)
-```
-
-Downloads and silently runs the Inno Setup installer, then prints next steps.
-
 **Manual:**
 
 | Platform | Command |
@@ -34,7 +38,6 @@ Downloads and silently runs the Inno Setup installer, then prints next steps.
 | Debian / Ubuntu | `sudo apt install ./crosstalk-runtime_<version>_amd64.deb` |
 | Fedora / RHEL | `sudo dnf install ./crosstalk-runtime-<version>-1.x86_64.rpm` |
 | macOS (Homebrew) | `brew install cordfuse/tap/crosstalk-runtime` |
-| Windows | Run `crosstalk-runtime-setup-<version>-x64.exe` as Administrator |
 
 All packages are on the [releases page](https://github.com/cordfuse/crosstalk-runtime/releases).
 
@@ -43,13 +46,22 @@ All packages are on the [releases page](https://github.com/cordfuse/crosstalk-ru
 ## Quickstart
 
 ```sh
-# 1. Install the daemon and clone your transport (requires sudo)
-sudo crosstalk install https://github.com/you/your-transport.git
+# 1. Generate an SSH deploy key
+sudo crosstalk keygen
+# Add the printed public key to your transport repo:
+# GitHub → repo Settings → Deploy keys → Add deploy key (allow write access)
 
-# 2. Add a project repo as a workspace
-crosstalk add-workspace https://github.com/you/your-project.git
+# 2. Install the daemon and clone your transport (requires sudo)
+sudo crosstalk install git@github.com:you/your-transport.git
 
-# 3. Issue marching orders
+# 3. Start the daemon
+sudo systemctl start crosstalk   # Linux
+# sudo launchctl load -w /Library/LaunchDaemons/ai.cordfuse.crosstalk.plist  # macOS
+
+# 4. (Optional) Add a project repo as a workspace
+crosstalk add-workspace git@github.com:you/your-project.git
+
+# 5. Open a session
 crosstalk open
 ```
 
@@ -64,15 +76,16 @@ The daemon runs as a system service (`crosstalk.service`) and starts automatical
 ### Setup (requires sudo)
 
 ```
-sudo crosstalk install <git-url>          Clone primary transport, install binary, register service
-sudo crosstalk uninstall [--purge]        Stop and remove the service (--purge wipes /var/lib/crosstalk)
+sudo crosstalk keygen                    Generate SSH deploy key and print public key
+sudo crosstalk install <git-url>         Clone primary transport, install binary, register service
+sudo crosstalk uninstall [--purge]       Stop and remove the service (--purge wipes /var/lib/crosstalk)
 
-sudo crosstalk agent install <cli>        Install an agent CLI into the daemon user home
-sudo crosstalk agent upgrade <cli>        Upgrade an installed agent CLI to latest
-sudo crosstalk agent uninstall <cli>      Remove an agent CLI from the daemon user home
-crosstalk agent list                      Show known agents and installation status
+sudo crosstalk agent install <cli>       Install an agent CLI into the daemon user home
+sudo crosstalk agent upgrade <cli>       Upgrade an installed agent CLI to latest
+sudo crosstalk agent uninstall <cli>     Remove an agent CLI from the daemon user home
+crosstalk agent list                     Show known agents and installation status
 
-sudo crosstalk auth <cli>                 Authenticate an agent CLI as the daemon user (OAuth / API key flow)
+sudo crosstalk auth <cli>                Authenticate an agent CLI as the daemon user (OAuth / API key flow)
 ```
 
 Supported agents: `claude`, `agy`, `gemini`, `codex`, `qwen`, `opencode`.
@@ -107,10 +120,10 @@ crosstalk status                                           Show daemon state, tr
 Each transport is an independent Crosstalk channel repo. Register as many as you like:
 
 ```sh
-sudo crosstalk install https://github.com/you/transport-a.git
-crosstalk add-transport https://github.com/you/transport-b.git --name work
+sudo crosstalk install git@github.com:you/transport-a.git
+crosstalk add-transport git@github.com:you/transport-b.git --name work
 
-crosstalk add-workspace https://github.com/you/project.git --transport work
+crosstalk add-workspace git@github.com:you/project.git --transport work
 crosstalk open --transport work --workspace project
 ```
 
@@ -166,7 +179,7 @@ actors:
 
 ## SSH / Git auth
 
-`crosstalk install` generates an SSH key at `/var/lib/crosstalk/.ssh/id_ed25519` and prints the public key. Add it to GitHub as a **user-level SSH key** (Settings → SSH and GPG keys) — one key covers all repos, no per-repo deploy keys needed.
+`crosstalk keygen` generates an SSH key at `/var/lib/crosstalk/.ssh/id_ed25519` and prints the public key. Add it as a **deploy key** on each transport repo (GitHub → repo Settings → Deploy keys → Add deploy key, allow write access).
 
 After adding the key, verify the connection before starting the daemon:
 
@@ -220,9 +233,9 @@ actors:
 
 ## Requirements
 
-- A Crosstalk v2 transport → [cordfuse/crosstalk](https://github.com/cordfuse/crosstalk)
+- A Crosstalk transport repo → [cordfuse/crosstalk](https://github.com/cordfuse/crosstalk)
 - At least one agent CLI installed and authenticated (`claude`, `gemini`, `agy`, etc.)
-- Linux (x64/arm64), macOS (x64/arm64), or Windows x64
+- Linux (x64/arm64), macOS (x64/arm64), or WSL2 on Windows
 
 ---
 

@@ -5,7 +5,6 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { detectPlatform, isRoot, type PlatformInfo } from './platform.js';
 import * as systemd  from './service/systemd.js';
 import * as launchd  from './service/launchd.js';
-import * as winSvc   from './service/windows.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -29,10 +28,7 @@ function transportLabel(fullPath: string): string {
 
 function requireRoot(platform: PlatformInfo): void {
   if (!isRoot()) {
-    const cmd = platform.id === 'windows'
-      ? 'Run this command in an elevated (Administrator) terminal.'
-      : `Re-run with sudo:\n\n  sudo crosstalk ${process.argv[2]} ${process.argv.slice(3).join(' ')}`.trimEnd();
-    console.error(`[install] root/admin privileges required.\n${cmd}`);
+    console.error(`[install] root/admin privileges required.\nRe-run with sudo:\n\n  sudo crosstalk ${process.argv[2]} ${process.argv.slice(3).join(' ')}`.trimEnd());
     process.exit(1);
   }
 }
@@ -63,11 +59,9 @@ function createSystemUser(platform: PlatformInfo): void {
     execSync(`dscl . -create /Users/${user} NFSHomeDirectory ${platform.paths.dataDir}`);
     console.log(`[install] system user '${user}' created`);
   }
-  // Windows: NT SERVICE\<name> is a virtual account — no creation needed
 }
 
 function setOwnership(platform: PlatformInfo): void {
-  if (platform.id === 'windows') return;
   const { dataDir, sshDir, transportsDir, workspacesDir } = platform.paths;
   const user = platform.serviceUser;
   execSync(`chown -R ${user}:${user} ${dataDir}`);
@@ -99,11 +93,9 @@ function generateSshKey(platform: PlatformInfo): string {
     console.log('[install] SSH key already exists — skipping generation');
   } else {
     execSync(`ssh-keygen -t ed25519 -C "crosstalk@${platform.id}" -N "" -f ${keyPath}`);
-    if (platform.id !== 'windows') {
-      const user = platform.serviceUser;
-      execSync(`chown ${user} ${keyPath} ${keyPath}.pub`);
-      chmodSync(keyPath, 0o600);
-    }
+    const user = platform.serviceUser;
+    execSync(`chown ${user} ${keyPath} ${keyPath}.pub`);
+    chmodSync(keyPath, 0o600);
     console.log(`[install] SSH key generated at ${keyPath}`);
   }
   return readFileSync(`${keyPath}.pub`, 'utf-8').trim();
@@ -120,11 +112,9 @@ function cloneRepo(platform: PlatformInfo, gitUrl: string, dest: string): void {
     env: { ...process.env, GIT_SSH_COMMAND: gitSsh },
   });
 
-  if (platform.id !== 'windows') {
-    execSync(`chown -R ${platform.serviceUser}:${platform.serviceUser} ${dest}`);
-    execSync(`chmod -R g+w ${dest}`);
-    execSync(`find ${dest} -type d -exec chmod g+s {} +`);
-  }
+  execSync(`chown -R ${platform.serviceUser}:${platform.serviceUser} ${dest}`);
+  execSync(`chmod -R g+w ${dest}`);
+  execSync(`find ${dest} -type d -exec chmod g+s {} +`);
 }
 
 // Read config as raw object, normalising old single-transport format to new array format.
@@ -145,23 +135,17 @@ function readRawConfig(configFile: string): Record<string, unknown> {
 function saveConfig(platform: PlatformInfo, config: Record<string, unknown>): void {
   // 664 root:crosstalk — group members (operator) can update without sudo
   writeFileSync(platform.paths.configFile, stringifyYaml(config), { mode: 0o664 });
-  if (platform.id !== 'windows') {
-    execSync(`chown root:${platform.serviceUser} ${platform.paths.configFile}`);
-  }
+  execSync(`chown root:${platform.serviceUser} ${platform.paths.configFile}`);
 }
 
 function installBinary(platform: PlatformInfo): string {
-  const dest = platform.id === 'windows'
-    ? 'C:\\Program Files\\crosstalk\\crosstalk.exe'
-    : '/usr/local/bin/crosstalk';
-
+  const dest = '/usr/local/bin/crosstalk';
   let src = process.execPath;
 
   // Running under interpreter (dev mode) — locate the compiled binary
   if (src.includes('node') || src.includes('bun')) {
     try {
-      const whichCmd = platform.id === 'windows' ? 'where crosstalk' : 'which crosstalk 2>/dev/null';
-      const found = execSync(whichCmd, { encoding: 'utf-8' }).trim().split('\n')[0].trim();
+      const found = execSync('which crosstalk 2>/dev/null', { encoding: 'utf-8' }).trim().split('\n')[0].trim();
       if (found) src = found;
     } catch {}
   }
@@ -169,7 +153,7 @@ function installBinary(platform: PlatformInfo): string {
   if (src !== dest) {
     mkdirSync(join(dest, '..'), { recursive: true });
     copyFileSync(src, dest);
-    if (platform.id !== 'windows') chmodSync(dest, 0o755);
+    chmodSync(dest, 0o755);
     console.log(`[install] binary installed to ${dest}`);
   }
 
@@ -239,28 +223,24 @@ export async function runInstall(argv: string[]): Promise<void> {
     systemd.install(platform.paths, binaryPath);
   } else if (platform.serviceManager === 'launchd') {
     launchd.install(platform.paths, binaryPath);
-  } else if (platform.serviceManager === 'windows-scm') {
-    winSvc.install(platform.paths, binaryPath);
   } else {
     console.warn('[install] no supported service manager detected (WSL without systemd?)');
     console.warn('[install] start the daemon manually: crosstalk --config /etc/crosstalk/config.yaml');
   }
 
   console.log('\n[install] done.');
-  console.log('\nAdd a workspace and start the daemon:');
-  console.log('  crosstalk add-workspace <git-url>');
+  console.log('\nNext steps:');
   if (platform.serviceManager === 'systemd') console.log('  sudo systemctl start crosstalk');
   if (platform.serviceManager === 'launchd') console.log('  sudo launchctl load -w /Library/LaunchDaemons/ai.cordfuse.crosstalk.plist');
-  if (platform.serviceManager === 'windows-scm') console.log('  sc.exe start crosstalk');
+  console.log('  crosstalk open');
 }
 
 export async function runUninstall(argv: string[]): Promise<void> {
   const platform = detectPlatform();
   requireRoot(platform);
 
-  if (platform.serviceManager === 'systemd')          systemd.uninstall();
-  else if (platform.serviceManager === 'launchd')     launchd.uninstall();
-  else if (platform.serviceManager === 'windows-scm') winSvc.uninstall();
+  if (platform.serviceManager === 'systemd')      systemd.uninstall();
+  else if (platform.serviceManager === 'launchd') launchd.uninstall();
 
   // Remove system user
   if (platform.id === 'linux' || platform.id === 'wsl') {
@@ -433,9 +413,8 @@ export async function runStatus(): Promise<void> {
   const platform = detectPlatform();
   let svcStatus  = '';
 
-  if (platform.serviceManager === 'systemd')          svcStatus = systemd.status();
-  else if (platform.serviceManager === 'launchd')     svcStatus = launchd.status();
-  else if (platform.serviceManager === 'windows-scm') svcStatus = winSvc.status();
+  if (platform.serviceManager === 'systemd')      svcStatus = systemd.status();
+  else if (platform.serviceManager === 'launchd') svcStatus = launchd.status();
   else svcStatus = 'no supported service manager';
 
   console.log(`platform:         ${platform.id}`);
@@ -450,7 +429,6 @@ export async function runStatus(): Promise<void> {
     console.log('transports:       (none)');
   } else {
     for (const t of transports) {
-      const name = basename(t.path);
       console.log(`transport:        ${t.path}`);
       const ws = t.workspaces ?? [];
       if (ws.length === 0) {

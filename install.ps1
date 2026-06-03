@@ -1,61 +1,25 @@
-# Crosstalk Runtime installer for Windows
-# Usage (elevated PowerShell):
-#   iex (irm https://github.com/cordfuse/crosstalk-runtime/releases/latest/download/install.ps1)
+# Crosstalk Runtime — Windows is not supported.
 #
-# Requires: PowerShell 5.1+ and an elevated (Administrator) session.
-# Downloads and silently runs the Inno Setup installer, then prints next steps.
+# Crosstalk runs on Linux and macOS. Windows users must use WSL2.
+#
+# ONE-TIME SETUP (run once in an elevated PowerShell):
+#   wsl --install
+#   # Reboot when prompted, then open a WSL terminal and run:
+#   curl -fsSL https://github.com/cordfuse/crosstalk-runtime/releases/latest/download/install.sh | bash
 
-#Requires -Version 5.1
-
-$ErrorActionPreference = 'Stop'
-$Repo = 'cordfuse/crosstalk-runtime'
-
-function Write-Step($msg) { Write-Host "[crosstalk] $msg" -ForegroundColor Green }
-function Write-Warn($msg) { Write-Host "[crosstalk] $msg" -ForegroundColor Yellow }
-
-# ── Elevation check ────────────────────────────────────────────────────────
-$currentPrincipal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Error "Run this script from an elevated (Administrator) PowerShell session."
-}
-
-# ── Latest version ─────────────────────────────────────────────────────────
-Write-Step "Fetching latest release..."
-$release  = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest"
-$version  = $release.tag_name -replace '^v', ''
-Write-Step "Installing v$version"
-
-# ── Detect architecture ────────────────────────────────────────────────────
-$arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
-Write-Step "Detected architecture: $arch"
-
-# ── Download installer ─────────────────────────────────────────────────────
-$installerName = "crosstalk-runtime-setup-$version-$arch.exe"
-$url           = "https://github.com/$Repo/releases/download/v$version/$installerName"
-$tmp           = Join-Path $env:TEMP $installerName
-
-Write-Step "Downloading $installerName..."
-Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
-
-# ── Silent install ─────────────────────────────────────────────────────────
-Write-Step "Running installer (silent)..."
-$proc = Start-Process -FilePath $tmp -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
-if ($proc.ExitCode -ne 0) {
-    Write-Error "Installer exited with code $($proc.ExitCode)"
-}
-Remove-Item $tmp -ErrorAction SilentlyContinue
-
-# ── Post-install instructions ──────────────────────────────────────────────
 Write-Host ""
-Write-Step "Done! Next steps (run in an elevated terminal):"
-Write-Host "  1. Generate your SSH deploy key:"
-Write-Host "       crosstalk keygen"
-Write-Host "  2. Add the printed key to your transport repo on GitHub:"
-Write-Host "       repo Settings -> Deploy keys -> Add deploy key (allow write access)"
-Write-Host "  3. Install the daemon with your transport repo:"
-Write-Host "       crosstalk install <git-url>"
-Write-Host "  4. (Optional) Add a workspace repo for agents to work in:"
-Write-Host "       crosstalk add-workspace <git-url>"
-Write-Host "  5. Open a session:"
-Write-Host "       crosstalk open"
+Write-Host "Crosstalk does not support native Windows." -ForegroundColor Red
+Write-Host ""
+Write-Host "Use WSL2 instead — it takes two steps:" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "  1. Install WSL2 (elevated PowerShell, one time):" -ForegroundColor White
+Write-Host "       wsl --install" -ForegroundColor Cyan
+Write-Host "       # Reboot when prompted" -ForegroundColor Gray
+Write-Host ""
+Write-Host "  2. Open a WSL terminal and run the Linux installer:" -ForegroundColor White
+Write-Host "       curl -fsSL https://github.com/cordfuse/crosstalk-runtime/releases/latest/download/install.sh | bash" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "WSL2 gives you full Linux systemd, SSH, and service management." -ForegroundColor Gray
+Write-Host "The daemon runs as a Linux process; Claude Code and other agent CLIs" -ForegroundColor Gray
+Write-Host "work identically to a native Linux install." -ForegroundColor Gray
 Write-Host ""

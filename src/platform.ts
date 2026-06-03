@@ -2,7 +2,7 @@ import { join } from 'path';
 import { existsSync } from 'fs';
 import { execSync } from 'child_process';
 
-export type PlatformId = 'linux' | 'macos' | 'wsl' | 'windows';
+export type PlatformId = 'linux' | 'macos' | 'wsl';
 
 export interface PlatformPaths {
   configDir: string;        // /etc/crosstalk
@@ -17,7 +17,7 @@ export interface PlatformInfo {
   id: PlatformId;
   paths: PlatformPaths;
   serviceUser: string;
-  serviceManager: 'systemd' | 'launchd' | 'windows-scm' | 'none';
+  serviceManager: 'systemd' | 'launchd' | 'none';
   hasSystemd: boolean;
 }
 
@@ -45,24 +45,13 @@ function unixPaths(): PlatformPaths {
   return { configDir, dataDir, transportsDir, workspacesDir, sshDir, configFile };
 }
 
-function windowsPaths(): PlatformPaths {
-  const base          = join(process.env.PROGRAMDATA ?? 'C:\\ProgramData', 'crosstalk');
-  const transportsDir = join(base, 'transports');
-  const workspacesDir = join(base, 'workspaces');
-  const sshDir        = join(base, '.ssh');
-  const configFile    = join(base, 'config.yaml');
-  return { configDir: base, dataDir: base, transportsDir, workspacesDir, sshDir, configFile };
-}
-
 export function detectPlatform(): PlatformInfo {
   if (process.platform === 'win32') {
-    return {
-      id: 'windows',
-      paths: windowsPaths(),
-      serviceUser: 'NT SERVICE\\crosstalk',
-      serviceManager: 'windows-scm',
-      hasSystemd: false,
-    };
+    throw new Error(
+      'Windows is not supported. Run crosstalk inside WSL2:\n' +
+      '  wsl --install   (one-time setup, then reboot)\n' +
+      '  wsl             (open a WSL shell, then run the Linux installer)'
+    );
   }
 
   if (process.platform === 'darwin') {
@@ -88,13 +77,5 @@ export function detectPlatform(): PlatformInfo {
 }
 
 export function isRoot(): boolean {
-  if (process.platform === 'win32') {
-    try {
-      execSync('net session', { stdio: 'ignore' });
-      return true;
-    } catch {
-      return false;
-    }
-  }
   return process.getuid?.() === 0;
 }

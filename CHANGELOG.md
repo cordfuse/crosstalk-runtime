@@ -2,6 +2,31 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.11.0 — 2026-06-03
+
+**Windows support dropped. Use WSL2.**
+
+Native Windows never worked reliably: the Windows Service Control Manager, SSH credential handling under `LocalSystem`, and `GIT_SSH_COMMAND` path parsing each introduced their own failure modes. The effort to keep them aligned was disproportionate to the benefit.
+
+**If you are on Windows: install WSL2 and use the Linux path.**
+
+```powershell
+# Elevated PowerShell — one time
+wsl --install
+# Reboot, open a WSL terminal, then:
+curl -fsSL https://github.com/cordfuse/crosstalk-runtime/releases/latest/download/install.sh | bash
+```
+
+Changes:
+- `src/platform.ts` — `'windows'` removed; `detectPlatform()` throws a clear error on `win32` pointing to WSL2
+- `src/service/windows.ts` — deleted
+- `src/install.ts` — all Windows branches removed
+- `src/agent.ts` / `src/auth.ts` — Windows early-exit blocks removed
+- `src/wake.ts` — named pipe removed; Unix domain socket only (`/tmp/crosstalk.wake`)
+- `install.ps1` — replaced with WSL2 redirect (URL stays stable for bookmarks)
+- `README.md` — Windows install section replaced with WSL2 instructions
+- CI — `package-windows` job removed; Windows binaries dropped from build
+
 ## v3.10.3 — 2026-06-03
 
 **Fix: `crosstalk install` is now idempotent on Windows.** `sc.exe create` was throwing when the service already existed from a prior install attempt. Windows service manager now stops and deletes the existing service before recreating, so re-running install always succeeds cleanly.

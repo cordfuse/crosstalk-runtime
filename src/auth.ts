@@ -11,17 +11,6 @@ function lookupGid(username: string): number {
 }
 
 export async function runAuth(argv: string[]): Promise<void> {
-  if (process.platform === 'win32') {
-    console.error(
-      '[auth] Windows: authentication must be done manually.\n' +
-      'Run the agent CLI yourself to complete login, then restart the service:\n\n' +
-      '  claude   (complete OAuth, then exit)\n\n' +
-      'After authenticating:\n' +
-      '  sc.exe stop crosstalk && sc.exe start crosstalk'
-    );
-    process.exit(1);
-  }
-
   const cli = argv[0];
 
   if (!cli) {
@@ -57,8 +46,6 @@ export async function runAuth(argv: string[]): Promise<void> {
   }
 
   // Ensure daemon home exists and is owned by the daemon user.
-  // mkdirSync runs as root; chown fixes both the home dir and any
-  // credential subdirs that a prior root operation may have created.
   mkdirSync(platform.paths.dataDir, { recursive: true });
   execSync(`chown ${uid}:${gid} "${platform.paths.dataDir}"`);
   for (const sub of ['.claude', '.config', '.gemini', '.local', '.npm']) {

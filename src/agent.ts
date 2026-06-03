@@ -1,7 +1,7 @@
 import { spawnSync, execSync } from 'child_process';
 import { existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import { detectPlatform, isRoot } from './platform.js';
+import { detectPlatform } from './platform.js';
 
 function lookupUid(username: string): number {
   return parseInt(execSync(`id -u ${username}`, { encoding: 'utf-8' }).trim());
@@ -29,24 +29,16 @@ const AGENTS: Record<string, AgentDef> = {
 const AGENT_NAMES = Object.keys(AGENTS).join(', ');
 
 function requireElevated(): void {
-  const elevated = process.platform === 'win32' ? isRoot() : process.getuid?.() === 0;
-  if (!elevated) {
-    const hint = process.platform === 'win32'
-      ? 'Run this command in an elevated (Administrator) terminal.'
-      : `Re-run with sudo:\n\n  sudo crosstalk agent ${process.argv.slice(3).join(' ')}`.trimEnd();
-    console.error(`[agent] elevated privileges required.\n${hint}`);
+  if (process.getuid?.() !== 0) {
+    console.error(`[agent] elevated privileges required.\nRe-run with sudo:\n\n  sudo crosstalk agent ${process.argv.slice(3).join(' ')}`.trimEnd());
     process.exit(1);
   }
 }
 
-function resolveUser(): { uid: number | undefined; gid: number | undefined; user: string; localBin: string } {
+function resolveUser(): { uid: number; gid: number; user: string; localBin: string } {
   const platform = detectPlatform();
   const user = platform.serviceUser;
   const localBin = join(platform.paths.dataDir, '.local', 'bin');
-
-  if (process.platform === 'win32') {
-    return { uid: undefined, gid: undefined, user, localBin };
-  }
 
   try {
     const uid = lookupUid(user);
@@ -58,9 +50,11 @@ function resolveUser(): { uid: number | undefined; gid: number | undefined; user
   }
 }
 
-function spawnAs(uid: number | undefined, gid: number | undefined, dataDir: string, args: string[]): number {
-  const opts: Parameters<typeof spawnSync>[2] = {
+function spawnAs(uid: number, gid: number, dataDir: string, args: string[]): number {
+  const result = spawnSync(args[0], args.slice(1), {
     stdio: 'inherit',
+    uid,
+    gid,
     env: {
       HOME:              dataDir,
       PATH:              process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
@@ -69,11 +63,7 @@ function spawnAs(uid: number | undefined, gid: number | undefined, dataDir: stri
       npm_config_cache:  join(dataDir, '.npm'),
       npm_config_prefix: join(dataDir, '.local'),
     },
-  };
-  if (uid !== undefined) opts.uid = uid;
-  if (gid !== undefined) opts.gid = gid;
-
-  const result = spawnSync(args[0], args.slice(1), opts);
+  });
   if (result.error) {
     console.error(`[agent] failed to run: ${result.error.message}`);
     process.exit(1);
@@ -81,17 +71,13 @@ function spawnAs(uid: number | undefined, gid: number | undefined, dataDir: stri
   return result.status ?? 0;
 }
 
-function installNpm(uid: number | undefined, gid: number | undefined, dataDir: string, pkg: string): void {
+function installNpm(uid: number, gid: number, dataDir: string, pkg: string): void {
   console.log(`[agent] npm install -g ${pkg}`);
   const code = spawnAs(uid, gid, dataDir, ['npm', 'install', '-g', '--prefix', join(dataDir, '.local'), pkg]);
   process.exit(code);
 }
 
-function installCurl(uid: number | undefined, gid: number | undefined, dataDir: string, url: string): void {
-  if (process.platform === 'win32') {
-    console.error(`[agent] curl-based install not supported on Windows.\nInstall manually from: ${url}`);
-    process.exit(1);
-  }
+function installCurl(uid: number, gid: number, dataDir: string, url: string): void {
   console.log(`[agent] curl install from ${url}`);
   const code = spawnAs(uid, gid, dataDir, ['bash', '-c', `curl -fsSL ${url} | bash`]);
   process.exit(code);
@@ -121,7 +107,6 @@ function agentUpgrade(cli: string): void {
   const platform = detectPlatform();
   const { uid, gid } = resolveUser();
   console.log(`[agent] upgrading '${cli}' in daemon home ${platform.paths.dataDir}`);
-  // upgrade = re-run install (npm install -g upgrades, curl re-runs installer)
   if (def.npm)  installNpm(uid, gid, platform.paths.dataDir, def.npm);
   if (def.curl) installCurl(uid, gid, platform.paths.dataDir, def.curl);
 }
@@ -138,8 +123,6 @@ function agentUninstall(cli: string): void {
   console.log(`[agent] uninstalling '${cli}' from daemon home ${platform.paths.dataDir}`);
   const bin = join(platform.paths.dataDir, '.local', 'bin', def.bin);
   if (def.npm) {
-    // run npm uninstall for clean package db, then remove binary directly
-    // (handles manually-copied binaries that npm doesn't track)
     spawnAs(uid, gid, platform.paths.dataDir, [
       'npm', 'uninstall', '-g', '--prefix', join(platform.paths.dataDir, '.local'), def.npm,
     ]);
@@ -154,7 +137,6 @@ function agentUninstall(cli: string): void {
 }
 
 function agentList(): void {
-  const platform = detectPlatform();
   const { localBin } = resolveUser();
   console.log(`Daemon agent CLIs (${localBin}):\n`);
   for (const [name, def] of Object.entries(AGENTS)) {
