@@ -1,5 +1,9 @@
 # crosstalk-runtime
 
+> **This project is no longer maintained.** The runtime has been archived. The final release is `v3.11.1`. The npm package `@cordfuse/crosstalk-runtime` has been deprecated. See [cordfuse/crosstalk](https://github.com/cordfuse/crosstalk) — also archived — for the protocol design that motivated this work.
+
+---
+
 **Prompt-driven multi-agent orchestration.** A system daemon that delivers messages between humans and AI agents using a git repo as the message bus. Agents coordinate through their standing orders — plain-language system prompts that define how they delegate, escalate, and collaborate. No code graphs. No visual builder. The markdown file is the workflow.
 
 Watches Crosstalk transport repos, dispatches messages to agent CLIs (Claude, Gemini, agy, etc.), and commits replies back — all as git commits.
