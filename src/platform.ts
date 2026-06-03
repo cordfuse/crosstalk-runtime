@@ -7,9 +7,8 @@ export type PlatformId = 'linux' | 'macos' | 'wsl' | 'windows';
 export interface PlatformPaths {
   configDir: string;        // /etc/crosstalk
   dataDir: string;          // /var/lib/crosstalk
-  transportDir: string;     // /var/lib/crosstalk/transport  (primary, set during install)
-  transportsDir: string;    // /var/lib/crosstalk/transports (additional transports)
-  workspacesDir: string;    // /var/lib/crosstalk/workspaces
+  transportsDir: string;    // /var/lib/crosstalk/transports — all transports, named owner/repo
+  workspacesDir: string;    // /var/lib/crosstalk/workspaces — all workspaces, named owner/repo
   sshDir: string;           // /var/lib/crosstalk/.ssh
   configFile: string;       // /etc/crosstalk/config.yaml
 }
@@ -39,22 +38,20 @@ function hasSystemd(): boolean {
 function unixPaths(): PlatformPaths {
   const configDir     = '/etc/crosstalk';
   const dataDir       = '/var/lib/crosstalk';
-  const transportDir  = join(dataDir, 'transport');
   const transportsDir = join(dataDir, 'transports');
   const workspacesDir = join(dataDir, 'workspaces');
   const sshDir        = join(dataDir, '.ssh');
   const configFile    = join(configDir, 'config.yaml');
-  return { configDir, dataDir, transportDir, transportsDir, workspacesDir, sshDir, configFile };
+  return { configDir, dataDir, transportsDir, workspacesDir, sshDir, configFile };
 }
 
 function windowsPaths(): PlatformPaths {
   const base          = join(process.env.PROGRAMDATA ?? 'C:\\ProgramData', 'crosstalk');
-  const transportDir  = join(base, 'transport');
   const transportsDir = join(base, 'transports');
   const workspacesDir = join(base, 'workspaces');
   const sshDir        = join(base, '.ssh');
   const configFile    = join(base, 'config.yaml');
-  return { configDir: base, dataDir: base, transportDir, transportsDir, workspacesDir, sshDir, configFile };
+  return { configDir: base, dataDir: base, transportsDir, workspacesDir, sshDir, configFile };
 }
 
 export function detectPlatform(): PlatformInfo {

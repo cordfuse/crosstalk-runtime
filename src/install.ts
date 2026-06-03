@@ -9,6 +9,24 @@ import * as winSvc   from './service/windows.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
+// Extract "owner/repo" from any git URL or local path.
+//   git@github.com:owner/repo.git  →  owner/repo
+//   https://github.com/owner/repo  →  owner/repo
+//   /some/local/owner/repo         →  owner/repo
+function ownerRepo(gitUrl: string): string {
+  const clean = gitUrl.replace(/\.git$/, '');
+  const sshMatch = clean.match(/:([^/]+\/[^/]+)$/);
+  if (sshMatch) return sshMatch[1];
+  const parts = clean.split('/').filter(Boolean);
+  return parts.slice(-2).join('/');
+}
+
+// Return the "owner/repo" label for a full filesystem path.
+function transportLabel(fullPath: string): string {
+  const parts = fullPath.replace(/\\/g, '/').split('/').filter(Boolean);
+  return parts.slice(-2).join('/');
+}
+
 function requireRoot(platform: PlatformInfo): void {
   if (!isRoot()) {
     const cmd = platform.id === 'windows'
@@ -20,7 +38,7 @@ function requireRoot(platform: PlatformInfo): void {
 }
 
 function createDirs(paths: PlatformInfo['paths']): void {
-  for (const dir of [paths.configDir, paths.dataDir, paths.transportDir, paths.transportsDir, paths.workspacesDir, paths.sshDir]) {
+  for (const dir of [paths.configDir, paths.dataDir, paths.transportsDir, paths.workspacesDir, paths.sshDir]) {
     mkdirSync(dir, { recursive: true });
   }
   console.log('[install] directories created');
@@ -50,13 +68,13 @@ function createSystemUser(platform: PlatformInfo): void {
 
 function setOwnership(platform: PlatformInfo): void {
   if (platform.id === 'windows') return;
-  const { dataDir, sshDir, transportDir, transportsDir, workspacesDir } = platform.paths;
+  const { dataDir, sshDir, transportsDir, workspacesDir } = platform.paths;
   const user = platform.serviceUser;
   execSync(`chown -R ${user}:${user} ${dataDir}`);
   chmodSync(sshDir, 0o700);
 
-  // Make transport dirs + workspaces group-writable so the operator can write without sudo
-  for (const dir of [transportDir, transportsDir, workspacesDir]) {
+  // Make transports + workspaces group-writable so the operator can write without sudo
+  for (const dir of [transportsDir, workspacesDir]) {
     if (existsSync(dir)) {
       execSync(`chmod -R g+w ${dir}`);
       execSync(`find ${dir} -type d -exec chmod g+s {} +`); // setgid — new files inherit group
@@ -199,7 +217,8 @@ export async function runInstall(argv: string[]): Promise<void> {
   createSystemUser(platform);
   setOwnership(platform);
 
-  const transportPath = platform.paths.transportDir;
+  const transportPath = join(platform.paths.transportsDir, ...ownerRepo(gitUrl).split('/'));
+  mkdirSync(join(transportPath, '..'), { recursive: true });
   if (!existsSync(join(transportPath, '.git'))) {
     cloneRepo(platform, gitUrl, transportPath);
   } else {
@@ -272,15 +291,15 @@ export async function runAddTransport(argv: string[]): Promise<void> {
   }
 
   const nameFlag  = argv[argv.indexOf('--name') + 1];
-  const repoName  = nameFlag ?? gitUrl.replace(/\.git$/, '').split(/[/:]/).at(-1)!;
-  const dest      = join(platform.paths.transportsDir, repoName);
+  const label     = nameFlag ?? ownerRepo(gitUrl);
+  const dest      = join(platform.paths.transportsDir, ...label.split('/'));
 
   if (existsSync(join(dest, '.git'))) {
     console.error(`[add-transport] already exists: ${dest}`);
     process.exit(1);
   }
 
-  mkdirSync(platform.paths.transportsDir, { recursive: true });
+  mkdirSync(join(dest, '..'), { recursive: true });
   cloneRepo(platform, gitUrl, dest);
 
   const config = readRawConfig(platform.paths.configFile);
@@ -289,7 +308,7 @@ export async function runAddTransport(argv: string[]): Promise<void> {
   saveConfig(platform, config);
 
   console.log(`[add-transport] registered: ${dest}`);
-  console.log(`\nOpen a session:\n  crosstalk open --transport ${basename(dest)}\n`);
+  console.log(`\nOpen a session:\n  crosstalk open --transport ${label}\n`);
 }
 
 export async function runRemoveTransport(argv: string[]): Promise<void> {
@@ -302,15 +321,22 @@ export async function runRemoveTransport(argv: string[]): Promise<void> {
   }
 
   const config = readRawConfig(platform.paths.configFile);
-  const before = config.transports as Array<{ path: string; workspaces: string[] }>;
-  const after  = before.filter(t => !t.path.includes(name));
+  const before  = config.transports as Array<{ path: string; workspaces: string[] }>;
+  const matches = before.filter(t =>
+    t.path === name || transportLabel(t.path) === name || basename(t.path) === name
+  );
 
-  if (before.length === after.length) {
+  if (matches.length === 0) {
     console.error(`[remove-transport] no transport matching "${name}" found`);
     process.exit(1);
   }
+  if (matches.length > 1) {
+    const labels = matches.map(t => transportLabel(t.path)).join(', ');
+    console.error(`[remove-transport] "${name}" is ambiguous — specify owner/repo:\n  ${labels}`);
+    process.exit(1);
+  }
 
-  config.transports = after;
+  config.transports = before.filter(t => t !== matches[0]);
   saveConfig(platform, config);
   console.log(`[remove-transport] removed from config. Data preserved — delete manually if needed.`);
 }
@@ -350,22 +376,22 @@ export async function runAddWorkspace(argv: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const repoName = gitUrl.replace(/\.git$/, '').split(/[/:]/).at(-1)!;
-  const dest     = join(platform.paths.workspacesDir, repoName);
+  const label = ownerRepo(gitUrl);
+  const dest  = join(platform.paths.workspacesDir, ...label.split('/'));
 
   if (existsSync(dest)) {
     console.error(`[add-workspace] already exists: ${dest}`);
     process.exit(1);
   }
 
+  mkdirSync(join(dest, '..'), { recursive: true });
   cloneRepo(platform, gitUrl, dest);
   transportEntry.workspaces = [...(transportEntry.workspaces ?? []), dest];
   saveConfig(platform, config);
 
   console.log(`[add-workspace] registered: ${dest}`);
-  const transportName = basename(transportEntry.path);
-  const transportArg  = transports.length > 1 ? ` --transport ${transportName}` : '';
-  console.log(`\nOpen a session:\n  crosstalk open --workspace ${repoName}${transportArg}\n`);
+  const transportArg = transports.length > 1 ? ` --transport ${transportLabel(transportEntry.path)}` : '';
+  console.log(`\nOpen a session:\n  crosstalk open --workspace ${label}${transportArg}\n`);
 }
 
 export async function runRemoveWorkspace(argv: string[]): Promise<void> {
@@ -382,9 +408,16 @@ export async function runRemoveWorkspace(argv: string[]): Promise<void> {
 
   let removed = false;
   for (const t of transports) {
-    const before = t.workspaces ?? [];
-    const after  = before.filter((w: string) => !w.includes(name));
-    if (after.length < before.length) { t.workspaces = after; removed = true; }
+    const before   = t.workspaces ?? [];
+    const matches  = before.filter((w: string) =>
+      w === name || transportLabel(w) === name || basename(w) === name
+    );
+    if (matches.length > 1) {
+      const labels = matches.map(transportLabel).join(', ');
+      console.error(`[remove-workspace] "${name}" is ambiguous — specify owner/repo:\n  ${labels}`);
+      process.exit(1);
+    }
+    if (matches.length === 1) { t.workspaces = before.filter((w: string) => w !== matches[0]); removed = true; }
   }
 
   if (!removed) {

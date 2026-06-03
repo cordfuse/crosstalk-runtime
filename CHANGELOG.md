@@ -2,6 +2,18 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.10.0 — 2026-06-03
+
+**`owner/repo` directory structure for transports and workspaces.** Eliminates the conflict risk where two repos with the same name from different owners clobber each other.
+
+- `transports/<owner>/<repo>/` replaces both the old `transport/` (singular primary) and flat `transports/<repo>/`. The `transport/` vs `transports/` split is gone — everything lives under `transports/`.
+- `workspaces/<owner>/<repo>/` replaces flat `workspaces/<repo>/`.
+- `--transport` and `--workspace` flags in `crosstalk open` now accept `owner/repo` (preferred), bare `repo` (shorthand if unambiguous), or full path.
+- `remove-transport` and `remove-workspace` guard against ambiguous bare-name matches and prompt for `owner/repo` when needed.
+- `PlatformPaths.transportDir` removed — breaking change for any code that referenced it directly.
+
+**Breaking change** — existing installs with data under `transport/` or flat `transports/<repo>/` will not be picked up automatically. Re-run `crosstalk install` or update `config.yaml` paths manually.
+
 ## v3.9.6 — 2026-06-03
 
 **Fix: installer post-install steps — `add-workspace` marked optional, `install.sh` brought in sync with `install.ps1`.** Both pipe installers now show the correct 5-step flow (keygen → deploy key → install → optional workspace → open).
