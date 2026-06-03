@@ -1,10 +1,25 @@
 import { spawn } from 'child_process';
+import { join } from 'path';
 import { createCoordinator, type Coordinator, type CoordinatorOptions } from '@cordfuse/turnq/coordinator';
 import { log } from './log.js';
+import { detectPlatform } from './platform.js';
 
 interface GitResult {
   code: number;
   stderr: string;
+}
+
+// Build GIT_SSH_COMMAND pointing to the crosstalk deploy key so that git
+// operations work when the daemon runs as a service account (e.g. LocalSystem
+// on Windows or a system user on Linux/macOS) that has no SSH agent or
+// user-level credentials configured.
+function sshEnv(): Record<string, string> {
+  const { paths } = detectPlatform();
+  const key        = join(paths.sshDir, 'id_ed25519');
+  const knownHosts = join(paths.sshDir, 'known_hosts');
+  return {
+    GIT_SSH_COMMAND: `ssh -i "${key}" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="${knownHosts}"`,
+  };
 }
 
 function git(cwd: string, args: string[]): Promise<GitResult> {
@@ -12,7 +27,7 @@ function git(cwd: string, args: string[]): Promise<GitResult> {
     const proc = spawn('git', args, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: process.env,
+      env: { ...process.env, ...sshEnv() },
     });
     let stderr = '';
     proc.stderr?.on('data', chunk => { stderr += String(chunk); });

@@ -496,6 +496,11 @@ async function runDaemon(config: RuntimeConfig): Promise<void> {
 
   for (const entry of config.transports) {
     const transportPath = resolve(entry.path);
+
+    // Pull before host-file lookup so that a host file added after initial
+    // install is picked up on the very first start of the service.
+    await pull(transportPath);
+
     const hostFile = findHostFile(transportPath, config.hostAlias);
     if (!hostFile) {
       const attempted = config.hostAlias ?? osHostname();
