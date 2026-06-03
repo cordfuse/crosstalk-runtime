@@ -8,6 +8,14 @@ const DISPLAY_NAME = 'Crosstalk Runtime';
 const DESCRIPTION  = 'AI agent messaging daemon';
 
 export function install(paths: PlatformPaths, binaryPath: string): void {
+  // Remove existing service first so install is idempotent.
+  try {
+    execSync(`sc.exe query ${SERVICE_NAME}`, { stdio: 'ignore' });
+    try { execSync(`sc.exe stop ${SERVICE_NAME}`, { stdio: 'ignore' }); } catch {}
+    execSync(`sc.exe delete ${SERVICE_NAME}`, { stdio: 'ignore' });
+    console.log(`[windows-scm] existing ${SERVICE_NAME} service removed`);
+  } catch { /* service did not exist — nothing to remove */ }
+
   // sc.exe requires a native binary. bun build --compile produces one.
   execSync(
     `sc.exe create ${SERVICE_NAME} ` +

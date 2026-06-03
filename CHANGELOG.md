@@ -2,6 +2,10 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.10.3 — 2026-06-03
+
+**Fix: `crosstalk install` is now idempotent on Windows.** `sc.exe create` was throwing when the service already existed from a prior install attempt. Windows service manager now stops and deletes the existing service before recreating, so re-running install always succeeds cleanly.
+
 ## v3.10.1 — 2026-06-03
 
 **CI maintenance** — npm publish now correctly gates on `secrets.NPM_TOKEN` (was `env.NPM_TOKEN`, causing `setup-node` to be skipped and `ENEEDAUTH` on publish). GitHub Actions bumped: `actions/checkout@v6`, `actions/download-artifact@v8`, `actions/setup-node@v6`, `actions/upload-artifact@v7`, `softprops/action-gh-release@v3`.
