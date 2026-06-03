@@ -2,6 +2,10 @@
 
 All notable changes to `@cordfuse/crosstalk-runtime`.
 
+## v3.9.6 — 2026-06-03
+
+**Fix: installer post-install steps — `add-workspace` marked optional, `install.sh` brought in sync with `install.ps1`.** Both pipe installers now show the correct 5-step flow (keygen → deploy key → install → optional workspace → open).
+
 ## v3.9.5 — 2026-06-03
 
 **Fix: `install.ps1` post-install instructions now reflect the `keygen` → `install` two-step flow.** Step numbering updated (5 steps), SSH key instruction corrected to point at repo Deploy keys rather than account SSH keys.
